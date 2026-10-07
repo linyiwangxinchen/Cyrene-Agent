@@ -40,7 +40,7 @@ export function loadWindowForStartup(input: LoadWindowForStartupInput): Promise<
 
   return new Promise<void>((resolve, reject) => {
     let settled = false;
-    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    let timeoutHandle: ReturnType<typeof globalThis.setTimeout> | number | undefined;
 
     const onReady = () => settle(resolve);
     const onFail = (_event: unknown, code: number, description: string, url: string, isMainFrame: boolean) => {
@@ -53,7 +53,7 @@ export function loadWindowForStartup(input: LoadWindowForStartupInput): Promise<
       settled = true;
       window.removeListener("ready-to-show", onReady);
       window.webContents.removeListener("did-fail-load", onFail);
-      if (timeoutHandle !== undefined) clearTimeoutFn(timeoutHandle);
+      if (timeoutHandle !== undefined) clearTimeoutFn(timeoutHandle as ReturnType<typeof globalThis.setTimeout>);
       next();
     }
 

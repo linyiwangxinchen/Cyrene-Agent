@@ -33,6 +33,8 @@ import { flushSummaryMemory } from "../memory/summary-memory-scheduler";
 import { createGeneratedImageStore } from "./generated-image-store";
 
 export interface ChatUiIpcDependencies {
+  /** Headless authenticated browser ports; desktop retains strict window identity. */
+  isTrustedChatSender?: (sender: Electron.WebContents) => boolean;
   live2dWindowLifecycle: { getDiagnostics(): unknown };
   get windowManager(): WindowManager | null;
   /** 传入共享 scope 以便退出时统一注销；缺省时使用独立 scope。 */
@@ -302,7 +304,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   ipc.on(IPC.CHATS_REACT_READY, (event) => {
     const win = reactChatWindow;
     if (!win || win.isDestroyed()) return;
-    if (event.sender !== win.webContents) return;
+    if (event.sender !== win.webContents && !deps.isTrustedChatSender?.(event.sender)) return;
     const pending = reactChatSession.markReady();
     if (pending) {
       win.webContents.send(IPC.CHATS_REACT_SWITCH_SESSION, pending);
@@ -313,7 +315,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   // 只有聊天窗口的 webContents 可以登记，其他窗口的上报被忽略；main 广播给所有窗口
   ipc.handle(IPC.CHATS_SET_ACTIVE_SESSION, (event, payload: unknown) => {
     const chatWindow = reactChatWindow;
-    if (!chatWindow || chatWindow.isDestroyed() || event.sender !== chatWindow.webContents) {
+    if (!chatWindow || chatWindow.isDestroyed() || (event.sender !== chatWindow.webContents && !deps.isTrustedChatSender?.(event.sender))) {
       return false;
     }
     let activeSessionId: string | null = null;

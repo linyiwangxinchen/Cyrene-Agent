@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { createRequire } from "node:module";
 import type { WebContents } from "electron";
 
 const PLAYWRIGHT_WORLD_ID = 9876;
@@ -61,7 +62,9 @@ function readStringLiteralEnd(source: string, start: number): number {
 function getPlaywrightInjectedSource(): string {
   if (injectedSourceCache) return injectedSourceCache;
 
-  const packageJsonPath = require.resolve("playwright-core/package.json");
+  // pnpm keeps playwright-core below playwright rather than exposing it at the
+  // application root. Resolve from the installed parent package on both hosts.
+  const packageJsonPath = createRequire(require.resolve("playwright/package.json")).resolve("playwright-core/package.json");
   const bundlePath = join(dirname(packageJsonPath), "lib", "coreBundle.js");
   const bundle = readFileSync(bundlePath, "utf8");
   GENERATED_SOURCE_ASSIGNMENT.lastIndex = 0;
@@ -420,7 +423,10 @@ export async function validatePlaywrightSnapshotTarget(
       if (!injected) return { ok: false };
       const currentLine = String(injected.ariaSnapshot(node, { mode: "ai" }) || "").split("\\n")[0]
         .trim().replace(/^[-*]\\s*/, "").replace(/\\s*\\[ref=[^\\]]+\\]/, "");
-      if (currentLine !== expected.description) return { ok: false };
+      // Picking focuses the element without changing its identity or label.
+      // Preserve semantic state checks while ignoring Playwright's focus marker.
+      const withoutFocus = (line) => line.replace(/\\s*\\[active\\]/g, "");
+      if (withoutFocus(currentLine) !== withoutFocus(expected.description)) return { ok: false };
       const rect = node.getBoundingClientRect();
       const style = getComputedStyle(node);
       if (node.matches(":disabled") || node.getAttribute("aria-disabled") === "true") return { ok: false };

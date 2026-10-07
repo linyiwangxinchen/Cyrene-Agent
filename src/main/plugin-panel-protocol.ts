@@ -196,7 +196,7 @@ export function installPluginPanelProtocol(query: PluginPanelAccessQuery): void 
     if (result.status === 404) {
       return new Response(null, { status: 404 });
     }
-    return new Response(result.body, {
+    return new Response(new Uint8Array(result.body), {
       status: 200,
       headers: {
         "Content-Type": result.contentType,

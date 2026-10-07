@@ -647,6 +647,16 @@ function applyPatch(
   }
 }
 
+/** Apply the same replay-safe delta folding to a headless stored UI message. */
+export function applyPresentationCheckpointToMessage(message: UiChatMessage, patch: TranscriptPresentationPatch): void {
+  const previous: TranscriptPresentationPatch = {
+    reasoningBlocks: message.reasoningBlocks, processMessages: message.processMessages,
+    agentRounds: message.agentRounds, taskDelegations: message.taskDelegations,
+    toolExecutions: message.toolExecutions,
+  };
+  applyPatch({ message, aliases: new Set([message.id]) }, mergePresentationPatch(previous, patch));
+}
+
 /** Fold compact item updates into a replay-safe projection patch. */
 function mergePresentationPatch(
   previous: TranscriptPresentationPatch | undefined,
