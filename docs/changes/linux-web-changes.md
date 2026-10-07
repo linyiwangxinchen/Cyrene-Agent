@@ -4,6 +4,8 @@
 
 ## 做了哪些修改
 
+后续上游同步见 [2026-10-08 集成记录](upstream-integration-20261008.md)，包含 SQLite 存储迁移、冲突处理、兼容修复和两平台验收；本文 179 项清单保留为初始适配系列的记录。
+
 1. 新增无 GUI 的 Linux HTTP/WebSocket 服务、首次初始化和单管理员 Cookie 登录。密码使用 scrypt；业务 API、媒体资源和实时连接经过认证。OIDC/OAuth 是后续计划，当前没有通用 OIDC 登录实现。
 2. 正式 Web 使用独立 Node worker 运行原 CyreneAgent/CyreneHarness、工具注册器、Skill、插件、Scheduler、记忆/RAG、知识库、试卷、Git 和渠道模块。Electron 在构建时替换为平台端口；Windows 版保留。旧 Web Store/Runtime 用于迁移及回归兼容，不是正式运行时的第二套简化 Agent。
 3. Chat/Work/Code/Learn 使用原模式、提示词、身份、风格、用户记忆与关系线索。部署携带完整 prompts；表达风格不覆盖身份和安全/工具规则。任务工作区、shell、Skill、MCP 均指向服务器。

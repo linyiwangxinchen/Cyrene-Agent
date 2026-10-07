@@ -14,7 +14,7 @@ sudo node node_modules/playwright/cli.js install-deps chromium
 PLAYWRIGHT_BROWSERS_PATH=/opt/cyrene-agent/.browsers node node_modules/playwright/cli.js install chromium
 ```
 
-构建结果为 `dist/server/server/index.js`、`dist/headless/core.cjs`、知识库索引 worker、`dist/plugin-panel/` 和 `dist/renderer/`。运行时保留 `node_modules/`、`prompts/`、`skills/`、`resources/` 和可选的 `vendor/cyrene-skills/`，不能仅复制 HTML 或 `dist/server/`。Node 使用 24.x，系统需有 Git；Code 模式的语言服务器和 Skill 自身依赖按所用语言/技能安装。Chromium 和系统依赖的安装方式见 [Playwright 官方文档](https://playwright.dev/docs/browsers#install-system-dependencies)。
+构建结果为 `dist/server/server/index.js`、`dist/headless/core.cjs`、知识库索引 worker、SQLite 数据库 worker、`dist/plugin-panel/` 和 `dist/renderer/`。运行时保留 `node_modules/`、`prompts/`、`skills/`、`resources/` 和可选的 `vendor/cyrene-skills/`，不能仅复制 HTML 或 `dist/server/`。Node 使用 24.x，系统需有 Git；Code 模式的语言服务器和 Skill 自身依赖按所用语言/技能安装。Chromium 和系统依赖的安装方式见 [Playwright 官方文档](https://playwright.dev/docs/browsers#install-system-dependencies)。
 
 部署时须同时保留仓库的 `prompts/` 目录，包括模式规则、身份、`soul.md`、台词参考、`styles/` 和 `worldbook/`。Web Server 与 Windows 端读取同一套资源；只复制 `dist/` 会缺少人格内容。默认从服务程序所在目录定位资源，不依赖启动时的当前目录；可用 `CYRENE_PROMPTS_DIR=/opt/cyrene-agent/prompts` 指定其他位置。缺少必需提示词会明确报错。
 

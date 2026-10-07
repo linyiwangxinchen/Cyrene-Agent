@@ -37,6 +37,7 @@ pnpm run build:web
 dist/server/server/index.js
 dist/headless/core.cjs
 dist/headless/knowledge-index-worker.js
+dist/headless/conversation-database-worker.js
 dist/plugin-panel/
 dist/renderer/web/index.html
 dist/renderer/assets/
@@ -145,6 +146,14 @@ sudo journalctl -u cyrene-web -f
 手工后台运行的进程可以向明确 PID 发送 `kill -TERM <PID>`，不要使用匹配所有 Node 进程的 kill 命令。`systemctl stop` 会发送 SIGTERM 正常关闭；停止不是删除数据。
 
 更新前备份独立数据目录和旧程序，短暂停止服务以取得一致的数据副本。在新的版本目录完成安装、构建与检查后切换服务路径，或停止后更新既有程序目录；不要把账号、API Key、微信凭据、记忆、会话、用户上传打进升级包。源码升级可 `git pull --ff-only` 后执行第 2 节，失败时不要替换正常服务。避免新 HTML 引用的 hash 资源没有同步或更新时删除旧资源。
+
+### SQLite 存储迁移后的升级与回退
+
+合入 2026-10-08 的上游更新后，会话、运行回执、子任务和模型用量统一保存在数据目录的 `cyrene.sqlite`，数据库读写由独立 worker 执行。首次启动会只读导入旧会话/轨迹、子任务及 `token-usage.json`；旧文件保留，新版本后续写入 SQLite。
+
+升级前停止服务并备份**完整数据目录**。运行中的数据库可能还有 `cyrene.sqlite-wal` 和 `cyrene.sqlite-shm`，不能只复制主数据库文件作为一致备份。若必须在线备份，应使用 SQLite 备份机制并同时处理其他业务文件。回退到迁移前版本时恢复升级前的整份数据备份；旧 JSON 文件不会包含新版本运行后的新增会话。
+
+运行包必须带有 `dist/headless/conversation-database-worker.js`。仅传 `core.cjs` 会使数据库客户端尝试源码编译回退；精简生产包没有 TypeScript 源码和 esbuild，无法承担该回退。`create-web-runtime.mjs` 会校验数据库 worker 是否存在，避免导出不完整运行包。
 
 ## 6. 其他机器编译后上传执行
 

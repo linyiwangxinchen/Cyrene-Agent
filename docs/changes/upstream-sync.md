@@ -4,6 +4,8 @@
 
 ## 修改清单和提交主题
 
+最近一次上游同步：[2026-10-08 集成与验收记录](upstream-integration-20261008.md)。集成分支为 `integrate/upstream-linux-web-20261008`，包含上游五个新提交及 SQLite 迁移所需的 Windows/Web 兼容修复。
+
 [linux-web-changes.md](linux-web-changes.md) 给出每一个新增/修改文件的作用。提交按 10 个主题组织，commit body 也逐文件描述用途：
 
 1. `refactor(core)`：两端共用人格、模式、语气、关系和表情规则。
