@@ -41,4 +41,3 @@ export function buildStylePromptBlock(markdown: string): string {
     trimmed,
   ].join("\n");
 }
-

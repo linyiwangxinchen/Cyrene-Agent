@@ -289,4 +289,3 @@
 | [`docs/changes/upstream-sync.md`](../../docs/changes/upstream-sync.md) | 新增 | 解释提交主题、依赖关系及上游 diff/cherry-pick/format-patch 工作流。 |
 | [`docs/deployment/linux-operations.md`](../../docs/deployment/linux-operations.md) | 新增 | 逐步说明 Linux 构建、前台/systemd 执行、停止、HTTPS、异机编译上传和运行依赖。 |
 | [`docs/deployment/linux-web.md`](../../docs/deployment/linux-web.md) | 新增 | 记录最终 Web 能力、人格资源、语音/MCP/渠道配置与部署边界。 |
-

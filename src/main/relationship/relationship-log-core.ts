@@ -208,4 +208,3 @@ export class RelationshipLogStore {
     return lines.join("\n")
   }
 }
-
