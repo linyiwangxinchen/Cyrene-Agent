@@ -262,3 +262,5 @@ key.txt
 /web-release-*/
 /runtime-release/
 /docs/verification/
+*.sqlite
+*.sqlite-*

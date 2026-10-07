@@ -66,7 +66,7 @@ export async function runHarnessWithAdapter(
     runMessages,
   } = prepared;
 
-  const toolRuntime = prepareToolRuntime({ options, signal, prepared, sendBaseEvent });
+  const toolRuntime = await prepareToolRuntime({ options, signal, prepared, sendBaseEvent });
   const { toolContext, checkPermission, toolOutputStore, taskExecutor, closeTaskExecutor, openTaskCompanions } = toolRuntime;
 
   // ── 构建 HarnessInput ──
@@ -163,7 +163,7 @@ export async function runHarnessWithAdapter(
     }
   }
   // 终态持久化必须先于 Review 收尾：Review 读取的是刚写入的不可变 run 结果。
-  const finalSession = runStore.markTerminal(runId, terminalRunStatus);
+  const finalSession = await runStore.markTerminal(runId, terminalRunStatus);
 
   // ── Review 快照：Run 终止时生成不可变 ReviewSnapshot ──
   // 正常终止时主动 finalize；崩溃恢复（interrupted）的 Run 由前端打开 Review 时
@@ -195,9 +195,6 @@ export async function runHarnessWithAdapter(
   console.log(
     `${LOG_PREFIX} harness run complete, rounds=${result.rounds} terminated=${result.terminated} terminal=${terminal.status}`,
   );
-
-  // ── 终态后安排空闲投影快照，不阻塞本次 Run 的完成返回 ──
-  options.transcriptSink?.scheduleCheckpoint?.();
 
   return {
     reply: result.finalAnswer,

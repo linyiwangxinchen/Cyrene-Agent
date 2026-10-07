@@ -1,3 +1,4 @@
+import { closeConversationDatabases } from "../../storage/conversation-database-client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
@@ -31,7 +32,8 @@ function anthropicStream(): Response {
 }
 
 const roots: string[] = [];
-afterEach(() => {
+afterEach(async () => {
+  await closeConversationDatabases();
   vi.unstubAllGlobals();
   roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true }));
 });
@@ -120,7 +122,7 @@ describe("#167 模型执行历史互通", () => {
     expect(result.assistantMessage.providerReplay?.content).toContainEqual({ type: "reasoning", text: "别名推理" });
   });
 
-  it("保存、检查点和重启后仍保留来源及有序重放内容", async () => {
+  it("保存和重启后仍保留来源及有序重放内容", async () => {
     const source = configs[2];
     vi.stubGlobal("fetch", vi.fn(async () => jsonResponse(responseBody("anthropic", { tool: true, reasoning: true }))));
     const first = await generateChatWithAiSdk({ adapter: getAdapterForConfig(source), config: source,
@@ -129,7 +131,6 @@ describe("#167 模型执行历史互通", () => {
     roots.push(root);
     const store = new ConversationTranscriptStore(root);
     await store.append("sdk-test", { id: "assistant-1", at: 1000, kind: "assistant", payload: first.assistantMessage });
-    await store.checkpoint("sdk-test");
     const restored = (await new ConversationTranscriptStore(root).read("sdk-test")).entries[0];
     expect(restored.kind).toBe("assistant");
     if (restored.kind !== "assistant") throw new Error("unexpected entry");

@@ -93,8 +93,8 @@ export function createTtsSynthesisService(
     }
 
     // v2 stores messages and their TTS presentation patches in the journal;
-    // the legacy getSession() only reads v1 and silently loses those cache keys.
-    const record = chatsStore.getSessionRecord(request.conversationId);
+    // getSession() reads record.messages, while v2 cache keys live in the journal.
+    const record = await chatsStore.getSessionRecord(request.conversationId);
     const messages = record?.schemaVersion === 2
       ? (await new ConversationJournalService(
           getConversationTranscriptStore(app.getPath("userData")),
