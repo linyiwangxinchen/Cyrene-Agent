@@ -159,7 +159,10 @@ export function entryToFormPatch(name: string, entry: Record<string, unknown>): 
   if (transport === "stdio") {
     patch.cwd = typeof entry.cwd === "string" ? entry.cwd : "";
     patch.command = typeof entry.command === "string" ? entry.command : "";
-    patch.args = Array.isArray(entry.args) ? entry.args.map(value => JSON.stringify(String(value))).join(" ") : "";
+    const args = Array.isArray(entry.args) ? entry.args.map(String) : [];
+    // Plain tokens stay readable; JSON preserves empty arguments, quotes,
+    // backslashes and whitespace without relying on shell escape semantics.
+    patch.args = args.every(value => /^[^\s"'\\]+$/.test(value)) ? args.join(" ") : JSON.stringify(args);
     patch.env = toOptionalRecord(entry.env) ? JSON.stringify(entry.env, null, 2) : "";
   } else {
     patch.url = typeof entry.url === "string" ? entry.url : "";

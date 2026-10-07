@@ -794,7 +794,7 @@ export function ChatComposer({
             >
               <Plus size={20} aria-hidden="true" />
             </button>
-            {!window.__cyreneWeb && <button
+            {(typeof window === "undefined" || !window.__cyreneWeb) && <button
               type="button"
               className="cy-composer__icon-button"
               aria-label={t("composer.screenshot")}

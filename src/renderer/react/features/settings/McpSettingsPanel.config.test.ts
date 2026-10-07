@@ -183,6 +183,13 @@ describe("表单 ↔ JSON 条目双向同步", () => {
     expect(patch).toMatchObject({ name: "api", transport: "http", url: "https://mcp.example.com/mcp" });
     expect(JSON.parse(patch.headers ?? "{}")).toEqual({ Authorization: "Bearer t" });
   });
+
+  it("stdio 往返保留空参数、引号、路径和换行", () => {
+    const args = ["", "two words", 'a"b', "C:\\tools\\server", "line\nbreak", "tab\tvalue", "'single'"];
+    const entry = { command: "node", args };
+    const patch = entryToFormPatch("complex", entry);
+    expect(formToEntry(makeForm({ ...patch, transport: "stdio" })).args).toEqual(args);
+  });
 });
 
 describe("entryToConfig（后端配置组装）", () => {
