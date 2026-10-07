@@ -2,7 +2,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { WORLDBOOK_CONSTANTS } from "./worldbook-constants";
-import { logger, LogTag } from "../logger";
+import { logger, LogTag } from "../../shared/logger";
 
 // ── Worldbook entry ──
 export interface WorldbookEntry {

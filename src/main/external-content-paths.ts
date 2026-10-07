@@ -7,6 +7,8 @@ export interface ExternalContentPathInput {
   appPath: string;
   executablePath: string;
   userDataPath: string;
+  userPromptOverrides?: boolean;
+  promptDirectory?: string;
 }
 
 export interface ExternalContentPaths {
@@ -32,7 +34,7 @@ export function resolveExternalContentPaths(input: ExternalContentPathInput): Ex
   if (!input.isPackaged) {
     return {
       installRoot: input.appPath,
-      promptDirectories: [path.join(input.appPath, "prompts")],
+      promptDirectories: [...(input.userPromptOverrides ? [path.join(input.userDataPath, "prompts")] : []), input.promptDirectory || path.join(input.appPath, "prompts")],
       builtinSkillDirectory: path.join(input.appPath, "skills"),
       userSkillDirectories: [path.join(input.userDataPath, "skills")],
     };
@@ -59,6 +61,7 @@ export function getExternalContentPaths(): ExternalContentPaths {
       appPath: app.getAppPath(),
       executablePath: app.getPath("exe"),
       userDataPath: app.getPath("userData"),
+      ...(process.env.CYRENE_HEADLESS === "1" ? { userPromptOverrides: true, promptDirectory: process.env.CYRENE_PROMPTS_DIR } : {}),
     });
   } catch {
     const repository = process.cwd();

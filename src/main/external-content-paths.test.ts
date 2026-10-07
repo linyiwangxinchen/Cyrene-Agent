@@ -59,6 +59,13 @@ describe("resolveExternalContentPaths", () => {
     expect(result.builtinSkillDirectory).toBe(path.join(installRoot, "skills"));
     expect(result.userSkillDirectories).toEqual([path.join(userData, "skills")]);
   });
+
+  it("resolves server prompt overrides independently of the Node executable", () => {
+    const repository = path.resolve("server/app"), userData = path.resolve("server/data"), prompts = path.resolve("server/content/prompts");
+    const result = resolveExternalContentPaths({ isPackaged: false, appPath: repository, executablePath: process.execPath, userDataPath: userData, userPromptOverrides: true, promptDirectory: prompts });
+    expect(result.promptDirectories).toEqual([path.join(userData, "prompts"), prompts]);
+    expect(result.builtinSkillDirectory).toBe(path.join(repository, "skills"));
+  });
 });
 
 describe("external content lookup", () => {
