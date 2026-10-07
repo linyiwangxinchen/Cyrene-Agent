@@ -2,6 +2,9 @@ node_modules/
 
 # Build outputs (Electron + Vite + tsc)
 dist/main/
+dist/server/
+dist/headless/
+dist/plugin-panel/
 dist/cli/
 dist/preload/
 dist/renderer/assets
@@ -75,6 +78,7 @@ dist/renderer/music/
 # toast 提醒窗口的 index.html 是 Vite 构建产物（引用 hash 文件名，每次构建变化），不进 git。
 # 注：该窗口曾是唯一漏掉 ignore 的空窗，其他窗口的 index.html 均已在 lines 10-17 忽略。
 dist/renderer/toast/index.html
+dist/renderer/web/
 
 # build/installer/ui/src/ 下的同名源图（setup/setup-loading/succeed/failed/ch）被安装 UI 引用，
 # 打包时由 vite/webpack 复制到 src/renderer/react/assets/ 作为产物副本。
@@ -251,3 +255,10 @@ dist/renderer/cyrene-welcome.png
 /src/renderer/learn-exam-preview.html
 /src/renderer/learn-exam-preview.tsx
 /dist/renderer/learn-exam.html
+
+# Linux Web local state and releases; never publish credentials.
+key.txt
+.browsers/
+/web-release-*/
+/runtime-release/
+/docs/verification/

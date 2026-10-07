@@ -14,6 +14,8 @@
 
 **Cyrene-Agent is a Windows Live2D AI desktop companion centered around Cyrene from _Honkai: Star Rail_.**
 
+This fork adds a headless Linux service and authenticated Web UI with responsive phone layouts, while retaining the Windows desktop application and sharing its Agent core. See the [Linux build/run/deployment guide](./docs/deployment/linux-operations.md), [change inventory](./docs/changes/linux-web-changes.md), and [upstream synchronization guide](./docs/changes/upstream-sync.md) (Chinese).
+
 > A desktop Live2D conversational Agent built with Electron and TypeScript.  
 > Centered around Cyrene's character design and powered by the self-developed CyreneHarness engine and DMAE memory engine,  
 > it brings character-driven conversation, personalized memory, voice interaction, tool use, and multi-platform access into a single desktop Agent,  

@@ -1,0 +1,5 @@
+cyrene.internal.example {
+    reverse_proxy 127.0.0.1:4317 {
+        header_up X-Forwarded-Proto https
+    }
+}

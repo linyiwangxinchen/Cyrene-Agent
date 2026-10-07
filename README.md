@@ -16,6 +16,13 @@
 
 **Cyrene-Agent 是一个以《崩坏：星穹铁道》昔涟为核心角色的 Windows Live2D AI 桌面伴侣。**
 
+本分支保留 Windows 桌面版，新增 **Linux 无桌面服务 + Web/手机浏览器** 入口。两端共享原 Agent 业务核心；Web 登录后使用服务器的工作区、模型、工具、记忆、渠道和语音能力。原项目与资源版权声明继续适用。
+
+- [Linux 构建、运行、停止与异机编译部署](./docs/deployment/linux-operations.md)
+- [Linux/Web 配置与能力说明](./docs/deployment/linux-web.md)
+- [全部修改说明与逐文件清单](./docs/changes/linux-web-changes.md)
+- [向上游同步修改的提交指南](./docs/changes/upstream-sync.md)
+
 > 基于 Electron + TypeScript 开发的桌面端 Live2D 智能对话 Agent。  
 > 项目围绕昔涟（Cyrene）的角色设定，结合自研 CyreneHarness 引擎与 DMAE 记忆引擎，  
 > 将角色化聊天、个性化记忆、语音交互、工具调用与多平台接入整合在同一个桌面 Agent 中，  
