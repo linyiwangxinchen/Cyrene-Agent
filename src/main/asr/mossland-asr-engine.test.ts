@@ -53,7 +53,7 @@ describe("MosslandAsrStream", () => {
     const body = requestInit?.body;
     expect(body).toBeInstanceOf(FormData);
     const form = body as FormData;
-    expect(form.get("model")).toBe("moss-transcribe");
+    expect(form.get("model")).toBe("moss-transcribe-1.0");
     expect(form.get("response_format")).toBe("json");
     const file = form.get("file");
     expect(file).toBeInstanceOf(File);

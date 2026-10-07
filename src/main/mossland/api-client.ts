@@ -78,7 +78,7 @@ export async function mosslandFetch(
         Authorization: `Bearer ${apiKey}`,
         ...(rest.headers ?? {}),
       },
-      signal: controller.signal,
+      signal: rest.signal ? AbortSignal.any([rest.signal, controller.signal]) : controller.signal,
     });
   } finally {
     clearTimeout(timer);

@@ -102,6 +102,9 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
   // 注入 ASR 配置获取器（通话功能用，实时读 GeneralSettings）
   setAsrConfig(() => {
     const s = loadGeneralSettings();
+    if (s.asrEngine === "local") {
+      return { engine: "local", endpointUrl: s.asrLocalUrl, model: s.asrLocalModel, apiKey: s.asrLocalKey };
+    }
     if (s.asrEngine === "mossland") {
       return { engine: "mossland", apiKey: s.ttsMosslandKey };
     }
@@ -143,6 +146,10 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
         ttsMimoKey: s.ttsMimoKey,
         ttsMimoVoiceAudioPath: s.ttsMimoVoiceAudioPath,
         ttsMimoStylePrompt: s.ttsMimoStylePrompt,
+        ttsMosslandKey: s.ttsMosslandKey,
+        ttsMosslandVoiceId: s.ttsMosslandVoiceId,
+        ttsMosslandModel: s.ttsMosslandModel,
+        ttsMosslandFormat: s.ttsMosslandFormat,
       };
     },
     // 通话专用 system prompt 构建器

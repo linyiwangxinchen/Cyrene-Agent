@@ -5,6 +5,7 @@ import * as fs from "fs";
 import * as path from "path";
 
 export interface MimoSynthesizeOptions {
+  signal?: AbortSignal;
   apiKey: string;
   text: string;
   voiceAudioPath?: string;
@@ -74,6 +75,7 @@ export async function synthesize(opts: MimoSynthesizeOptions): Promise<MimoSynth
   try {
     response = await fetch(endpointUrl, {
       method: "POST",
+      signal: opts.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
       headers: {
         "Content-Type": "application/json",
         "api-key": apiKey,

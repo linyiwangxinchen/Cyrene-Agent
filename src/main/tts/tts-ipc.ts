@@ -30,26 +30,45 @@ export interface RegisterTtsIpcDeps {
   ttsSessionService: TtsSessionService;
   /** 传入共享 scope 以便退出时统一注销；缺省时使用独立 scope。 */
   ipc?: IpcScope;
+  clientOwnership?: boolean;
 }
 
 export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   const ipc = deps.ipc ?? createIpcScope();
+  const owners = new Map<string, { sender: Electron.WebContents; cleanup: () => void }>();
   ipc.handle(IPC.TTS_SESSION_START, async (event, request: StartTtsRequest) => {
     if (
       !request?.requestId
       || !request.conversationId
       || !request.messageId
-      || !request.speechText.trim()
+      || typeof request.speechText !== "string" || !request.speechText.trim() || request.speechText.length > 50_000
       || !/^[a-z\d][a-z\d._-]{0,63}$/i.test(request.converterVersion)
     ) {
       throw new Error("TTS 会话请求不完整");
     }
     const sender = event.sender;
-    return await deps.ttsSessionService.start(request, (sessionEvent) => {
-      if (!sender.isDestroyed()) sender.send(IPC.TTS_SESSION_EVENT, sessionEvent);
-    });
+    let cleanup = () => {};
+    if (deps.clientOwnership) {
+      const prior = owners.get(request.requestId);
+      if (prior && prior.sender !== sender) throw new Error("TTS_SESSION_NOT_OWNED");
+      prior?.cleanup();
+      const destroyed = () => { deps.ttsSessionService.cancel(request.requestId); cleanup(); };
+      cleanup = () => { sender.removeListener("destroyed", destroyed); owners.delete(request.requestId); };
+      owners.set(request.requestId, { sender, cleanup }); sender.once("destroyed", destroyed);
+    }
+    let streaming = false;
+    try {
+      const result = await deps.ttsSessionService.start(request, (sessionEvent) => {
+        if (!sender.isDestroyed()) sender.send(IPC.TTS_SESSION_EVENT, sessionEvent);
+        if (["stream-completed", "fallback-ready", "error"].includes(sessionEvent.type)) cleanup();
+      });
+      streaming = result.status === "streaming";
+      return result;
+    } finally { if (!streaming) cleanup(); }
   });
-  ipc.handle(IPC.TTS_SESSION_CANCEL, (_event, requestId: string) => {
+  ipc.handle(IPC.TTS_SESSION_CANCEL, (event, requestId: string) => {
+    if (deps.clientOwnership && owners.get(requestId)?.sender !== event.sender) return false;
+    owners.get(requestId)?.cleanup();
     return typeof requestId === "string" && requestId.length > 0
       ? deps.ttsSessionService.cancel(requestId)
       : false;

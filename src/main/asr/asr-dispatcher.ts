@@ -2,11 +2,13 @@ import type { AsrConfig } from "./asr-config";
 import { MosslandAsrStream } from "./mossland-asr-engine";
 import { MiniMaxAsrStream } from "./minimax-asr-engine";
 import { AliyunAsrStream } from "./aliyun-asr-engine";
+import { LocalAsrStream } from "./local-asr-engine";
 
 export interface AsrStreamSession {
   start(): Promise<void>;
   sendAudio(frame: Buffer): void;
   stop(): void | Promise<string>;
+  cancel?(): void;
 }
 
 export function createAsrStream(
@@ -14,6 +16,7 @@ export function createAsrStream(
   onPartial: (text: string) => void,
   onFinal: (text: string) => void,
 ): AsrStreamSession {
+  if (config.engine === "local") return new LocalAsrStream(config, onFinal);
   if (config.engine === "mossland") {
     return new MosslandAsrStream(config.apiKey, onFinal);
   }
@@ -31,5 +34,6 @@ export function createAsrStream(
     ),
     sendAudio: (frame) => stream.sendAudio(frame),
     stop: () => stream.stop(),
+    cancel: () => stream.cancel(),
   };
 }

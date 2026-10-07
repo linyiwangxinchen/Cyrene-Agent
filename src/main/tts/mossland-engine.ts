@@ -39,6 +39,7 @@ async function mossFetch(
 // ── synthesize ──────────────────────────────────────────────
 
 export interface MosslandSynthesizeOptions {
+  signal?: AbortSignal;
   apiKey: string;
   voiceId: string;
   text: string;
@@ -82,6 +83,7 @@ export async function synthesize(opts: MosslandSynthesizeOptions): Promise<Mossl
     apiKey: opts.apiKey,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal: opts.signal,
   });
 
   if (!response.ok) {

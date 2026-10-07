@@ -5,6 +5,7 @@ import * as fs from "fs";
 import { resolveTimeoutPolicy } from "../runtime-policy";
 
 export interface GptsovitsSynthesizeOptions {
+  signal?: AbortSignal;
   baseUrl: string;          // 形如 "http://localhost:9880"，不含路径
   refAudioPath: string;     // 参考音频绝对路径
   promptText: string;      // 参考音频对应的文本
@@ -83,7 +84,7 @@ export async function synthesize(opts: GptsovitsSynthesizeOptions): Promise<Gpts
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
-      signal: controller.signal,
+      signal: opts.signal ? AbortSignal.any([opts.signal, controller.signal]) : controller.signal,
     });
   } catch (err) {
     clearTimeout(timer);

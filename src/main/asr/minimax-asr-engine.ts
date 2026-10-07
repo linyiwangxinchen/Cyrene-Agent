@@ -1,9 +1,9 @@
 import { resolveTimeoutPolicy } from "../runtime-policy";
 import { encodePcm16MonoWav } from "./mossland-asr-engine";
 
-const MINIMAX_ASR_URL = "https://api.minimax.cn/v1/speech_to_text";
+const MINIMAX_ASR_URL = "https://api.minimaxi.com/v1/speech_to_text";
 
-async function transcribeWav(apiKey: string, wav: Buffer): Promise<string> {
+async function transcribeWav(apiKey: string, wav: Buffer, signal: AbortSignal): Promise<string> {
   const form = new FormData();
   form.append("model", "asr-1.0");
   form.append("response_format", "json");
@@ -20,7 +20,7 @@ async function transcribeWav(apiKey: string, wav: Buffer): Promise<string> {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}` },
       body: form,
-      signal: controller.signal,
+      signal: AbortSignal.any([signal, controller.signal]),
     });
   } catch (error) {
     if (controller.signal.aborted) {
@@ -55,6 +55,7 @@ async function transcribeWav(apiKey: string, wav: Buffer): Promise<string> {
 export class MiniMaxAsrStream {
   private readonly frames: Buffer[] = [];
   private stopPromise: Promise<string> | null = null;
+  private readonly controller = new AbortController();
 
   constructor(
     private readonly apiKey: string,
@@ -68,7 +69,7 @@ export class MiniMaxAsrStream {
   }
 
   sendAudio(pcmFrame: Buffer): void {
-    if (this.stopPromise || pcmFrame.length === 0) return;
+    if (this.controller.signal.aborted || this.stopPromise || pcmFrame.length === 0) return;
     this.frames.push(Buffer.from(pcmFrame));
   }
 
@@ -77,9 +78,13 @@ export class MiniMaxAsrStream {
     return this.stopPromise;
   }
 
+  cancel(): void { this.controller.abort(); this.frames.length = 0; }
+
   private async finish(): Promise<string> {
+    this.controller.signal.throwIfAborted();
     if (this.frames.length === 0) return "";
     const pcm = Buffer.concat(this.frames);
+    this.frames.length = 0;
     if (pcm.length > 16_000 * 2 * 500) {
       throw new Error("MiniMax 转写失败：音频时长超过 500 秒限制");
     }
@@ -87,7 +92,8 @@ export class MiniMaxAsrStream {
     if (wav.length > 50 * 1024 * 1024) {
       throw new Error("MiniMax 转写失败：音频文件超过 50 MB 限制");
     }
-    const text = await transcribeWav(this.apiKey, wav);
+    const text = await transcribeWav(this.apiKey, wav, this.controller.signal);
+    this.controller.signal.throwIfAborted();
     if (text) this.onFinal(text);
     return text;
   }

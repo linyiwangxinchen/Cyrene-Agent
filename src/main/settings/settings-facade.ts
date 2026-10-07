@@ -110,6 +110,9 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   emailSmtpPass: "",
   emailFromName: "",
   asrEngine: "off",
+  asrLocalUrl: "http://127.0.0.1:8000/v1/audio/transcriptions",
+  asrLocalModel: "whisper-1",
+  asrLocalKey: "",
   asrAliyunAppKey: "",
   asrAliyunAccessKeyId: "",
   asrAliyunAccessKeySecret: "",
@@ -300,6 +303,9 @@ export function normalizeGeneralSettings(
     asrEngine: ["off", "aliyun", "mossland", "minimax", "local"].includes(String(input?.asrEngine))
       ? (input!.asrEngine as "off" | "aliyun" | "mossland" | "minimax" | "local")
       : "off",
+    asrLocalUrl: typeof input?.asrLocalUrl === "string" ? input.asrLocalUrl.trim() : DEFAULT_GENERAL_SETTINGS.asrLocalUrl,
+    asrLocalModel: typeof input?.asrLocalModel === "string" ? input.asrLocalModel.trim() : DEFAULT_GENERAL_SETTINGS.asrLocalModel,
+    asrLocalKey: typeof input?.asrLocalKey === "string" ? input.asrLocalKey.trim() : "",
     asrAliyunAppKey: typeof input?.asrAliyunAppKey === "string" ? input.asrAliyunAppKey : "",
     asrAliyunAccessKeyId: typeof input?.asrAliyunAccessKeyId === "string" ? input.asrAliyunAccessKeyId : "",
     asrAliyunAccessKeySecret: typeof input?.asrAliyunAccessKeySecret === "string" ? input.asrAliyunAccessKeySecret : "",

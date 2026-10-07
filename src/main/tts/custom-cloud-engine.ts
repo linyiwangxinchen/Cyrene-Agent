@@ -4,6 +4,7 @@
 import { resolveTimeoutPolicy } from "../runtime-policy";
 
 export interface CustomCloudSynthesizeOptions {
+  signal?: AbortSignal;
   endpointUrl: string;
   apiKey?: string;
   voiceId?: string;
@@ -80,7 +81,7 @@ export async function synthesize(opts: CustomCloudSynthesizeOptions): Promise<Cu
         volume: opts.volume ?? 1,
         format,
       }),
-      signal: controller.signal,
+      signal: opts.signal ? AbortSignal.any([opts.signal, controller.signal]) : controller.signal,
     });
   } catch (err) {
     clearTimeout(timer);

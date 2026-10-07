@@ -1,9 +1,12 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { app } from "electron";
 import { loadGeneralSettings } from "../../settings/settings-facade";
 import type { GeneralSettings } from "../../settings/general-settings";
 import * as chatsStore from "../../chats/chats-store";
+import { ConversationJournalService } from "../../orchestrator/conversation-journal-service";
+import { getConversationTranscriptStore } from "../../orchestrator/conversation-transcript-store";
 import type {
   StartTtsRequest,
   TtsAudioFormat,
@@ -83,16 +86,24 @@ export function createTtsSynthesisService(
     signal: AbortSignal,
     emit: (event: TtsSessionEvent) => void,
   ): Promise<TtsStartResult | TtsSessionExecution> {
+    if (signal.aborted) return { requestId: request.requestId, status: "cancelled" };
     const settings = loadGeneralSettings();
     if (request.automatic && !settings.ttsAutoRead) {
       return { requestId: request.requestId, status: "skipped" };
     }
 
-    const historicalMessage = chatsStore
-      .getSession(request.conversationId)
-      ?.messages.find(
-        (message) => message.id === request.messageId && message.role === "model",
-      );
+    // v2 stores messages and their TTS presentation patches in the journal;
+    // the legacy getSession() only reads v1 and silently loses those cache keys.
+    const record = chatsStore.getSessionRecord(request.conversationId);
+    const messages = record?.schemaVersion === 2
+      ? (await new ConversationJournalService(
+          getConversationTranscriptStore(app.getPath("userData")),
+        ).readProjection(request.conversationId)).messages
+      : record?.messages;
+    if (signal.aborted) return { requestId: request.requestId, status: "cancelled" };
+    const historicalMessage = messages?.find(
+      (message) => message.id === request.messageId && message.role === "model",
+    );
     if (
       historicalMessage?.ttsCacheKey &&
       historicalMessage.ttsCacheVersion === request.converterVersion
@@ -205,7 +216,7 @@ export function createTtsSynthesisService(
       };
       cacheKey = buildGptsovitsCacheKey(payload);
       audio = (
-        await gptsovitsSynthesize({ ...payload, debugLog: appendGptsovitsTtsLog })
+        await gptsovitsSynthesize({ ...payload, signal, debugLog: appendGptsovitsTtsLog })
       ).audio;
     } else if (settings.ttsEngine === "custom-cloud") {
       if (!settings.ttsCustomCloudEndpointUrl) {
@@ -224,7 +235,7 @@ export function createTtsSynthesisService(
       };
       cacheKey = buildCustomCloudCacheKey(payload);
       audio = (
-        await customCloudSynthesize({ ...payload, debugLog: appendCustomCloudTtsLog })
+        await customCloudSynthesize({ ...payload, signal, debugLog: appendCustomCloudTtsLog })
       ).audio;
     } else if (settings.ttsEngine === "mimo") {
       if (!settings.ttsMimoKey || !settings.ttsMimoVoiceAudioPath) {
@@ -238,7 +249,7 @@ export function createTtsSynthesisService(
         stylePrompt: settings.ttsMimoStylePrompt,
       };
       cacheKey = buildMimoCacheKey(payload);
-      audio = (await mimoSynthesize({ ...payload, debugLog: appendMimoTtsLog })).audio;
+      audio = (await mimoSynthesize({ ...payload, signal, debugLog: appendMimoTtsLog })).audio;
     } else {
       if (!settings.ttsMosslandKey || !settings.ttsMosslandVoiceId) {
         throw new Error("Mossland TTS 配置不完整");
@@ -252,9 +263,10 @@ export function createTtsSynthesisService(
         format,
       };
       cacheKey = buildMosslandCacheKey(payload);
-      audio = (await mosslandSynthesize(payload)).audio;
+      audio = (await mosslandSynthesize({ ...payload, signal })).audio;
     }
 
+    if (signal.aborted) return { requestId: request.requestId, status: "cancelled" };
     cacheKey = versionTtsCacheKey(cacheKey, request.converterVersion);
     const cachePath = getTtsCachePath(cacheKey, format);
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });

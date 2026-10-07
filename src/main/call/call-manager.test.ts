@@ -133,7 +133,7 @@ describe("call turn submission", () => {
         stop: vi.fn(async () => ""),
       };
     });
-    mocks.synthesizeByEngine.mockResolvedValue({ audio: Buffer.from("spoken reply") });
+    mocks.synthesizeByEngine.mockResolvedValue({ audio: Buffer.from("spoken reply"), format: "wav" });
     setCallSettings(
       () => ({ provider: "openai", baseUrl: "", model: "test", apiKey: "test-key" }),
       () => ({ ttsEngine: "minimax", ttsMinimaxKey: "key", ttsMinimaxVoiceId: "voice" } as never),
@@ -149,7 +149,7 @@ describe("call turn submission", () => {
     pushFinal("你好，昔涟。");
     await endTurn();
 
-    expect(sentAudio).toEqual([{ base64: Buffer.from("spoken reply").toString("base64"), text: "模型回复" }]);
+    expect(sentAudio).toEqual([{ base64: Buffer.from("spoken reply").toString("base64"), text: "模型回复", format: "wav" }]);
   });
 
   it("returns to LISTENING when batch transcription fails", async () => {

@@ -154,8 +154,11 @@ export interface GeneralSettings {
   emailSmtpPass: string;
   /** 发件人显示名（可选） */
   emailFromName: string;
-  /** 🎧ASR 服务商：off(关闭) | aliyun(阿里云) | mossland(MOSI) | minimax | local(本地,占位) */
+  /** ASR 服务商；local 使用兼容转写接口的自部署服务。 */
   asrEngine: "off" | "aliyun" | "mossland" | "minimax" | "local";
+  asrLocalUrl: string;
+  asrLocalModel: string;
+  asrLocalKey: string;
   /** 阿里云智能语音交互 AppKey */
   asrAliyunAppKey: string;
   /** 阿里云 RAM AccessKey ID */

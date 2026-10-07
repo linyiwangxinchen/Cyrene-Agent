@@ -22,6 +22,7 @@ export type CallState = "IDLE" | "LISTENING" | "THINKING" | "SPEAKING" | "ERROR"
 
 let callWindow: BrowserWindow | null = null;
 let asrStream: AsrStreamSession | null = null;
+let finishingAsr: AsrStreamSession | null = null;
 let currentState: CallState = "IDLE";
 let finalText = "";
 let latestPartialText = "";
@@ -85,6 +86,7 @@ let ttsSettingsGetter: (() => {
   ttsCustomCloudEndpointUrl: string; ttsCustomCloudApiKey: string; ttsCustomCloudVoiceId: string;
   ttsCustomCloudFormat: "wav" | "mp3"; ttsCustomCloudTimeoutMs: number;
   ttsMimoKey: string; ttsMimoVoiceAudioPath: string; ttsMimoStylePrompt: string;
+  ttsMosslandKey?: string; ttsMosslandVoiceId?: string; ttsMosslandModel?: string; ttsMosslandFormat?: "mp3" | "wav";
 }) | null = null;
 
 /** index.ts 启动时注入模型配置、TTS 配置和 system prompt 构建器。 */
@@ -105,6 +107,7 @@ export function setCallSettings(
     ttsCustomCloudEndpointUrl: string; ttsCustomCloudApiKey: string; ttsCustomCloudVoiceId: string;
     ttsCustomCloudFormat: "wav" | "mp3"; ttsCustomCloudTimeoutMs: number;
     ttsMimoKey: string; ttsMimoVoiceAudioPath: string; ttsMimoStylePrompt: string;
+  ttsMosslandKey?: string; ttsMosslandVoiceId?: string; ttsMosslandModel?: string; ttsMosslandFormat?: "mp3" | "wav";
   },
   systemPromptFn: (userText: string) => Promise<string>,
   weatherFn: (userText: string) => Promise<string | null>,
@@ -174,9 +177,9 @@ function sendAsrResult(partial: string | undefined, final: string | undefined): 
   }
 }
 
-function sendTtsAudio(base64: string, text: string): void {
+function sendTtsAudio(base64: string, text: string, format: string): void {
   if (callWindow && !callWindow.isDestroyed()) {
-    callWindow.webContents.send(IPC.CALL_TTS_AUDIO, { base64, text });
+    callWindow.webContents.send(IPC.CALL_TTS_AUDIO, { base64, text, format });
   }
 }
 
@@ -186,7 +189,8 @@ export function startCall(): void {
   const cfg = getAsrConfig();
   const missingConfig = !cfg
     || (cfg.engine === "aliyun" && (!cfg.appKey || !cfg.accessKeyId || !cfg.accessKeySecret))
-    || (cfg.engine === "mossland" && !cfg.apiKey);
+    || ((cfg.engine === "mossland" || cfg.engine === "minimax") && !cfg.apiKey)
+    || (cfg.engine === "local" && (!cfg.endpointUrl || !cfg.model));
   if (missingConfig) {
     sendError("ASR 未配置：请在设置→ASR 中选择服务商并填写凭据");
     sendState("ERROR");
@@ -208,8 +212,8 @@ export function startCall(): void {
 function startAsrStream(cfg: AsrConfig, generation = callGeneration): void {
   asrStream = createAsrStream(
     cfg,
-    (text) => { latestPartialText = text; sendAsrResult(text, undefined); },
-    (text) => { finalText = text; latestPartialText = text; sendAsrResult(undefined, text); },
+    (text) => { if (!isCurrentCall(generation) || inputOwner !== "builtin") return; latestPartialText = text; sendAsrResult(text, undefined); },
+    (text) => { if (!isCurrentCall(generation) || inputOwner !== "builtin") return; finalText = text; latestPartialText = text; sendAsrResult(undefined, text); },
   );
   void asrStream.start().catch((err) => {
     if (!isCurrentCall(generation)) return;
@@ -227,13 +231,17 @@ async function stopAsrAndCollectText(generation: number): Promise<string | null>
   if (asrStream) {
     const stream = asrStream;
     asrStream = null;
+    finishingAsr = stream;
     try {
-      await stream.stop();
+      const text = await stream.stop();
+      if (typeof text === "string" && text.trim() && isCurrentCall(generation)) finalText = text;
     } catch (err) {
       if (!isCurrentCall(generation)) return null;
       const message = err instanceof Error ? err.message : String(err);
       sendError(message);
       return null;
+    } finally {
+      if (finishingAsr === stream) finishingAsr = null;
     }
   }
   if (!isCurrentCall(generation)) return null;
@@ -306,11 +314,18 @@ async function processFinalTranscript(text: string, generation: number): Promise
       return;
     }
 
+    if (tts.ttsEngine === "mossland" && (!tts.ttsMosslandKey || !tts.ttsMosslandVoiceId)) {
+      sendError("TTS 未配置：请填写 Mossland API Key 和音色 ID");
+      recoverToListening(generation);
+      return;
+    }
+
     if (!isCurrentCall(generation) || controller.signal.aborted) return;
     sendState("SPEAKING");
     try {
       const result = await synthesizeByEngine(tts.ttsEngine, {
         text: reply,
+        signal: controller.signal,
         speed: tts.ttsSpeed,
         volume: tts.ttsVolume,
         // minimax
@@ -318,13 +333,14 @@ async function processFinalTranscript(text: string, generation: number): Promise
           ? tts.ttsMimoKey
           : tts.ttsEngine === "custom-cloud"
             ? tts.ttsCustomCloudApiKey
-            : tts.ttsMinimaxKey,
+            : tts.ttsEngine === "mossland" ? tts.ttsMosslandKey : tts.ttsMinimaxKey,
         voiceId: tts.ttsEngine === "mimo"
           ? ""
           : tts.ttsEngine === "custom-cloud"
             ? tts.ttsCustomCloudVoiceId
-            : tts.ttsMinimaxVoiceId,
-        model: tts.ttsMinimaxModel,
+            : tts.ttsEngine === "mossland" ? tts.ttsMosslandVoiceId : tts.ttsMinimaxVoiceId,
+        model: tts.ttsEngine === "mossland" ? tts.ttsMosslandModel : tts.ttsMinimaxModel,
+        mosslandFormat: tts.ttsMosslandFormat,
         // gptsovits
         baseUrl: tts.ttsGptsovitsBaseUrl,
         refAudioPath: tts.ttsGptsovitsRefAudioPath,
@@ -339,7 +355,7 @@ async function processFinalTranscript(text: string, generation: number): Promise
         ...(tts.ttsEngine === "custom-cloud" ? { format: tts.ttsCustomCloudFormat } : {}),
       });
       if (!isCurrentCall(generation) || controller.signal.aborted) return;
-      sendTtsAudio(result.audio.toString("base64"), reply);
+      sendTtsAudio(result.audio.toString("base64"), reply, result.format);
       // 等渲染端 CALL_TTS_DONE 后恢复 LISTENING
     } catch (ttsErr) {
       if (!isCurrentCall(generation) || controller.signal.aborted) return;
@@ -397,7 +413,7 @@ export function claimExternalSpeechInput(): ExternalInputClaimResult {
   if (asrStream) {
     const stream = asrStream;
     asrStream = null;
-    void Promise.resolve(stream.stop()).catch((err) => {
+    void Promise.resolve(stream.cancel ? stream.cancel() : stream.stop()).catch((err) => {
       console.warn(LOG_PREFIX, "外部接管时停止内置 ASR 失败:", err);
     });
   }
@@ -443,7 +459,7 @@ export function releaseExternalSpeechInput(callGenerationFrozen: number): void {
 
 /** TTS 播完后恢复 LISTENING，重新开始 ASR。 */
 export function onTtsDone(): void {
-  if (!active) return;
+  if (!active || currentState !== "SPEAKING") return;
   sendState("LISTENING");
   // 外部输入持有时保持所有权：不自动重启内置 ASR，等租约释放时恢复
   restartAsr();
@@ -454,7 +470,7 @@ function restartAsr(): void {
   if (inputOwner !== "builtin") return;
   const cfg = getAsrConfig();
   if (!cfg) return;
-  if (asrStream) void Promise.resolve(asrStream.stop()).catch((err) => {
+  if (asrStream) void Promise.resolve(asrStream.cancel ? asrStream.cancel() : asrStream.stop()).catch((err) => {
     console.warn(LOG_PREFIX, "停止上一轮 ASR 失败:", err);
   });
   finalText = "";
@@ -473,8 +489,10 @@ export function stopCall(): void {
   finalText = "";
   latestPartialText = "";
   callHistory.length = 0;
+  finishingAsr?.cancel?.();
+  finishingAsr = null;
   if (asrStream) {
-    void Promise.resolve(asrStream.stop()).catch((err) => {
+    void Promise.resolve(asrStream.cancel ? asrStream.cancel() : asrStream.stop()).catch((err) => {
       console.warn(LOG_PREFIX, "挂断时停止 ASR 失败:", err);
     });
     asrStream = null;

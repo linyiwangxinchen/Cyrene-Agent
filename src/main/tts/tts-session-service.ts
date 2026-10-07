@@ -59,4 +59,8 @@ export class TtsSessionService {
     this.active.delete(requestId);
     return true;
   }
+
+  cancelAll(): void {
+    for (const requestId of this.active.keys()) this.cancel(requestId);
+  }
 }

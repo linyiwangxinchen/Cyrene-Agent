@@ -32,9 +32,9 @@ export function encodePcm16MonoWav(pcm: Buffer): Buffer {
   return Buffer.concat([header, pcm]);
 }
 
-async function transcribeWav(apiKey: string, wav: Buffer): Promise<string> {
+async function transcribeWav(apiKey: string, wav: Buffer, signal: AbortSignal): Promise<string> {
   const form = new FormData();
-  form.append("model", "moss-transcribe");
+  form.append("model", "moss-transcribe-1.0");
   form.append("response_format", "json");
   // Buffer 底层可能是 SharedArrayBuffer，不满足新版类型的 BlobPart 约束；拷贝成独立 ArrayBuffer 背书的 Uint8Array
   form.append("file", new Blob([new Uint8Array(wav)], { type: "audio/wav" }), "speech.wav");
@@ -44,6 +44,7 @@ async function transcribeWav(apiKey: string, wav: Buffer): Promise<string> {
     apiKey,
     timeoutMs: resolveTimeoutPolicy({ stage: "asr-mossland" }).totalMs,
     body: form,
+    signal,
   });
   if (!response.ok) {
     throw buildMosslandError("Mossland 转写失败", response.status, await response.text());
@@ -60,6 +61,7 @@ async function transcribeWav(apiKey: string, wav: Buffer): Promise<string> {
 export class MosslandAsrStream {
   private readonly frames: Buffer[] = [];
   private stopPromise: Promise<string> | null = null;
+  private readonly controller = new AbortController();
 
   constructor(
     private readonly apiKey: string,
@@ -73,7 +75,7 @@ export class MosslandAsrStream {
   }
 
   sendAudio(pcmFrame: Buffer): void {
-    if (this.stopPromise || pcmFrame.length === 0) return;
+    if (this.controller.signal.aborted || this.stopPromise || pcmFrame.length === 0) return;
     this.frames.push(Buffer.from(pcmFrame));
   }
 
@@ -84,9 +86,15 @@ export class MosslandAsrStream {
     return this.stopPromise;
   }
 
+  cancel(): void { this.controller.abort(); this.frames.length = 0; }
+
   private async finish(): Promise<string> {
     if (this.frames.length === 0) return "";
-    const text = await transcribeWav(this.apiKey, encodePcm16MonoWav(Buffer.concat(this.frames)));
+    this.controller.signal.throwIfAborted();
+    const wav = encodePcm16MonoWav(Buffer.concat(this.frames));
+    this.frames.length = 0;
+    const text = await transcribeWav(this.apiKey, wav, this.controller.signal);
+    this.controller.signal.throwIfAborted();
     if (text) this.onFinal(text);
     return text;
   }

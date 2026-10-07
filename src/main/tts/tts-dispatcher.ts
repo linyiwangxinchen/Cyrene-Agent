@@ -10,6 +10,7 @@ import { DEFAULT_MOSSLAND_TTS_MODEL, type TtsEngine } from "../../shared/tts-typ
 import type { MiniMaxVocalEnhanceOptions } from "./minimax-vocal-enhancer";
 
 export interface SynthesizeByEnginePayload {
+  signal?: AbortSignal;
   text: string;
   speed?: number;
   volume?: number;
@@ -55,6 +56,7 @@ export async function synthesizeByEngine(
       apiKey: payload.apiKey,
       voiceId: payload.voiceId,
       text: payload.text,
+      signal: payload.signal,
       speed: payload.speed,
       volume: payload.volume,
       model: payload.model ?? "speech-2.8-turbo",
@@ -73,6 +75,7 @@ export async function synthesizeByEngine(
       refAudioPath: payload.refAudioPath,
       promptText: payload.promptText,
       text: payload.text,
+      signal: payload.signal,
       speed: payload.speed,
       format: payload.format ?? "wav",
       timeoutMs: payload.timeoutMs,
@@ -89,6 +92,7 @@ export async function synthesizeByEngine(
       apiKey: payload.apiKey,
       voiceId: payload.voiceId,
       text: payload.text,
+      signal: payload.signal,
       speed: payload.speed,
       volume: payload.volume,
       format: payload.format ?? "mp3",
@@ -105,6 +109,7 @@ export async function synthesizeByEngine(
       apiKey: payload.apiKey,
       voiceAudioPath: payload.voiceAudioPath,
       text: payload.text,
+      signal: payload.signal,
       stylePrompt: payload.stylePrompt ?? payload.promptText,
       model: "mimo-v2.5-tts-voiceclone",
     });
@@ -120,6 +125,7 @@ export async function synthesizeByEngine(
       apiKey: payload.apiKey,
       voiceId: payload.voiceId,
       text: payload.text,
+      signal: payload.signal,
       model: payload.model ?? DEFAULT_MOSSLAND_TTS_MODEL,
       format,
     });
