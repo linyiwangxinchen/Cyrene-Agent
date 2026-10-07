@@ -28,7 +28,7 @@ describe("historical TTS cache across conversation formats", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.settings.mockReturnValue({ ttsEngine: "off", ttsAutoRead: false });
-    mocks.record.mockReturnValue({ schemaVersion: 2 });
+    mocks.record.mockResolvedValue({ schemaVersion: 2 });
     mocks.projection.mockResolvedValue({ messages: [message] });
     mocks.cache.mockReturnValue({ audio: Buffer.from("saved-wave"), format: "wav" });
   });
@@ -40,7 +40,7 @@ describe("historical TTS cache across conversation formats", () => {
   });
 
   it("keeps legacy v1 cache playback without reading a transcript", async () => {
-    mocks.record.mockReturnValue({ schemaVersion: 1, messages: [message] });
+    mocks.record.mockResolvedValue({ schemaVersion: 1, messages: [message] });
     expect(await createTtsSynthesisService().synthesizeSession(request, new AbortController().signal, vi.fn())).toMatchObject({ cached: true });
     expect(mocks.projection).not.toHaveBeenCalled();
   });

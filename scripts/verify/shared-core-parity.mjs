@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
+import { DatabaseSync } from 'node:sqlite';
 import WebSocket from 'ws';
 
 const require = createRequire(import.meta.url);
@@ -82,9 +83,21 @@ await writeFile(path.join(pluginDir, 'index.cjs'), `module.exports={register(ctx
 await writeFile(path.join(pluginDir, 'panel.html'), '<!doctype html><p>Plugin fixture panel</p><script src="/.cyrene/panel-bridge.js"></script>');
 const skillDir = path.join(data, 'skills', 'parity-skill'); await mkdir(skillDir, { recursive: true });
 await writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: Parity fixture\ndescription: A fixture for instruction loading\neffectKind: read\nmodes: [work, code, learn]\n---\nPARITY_SKILL_INSTRUCTIONS: inspect the fixture, then report the result.');
-const handle = createWebServer({ dataDir: data, secureCookies: false, setupToken: 'fixture-setup', sharedCore: true, logger: { info: value => logs.push(value), warn: value => logs.push(value), error: value => logs.push(value) } });
+// Old Windows/headless installations must survive the first SQLite startup.
+const legacyConversation = { schemaVersion: 1, id: 'legacy-storage-fixture', title: 'Legacy storage fixture', mode: 'chat', createdAt: 1, updatedAt: 2,
+  messages: [{ id: 'legacy-user', role: 'user', content: 'legacy question', at: 1 }, { id: 'legacy-assistant', role: 'model', content: 'legacy reply', at: 2 }] };
+const legacyTask = { schemaVersion: 1, id: 'legacy-task-fixture', parentConversationId: legacyConversation.id, parentRunId: 'legacy-parent-run', childRunId: 'legacy-child-run',
+  description: 'Legacy task', subagentType: 'general', contextOpen: true, mode: 'work', status: 'completed', messages: [{ role: 'user', content: 'legacy task prompt' }], trace: [], todoItems: [], resultText: 'legacy task result', createdAt: 1, updatedAt: 2, completedAt: 2 };
+const legacyFiles = [
+  ['cyrene-chats/sessions/legacy-storage-fixture.json', legacyConversation],
+  ['cyrene-tasks/sessions/legacy-task-fixture.json', legacyTask],
+  ['token-usage.json', { version: 2, days: { '2026-10-08': { input: 71, output: 13, hit: 0, miss: 0, cacheCreation: 0, requests: 2, attemptedRequests: 2, models: { 'legacy-model': { input: 71, output: 13, hit: 0, miss: 0, cacheCreation: 0, requests: 2, attemptedRequests: 2 } } } } }],
+];
+for (const [file, content] of legacyFiles) { await mkdir(path.dirname(path.join(data, file)), { recursive: true }); await writeFile(path.join(data, file), JSON.stringify(content)); }
+const options = { dataDir: data, secureCookies: false, setupToken: 'fixture-setup', sharedCore: true, logger: { info: value => logs.push(value), warn: value => logs.push(value), error: value => logs.push(value) } };
+let handle = createWebServer(options);
 await new Promise(resolve => handle.server.listen(0, '127.0.0.1', resolve));
-const base = `http://127.0.0.1:${handle.server.address().port}`;
+let base = `http://127.0.0.1:${handle.server.address().port}`;
 let cookie = '', clientToken = '', socket;
 async function http(route, method = 'GET', body, headers = {}) {
   const response = await fetch(base + route, { method, headers: { ...(cookie ? { Cookie: cookie } : {}), ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...headers }, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) });
@@ -132,6 +145,14 @@ try {
     assert.equal((await invoke('shell:open-external', 'javascript:alert(1)')).ok, false);
   });
   await check('Legacy model/profile/memory migration retains values', async () => { const settings = await invoke('settings:get-config'); assert.equal(settings.defaultModelProfileId, 'fixture-profile'); const panel = await invoke('memory-panel:get-data'); assert.equal(panel.l0.preferredName, '验收用户'); assert.equal(await readFile(path.join(data, 'plugin-activated.txt'), 'utf8'), 'activated'); });
+  await check('SQLite imports legacy conversations, task sessions and usage without modifying source files', async () => {
+    const session = await invoke('chats:get', legacyConversation.id); assert.deepEqual(session.messages.map(message => message.content), ['legacy question', 'legacy reply']);
+    const task = await invoke('task-session:get', { taskId: legacyTask.id, parentConversationId: legacyConversation.id }); assert.equal(task.resultText, legacyTask.resultText);
+    const database = new DatabaseSync(path.join(data, 'cyrene.sqlite'), { readOnly: true });
+    try { assert.equal(database.prepare('SELECT input FROM token_usage WHERE model=?').get('legacy-model').input, 71); }
+    finally { database.close(); }
+    for (const [file, content] of legacyFiles) assert.deepEqual(JSON.parse(await readFile(path.join(data, file), 'utf8')), content);
+  });
   await check('Theme and radius use persisted desktop settings', async () => { assert.equal(await invoke('ui-theme:get'), 'charcoal-pink'); assert.equal(await invoke('ui-theme-radius:get'), false); });
   await invoke('permission:set-level', 'full');
   const sessions = {};
@@ -140,6 +161,23 @@ try {
     if (mode !== 'chat') assert.equal((await invoke('chats:set-workspace', { sessionId: sessions[mode].id, workspaceRoot: workspace })).ok, true);
   }
   await check('Chat uses persona, respects user prompt overrides and excludes Work/Code tools by default', async () => { const start = requests.length; const result = await run(sessions.chat, 'case:chat 你是谁？'); assert.equal(result.stream.filter(event => event.type === 'TEXT_MESSAGE_CONTENT').length, 1); const body = requests.slice(start).find(request => request.stream); assert.ok(JSON.stringify(body.messages).includes('昔涟')); assert.ok(JSON.stringify(body.messages).includes('PARITY_USER_PROMPT_OVERRIDE')); assert.ok(!body.tools?.some(tool => ['Write', 'run_shell', 'lsp'].includes(tool.function?.name))); });
+  let replayInput, replayRunId;
+  await check('Chat without tools and duplicate dispatch use one durable execution', async () => {
+    const general = await invoke('settings:get-general');
+    const overrides = Object.fromEntries((await invoke('tool:get-catalog')).map(tool => [tool.id, { ...general.toolModeOverrides?.[tool.id], chat: false }]));
+    await invoke('settings:save-general', { ...general, chatToolsEnabled: false, toolModeOverrides: overrides });
+    try {
+      replayInput = { sessionId: sessions.chat.id, currentUser: { turnId: 'sqlite-idempotency-user', text: 'case:chat-once', visibleContent: 'case:chat-once' }, assistantTurnId: 'sqlite-idempotency-assistant' };
+      const prior = events.length, start = requests.length;
+      const ack = await invoke('agui:run', replayInput); assert.equal(ack.success, true); replayRunId = ack.runId;
+      await waitFor(() => events.slice(prior).some(event => event.channel === 'agui:event' && event.args[0]?.runId === ack.runId && ['RUN_FINISHED','RUN_ERROR'].includes(event.args[0]?.type)), 'plain chat terminal');
+      assert.ok(events.slice(prior).some(event => event.args[0]?.runId === ack.runId && event.args[0]?.type === 'RUN_FINISHED'));
+      await send('agui:run-persisted', { runId: ack.runId, sessionId: sessions.chat.id });
+      assert.ok(requests.slice(start).filter(request => request.stream).every(request => !request.tools?.length));
+      const count = requests.length, duplicate = await invoke('agui:run', replayInput);
+      assert.equal(duplicate.duplicate, true); assert.equal(duplicate.runId, ack.runId); assert.equal(requests.length, count);
+    } finally { await invoke('settings:save-general', general); }
+  });
   await check('Plan transitions persist and broadcast conversation-scoped state', async () => {
     const conversationId = sessions.code.id, prior = events.length;
     assert.equal((await invoke('plan:set-mode', { conversationId, target: 'on', workspaceRoot: workspace })).state, 'PLAN_DISCUSSING');
@@ -151,7 +189,7 @@ try {
     const prior = events.length; await invoke('chats:open-folder');
     await waitFor(() => events.slice(prior).some(event => event.channel === 'host:open-directory'), 'server directory event');
     const folder = events.slice(prior).find(event => event.channel === 'host:open-directory').args[0];
-    const result = await http(`/api/core/files?path=${encodeURIComponent(folder)}`); assert.equal(result.response.status, 200); assert.ok(result.value.entries.some(entry => entry.name === 'sessions' && entry.directory));
+    const result = await http(`/api/core/files?path=${encodeURIComponent(folder)}`); assert.equal(result.response.status, 200); assert.ok(result.value.entries.some(entry => entry.name === 'cyrene.sqlite' && !entry.directory));
   });
   for (const mode of ['work', 'code']) await check(`${mode} executes tool calls and persists file/review evidence`, async () => { const result = await run(sessions[mode], `case:write-${mode}`); assert.equal(await readFile(path.join(workspace, `proof-${mode}.txt`), 'utf8'), `shared-core-${mode}`); assert.ok(result.stream.some(event => event.type === 'TOOL_CALL_START')); assert.ok(await invoke('review:get', result.ack.runId)); const session = await invoke('chats:get', sessions[mode].id); assert.ok(session.messages.some(message => message.role === 'model')); });
   await check('Learn routes through Harness and exposes exam tools', async () => { const start = requests.length; await run(sessions.learn, 'case:learn'); assert.ok(requests.slice(start).some(request => request.tools?.some(tool => tool.function?.name === 'learn_exam_create_plan'))); });
@@ -176,7 +214,11 @@ try {
   });
   await check('Subagent performs an actual child run and persists its transcript', async () => {
     const start = requests.length; await run(sessions.work, 'case:subagent'); assert.ok(requests.slice(start).some(request => JSON.stringify(request.messages).includes('case:child')));
-    const index = JSON.parse(await readFile(path.join(data, 'cyrene-tasks', 'index.json'), 'utf8')); const task = index.find(row => row.parentConversationId === sessions.work.id);
+    const database = new DatabaseSync(path.join(data, 'cyrene.sqlite'), { readOnly: true });
+    let task;
+    try { task = database.prepare('SELECT id FROM task_sessions WHERE parent_conversation_id=?').get(sessions.work.id); }
+    finally { database.close(); }
+    assert.ok(task, 'child task is persisted in SQLite');
     const saved = await invoke('task-session:get', { taskId: task.id, parentConversationId: sessions.work.id }); assert.equal(saved.status, 'completed'); assert.ok(saved.messages.length > 0);
   });
   await check('Skill instructions are invoked and reach the next model request', async () => { const start = requests.length; await run(sessions.work, 'case:skill'); assert.ok(requests.slice(start).some(request => request.messages?.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('PARITY_SKILL_INSTRUCTIONS')))); });
@@ -266,6 +308,21 @@ try {
     const page = createServer((req, res) => { if (req.url === '/clicked') { clicked++; res.end('ok'); } else res.end('<!doctype html><title>Control fixture</title><button onclick="fetch(\'/clicked\')">Click fixture</button>'); });
     await new Promise(resolve => page.listen(0, '127.0.0.1', resolve));
     try { await invoke('browser-panel:navigate', `http://127.0.0.1:${page.address().port}`); const result = await run(sessions.work, 'case:browser'); assert.equal(clicked, 1); assert.ok((await cssOutput(result.ack.runId)).includes('matchedRules'), 'matched CSS rules are preserved'); } finally { await new Promise(resolve => page.close(resolve)); }
+  });
+  await check('SQLite restart retains transcripts, child tasks, usage and idempotency receipts', async () => {
+    const before = await invoke('chats:get', sessions.chat.id), usage = await invoke('token-usage:get', 366);
+    await handle.close(); socket = undefined; clientToken = '';
+    handle = createWebServer(options); await new Promise(resolve => handle.server.listen(0, '127.0.0.1', resolve)); base = `http://127.0.0.1:${handle.server.address().port}`;
+    const login = await http('/api/auth/login', 'POST', { username: 'admin', password: '123456' }); assert.equal(login.response.status, 200); cookie = login.response.headers.get('set-cookie').split(';')[0];
+    socket = new WebSocket(base.replace('http:', 'ws:') + '/ws', { headers: { Cookie: cookie } });
+    socket.on('message', raw => { const event = JSON.parse(String(raw)); if (event.type === 'ready') clientToken = event.clientToken; if (event.type === 'CORE_EVENT') events.push(event); });
+    await waitFor(() => clientToken, 'restart websocket handshake'); await handle.startChannels();
+    const after = await invoke('chats:get', sessions.chat.id); assert.deepEqual(after.messages, before.messages);
+    assert.deepEqual(await invoke('token-usage:get', 366), usage);
+    const task = await invoke('task-session:get', { taskId: legacyTask.id, parentConversationId: legacyConversation.id }); assert.equal(task.resultText, legacyTask.resultText);
+    const count = requests.length, duplicate = await invoke('agui:run', replayInput); assert.equal(duplicate.duplicate, true); assert.equal(duplicate.runId, replayRunId); assert.equal(requests.length, count);
+    assert.deepEqual((await invoke('chats:get', legacyConversation.id)).messages.map(message => message.content), ['legacy question', 'legacy reply']);
+    for (const [file, content] of legacyFiles) assert.deepEqual(JSON.parse(await readFile(path.join(data, file), 'utf8')), content);
   });
   await check('Logout revokes the established WebSocket', async () => { let closed = false; socket.once('close', code => { closed = code === 1008; }); await http('/api/auth/logout', 'POST'); await waitFor(() => closed, 'logout websocket revocation'); assert.equal((await http('/api/core/capabilities', 'POST', {})).response.status, 401); });
   await mkdir('docs/verification', { recursive: true });
