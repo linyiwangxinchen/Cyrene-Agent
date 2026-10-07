@@ -676,7 +676,11 @@ export function registerAgUiIpc(
 
     const threadId = `thread-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
-    if (mode === "chat") await database.call("runs.create", { conversationId: sessionId, runId });
+    // Tool-enabled Chat uses Harness, which owns the prepared -> running
+    // transition. Starting it here too makes SQLite reject the second create.
+    if (mode === "chat" && !(options.tools?.length)) {
+      await database.call("runs.create", { conversationId: sessionId, runId });
+    }
 
     // 桌面轮次事件：run 真正开跑时登记协调器（立即发布 turn:started）。
     // turn:finished 由协调器在"终态 + 渲染端落盘确认"双条件满足后发布一次。
