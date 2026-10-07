@@ -4,19 +4,23 @@
 
 ## 构建
 
+完整的安装、构建完成后的下一步、初始化登录、按当前目录生成 systemd 服务、端口占用排查、停止与异机上传步骤见 [Linux 操作指南](linux-operations.md)。下面是源码目录内的构建摘要：
+
 ```bash
-corepack pnpm@10.33.0 install --frozen-lockfile
-corepack pnpm@10.33.0 run build:server
-corepack pnpm@10.33.0 run build:renderer
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile
+pnpm run check:server
+pnpm run check:renderer
+pnpm run build:web
 # Root/admin installs only Chromium's OS libraries, not a desktop environment.
-sudo node node_modules/playwright/cli.js install-deps chromium
+sudo "$(command -v node)" node_modules/playwright/cli.js install-deps chromium
 # Browser binaries must be readable by the systemd service account.
-PLAYWRIGHT_BROWSERS_PATH=/opt/cyrene-agent/.browsers node node_modules/playwright/cli.js install chromium
+export PLAYWRIGHT_BROWSERS_PATH="$(pwd -P)/.browsers"
+node node_modules/playwright/cli.js install chromium
 ```
 
 构建结果为 `dist/server/server/index.js`、`dist/headless/core.cjs`、知识库索引 worker、SQLite 数据库 worker、`dist/plugin-panel/` 和 `dist/renderer/`。运行时保留 `node_modules/`、`prompts/`、`skills/`、`resources/` 和可选的 `vendor/cyrene-skills/`，不能仅复制 HTML 或 `dist/server/`。Node 使用 24.x，系统需有 Git；Code 模式的语言服务器和 Skill 自身依赖按所用语言/技能安装。Chromium 和系统依赖的安装方式见 [Playwright 官方文档](https://playwright.dev/docs/browsers#install-system-dependencies)。
 
-部署时须同时保留仓库的 `prompts/` 目录，包括模式规则、身份、`soul.md`、台词参考、`styles/` 和 `worldbook/`。Web Server 与 Windows 端读取同一套资源；只复制 `dist/` 会缺少人格内容。默认从服务程序所在目录定位资源，不依赖启动时的当前目录；可用 `CYRENE_PROMPTS_DIR=/opt/cyrene-agent/prompts` 指定其他位置。缺少必需提示词会明确报错。
+部署时须同时保留仓库的 `prompts/` 目录，包括模式规则、身份、`soul.md`、台词参考、`styles/` 和 `worldbook/`。Web Server 与 Windows 端读取同一套资源；只复制 `dist/` 会缺少人格内容。默认从服务程序所在目录定位资源，不依赖启动时的当前目录；也可在程序根目录执行 `export CYRENE_PROMPTS_DIR="$(pwd -P)/prompts"` 指定位置。缺少必需提示词会明确报错。
 
 用户覆盖文件位于 `$CYRENE_DATA_DIR/prompts/`，按文件优先于随程序部署的版本。自定义表达风格位于 `$CYRENE_DATA_DIR/styles/custom/custom.md`；可选通用语气规则为 `$CYRENE_DATA_DIR/prompts/tone-rules.md`。这些文件使用 UTF-8。身份规则与风格分开，风格只改变表达方式；Work/Code 不注入 Chat 风格或风格采样参数。
 
@@ -26,20 +30,16 @@ PLAYWRIGHT_BROWSERS_PATH=/opt/cyrene-agent/.browsers node node_modules/playwrigh
 
 ## 首次初始化
 
-服务启动时需要一个一次性 setup token。生产环境建议写入 `/etc/cyrene-agent/server.env`：
+首次启动会生成一次性 setup token 并打印在启动日志或 systemd journal 中；也可通过 `CYRENE_SETUP_TOKEN` 指定。项目没有预设管理员账号密码。启动后在浏览器打开服务地址，在初始化页面输入令牌并创建唯一管理员账号，然后登录。创建完成后移除手工设置的令牌；使用环境文件时移除并重启服务。已有账号的数据目录直接登录，服务会拒绝再次初始化的 bootstrap 请求。
 
-```ini
-CYRENE_SETUP_TOKEN=替换为高熵随机值
-```
-
-启动后在浏览器打开反向代理地址，在初始化页面输入该令牌并创建唯一管理员账号。创建完成后应从环境文件移除令牌并重启服务；服务仍会拒绝已经初始化的 bootstrap 请求。
+首次启动提示“未找到持久化档位文件，使用默认 read-only”是正常现象。需要 Agent 修改文件时，在 **设置 → 工具配置 → 本地文件 → 文件与命令权限** 切换为“审批”或“完全”，也可使用 Work/Code 输入框下方的权限按钮。档位即时生效，保存到数据目录的 `agent-permission.json`，无需重启。只读档位不影响服务自身保存账号或会话。
 
 ## systemd 和反向代理
 
-- 将 `deploy/systemd/cyrene-web.service.example` 复制为 systemd 服务并按实际安装路径修改。
+- 推荐按 [Linux 操作指南第 4 节](linux-operations.md#4-systemd-后台执行和-https) 从当前目录生成服务配置，自动获取程序、Node、数据和浏览器路径。`WorkingDirectory` 必须是绝对路径且不要加外围引号。独立服务账号部署可参考 `deploy/systemd/cyrene-web.service.example` 并修改实际路径和访问权限。
 - Nginx 使用 `deploy/nginx/cyrene-web.conf.example`；Caddy 使用 `deploy/caddy/Caddyfile.example`。
 - WebSocket 必须透传 Upgrade/Connection，HTTPS 终止点必须把 `X-Forwarded-Proto` 设置为 `https`。
-- 服务默认只监听 `127.0.0.1`，外部访问只能经过反向代理。
+- 服务默认只监听 `127.0.0.1`。操作指南的直接 HTTP 检查显式使用 `0.0.0.0` 和 `CYRENE_SECURE_COOKIES=0`；正式 HTTPS 反向代理切换为 `127.0.0.1` 和 `CYRENE_SECURE_COOKIES=1`。
 - 连接手机页面可配置微信、飞书和 QQ（NapCat）。微信凭据保存在数据目录的 `weixin/credentials.json`；飞书和 QQ 的密钥只在服务端使用，配置 API 只返回 `hasAppSecret`/`hasAccessToken` 标志。
 - QQ NapCat 反向 WebSocket 默认使用 `/onebot/v11/ws`；监听到非回环地址时必须设置 Access Token，群消息还需要群白名单和 @ 机器人。
 - 外部渠道收到消息后会自动创建或复用会话，消息会写入渠道日志并出现在上下文绑定列表；绑定和工具访问按原渠道策略执行，配置模型后，服务端会生成回复并通过原渠道发送。微信 QR 登录保留二维码/轮询/确认/取消/凭据存储；飞书保留官方长连接；QQ 保留 NapCat 和官方机器人两条链路。渠道语音复用原 TTS 合成服务，是否可收发音频还取决于具体渠道协议与账户权限，需实际账号验收。
@@ -64,12 +64,12 @@ stdio 进程运行在 Linux Server 上。先安装该 MCP 所需的 Node / npx /
 
 ## 数据目录
 
-首期认证数据默认位于 `$XDG_DATA_HOME/cyrene-agent`，也可以使用 `CYRENE_DATA_DIR` 固定为 `/var/lib/cyrene-agent`。创建 `cyrene` 服务账号并令它拥有数据目录。用户工作区建议放在 `/srv/cyrene/workspaces` 并授予该账号读写权限；`/opt`、`/usr`、`/etc` 在示例服务中受 `ProtectSystem=full` 保护，`/home` 默认只读。若工作区放在 `/home`，需为指定工作区额外配置 `ReadWritePaths=`，而不是给整个主目录写权限。
+数据默认位于 `$XDG_DATA_HOME/cyrene-agent`，未设置 XDG 时使用 `$HOME/.local/share/cyrene-agent`，也可以通过 `CYRENE_DATA_DIR` 指定。前台启动与 systemd 必须使用同一数据目录和可访问该目录的服务账号。工作区位于服务器上，并需授予服务账号所需权限。独立账号模板中的 `ProtectSystem=full` 和 `ProtectHome=read-only` 会限制部分目录写入，需要时仅为指定工作区配置 `ReadWritePaths=`。
 
 从旧 Web 数据首次启动会先备份，再将模型、用户资料、会话、队列、记忆、任务、渠道绑定和媒体导入原业务存储。知识库通过原索引器重建。没有工作区绑定的旧定时任务会由原策略停用，需在页面中重新绑定后启用；服务不会自动扩大它们的文件权限。Windows 数据迁入 Linux 时，盘符绝对路径需要重新选择 Linux 工作区和资料目录。
 
 ## 验收与更新
 
-在部署目录执行 `corepack pnpm@10.33.0 run verify:shared-core` 和 `corepack pnpm@10.33.0 run verify:voice-mcp`，会使用临时数据、本地模型/音频协议服务、真实 MCP SDK 测试服务、bundled Filesystem 进程和隔离渠道网关验证完整调用链，不改管理员的正式会话。然后浏览器登录验收实际模型、音频供应商与渠道账号。需要检查真实账户的 QR/长连接/收发，不能用本地模拟网关代替供应商验收。
+在安装了开发依赖的源码构建目录执行 `pnpm run verify:shared-core` 和 `pnpm run verify:voice-mcp`，会使用临时数据、本地模型/音频协议服务、真实 MCP SDK 测试服务、bundled Filesystem 进程和隔离渠道网关验证完整调用链，不改管理员的正式会话；精简运行包不包含这些验收脚本。然后浏览器登录验收实际模型、音频供应商与渠道账号。需要检查真实账户的 QR/长连接/收发，不能用本地模拟网关代替供应商验收。
 
 Linux 版通过重新构建并 `systemctl restart cyrene-web` 更新，界面不会显示 Windows 安装器更新按钮。浏览器音频播放使用浏览器扬声器，不要求服务器安装 GUI 或 mpv。
