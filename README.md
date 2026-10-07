@@ -540,6 +540,13 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/linyiwangxinchen">
+                    <img src="https://avatars.githubusercontent.com/u/54473991?v=4" width="48;" alt="linyiwangxinchen"/>
+                    <br />
+                    <sub><b>linyiwangxinchen</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/Unknownuserfrommars">
                     <img src="https://avatars.githubusercontent.com/u/163658509?v=4" width="48;" alt="Unknownuserfrommars"/>
                     <br />
@@ -588,6 +595,8 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <sub><b>chuxuan</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/Tobi1chi">
                     <img src="https://avatars.githubusercontent.com/u/49900770?v=4" width="48;" alt="Tobi1chi"/>
@@ -595,8 +604,6 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <sub><b>Tobi1chi</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/proobker">
                     <img src="https://avatars.githubusercontent.com/u/89506631?v=4" width="48;" alt="proobker"/>
