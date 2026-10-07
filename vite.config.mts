@@ -102,13 +102,10 @@ export default defineConfig({
   plugins: [react(), appVersionPlugin(), reactRendererCspPlugin(), tailwindcss()],
   root: resolve(import.meta.dirname, "src/renderer"),
   base: "./",
-  ...(isPerfProfileBuild
-    ? {
-        resolve: {
-          alias: [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }],
-        },
-      }
-    : {}),
+  resolve: { alias: [
+    { find: /^electron$/, replacement: resolve(import.meta.dirname, "src/renderer/web/core-transport.ts") },
+    ...(isPerfProfileBuild ? [{ find: /^react-dom\/client$/, replacement: "react-dom/profiling" }] : []),
+  ] },
   build: {
     outDir: perfOutDir ? resolve(import.meta.dirname, perfOutDir) : resolve(import.meta.dirname, "dist/renderer"),
     emptyOutDir: true,
@@ -123,6 +120,7 @@ export default defineConfig({
             "call-react": resolve(import.meta.dirname, "src/renderer/call-react/index.html"),
             "chat-react": resolve(import.meta.dirname, "src/renderer/react/index.html"),
             music: resolve(import.meta.dirname, "src/renderer/music/index.html"),
+            web: resolve(import.meta.dirname, "src/renderer/web/index.html"),
             toast: resolve(import.meta.dirname, "src/renderer/toast/index.html"),
             "learn-exam": resolve(import.meta.dirname, "src/renderer/learn-exam.html"),
           },

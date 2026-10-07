@@ -9,6 +9,7 @@ export default defineConfig({
       "src/renderer/**/*.test.ts",
       "src/shared/**/*.test.ts",
       "src/cli/**/*.test.ts",
+      "src/server/**/*.test.ts",
       "skills/**/tests/**/*.test.ts",
       "scripts/cline-poc/**/*.test.ts",
       // packages/*/src/**/*.test.ts 临时禁用：plugin-sdk/src/testing/index.test.ts

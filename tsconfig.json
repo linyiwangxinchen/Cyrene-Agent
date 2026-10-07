@@ -11,6 +11,7 @@
     { "path": "./tsconfig.main.json" },
     { "path": "./tsconfig.preload.json" },
     { "path": "./tsconfig.renderer.json" },
-    { "path": "./tsconfig.sim.json" }
+    { "path": "./tsconfig.sim.json" },
+    { "path": "./tsconfig.server.json" }
   ]
 }
