@@ -9,6 +9,14 @@ const message: OutgoingMessage = {
 };
 
 describe("channels/delivery-service", () => {
+  it("blocks an unfinished agent reply after the channel was disabled", async () => {
+    const send = vi.fn(async () => ({ ok: true }));
+    const service = createChannelDeliveryService({ getAdapter: () => ({
+      getStatus: () => ({ enabled: false, phase: "offline" }), send,
+    }) as never });
+    await expect(service.send(message)).resolves.toEqual({ ok: false, error: "channel_disabled" });
+    expect(send).not.toHaveBeenCalled();
+  });
   it("找不到渠道适配器时返回标准失败结果", async () => {
     const service = createChannelDeliveryService({
       getAdapter: () => undefined,
@@ -23,6 +31,7 @@ describe("channels/delivery-service", () => {
   it("适配器抛出异常时将异常消息转换成失败结果", async () => {
     const service = createChannelDeliveryService({
       getAdapter: () => ({
+        getStatus: () => ({ enabled: true, phase: "running" }),
         send: vi.fn(async () => {
           throw new Error("offline");
         }),
@@ -38,6 +47,7 @@ describe("channels/delivery-service", () => {
   it("适配器未提供失败原因时补充标准错误码", async () => {
     const service = createChannelDeliveryService({
       getAdapter: () => ({
+        getStatus: () => ({ enabled: true, phase: "running" }),
         send: vi.fn(async () => ({ ok: false })),
       }) as never,
     });
@@ -51,6 +61,7 @@ describe("channels/delivery-service", () => {
   it("发送成功时返回成功确认", async () => {
     const service = createChannelDeliveryService({
       getAdapter: () => ({
+        getStatus: () => ({ enabled: true, phase: "running" }),
         send: vi.fn(async () => ({ ok: true })),
       }) as never,
     });

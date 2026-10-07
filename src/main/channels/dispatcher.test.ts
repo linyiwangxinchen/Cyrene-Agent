@@ -55,6 +55,7 @@ describe("channels/dispatcher", () => {
   function makeManager(send = vi.fn(async () => ({ ok: true }))) {
     return {
       getAdapter: () => ({
+        getStatus: () => ({ enabled: true, phase: "running" }),
         capability: { text: true, image: true, audio: false, file: false, video: false, markdown: false, card: false, sticker: false, maxTextLength: 4000 },
         send,
       }),
@@ -239,6 +240,7 @@ describe("channels/dispatcher", () => {
     const dispatcher = makeDispatcher({
       manager: {
         getAdapter: () => ({
+        getStatus: () => ({ enabled: true, phase: "running" }),
           capability: { text: true, image: true, audio: false, file: false, video: false, markdown: false, card: false, sticker: true, maxTextLength: 2048 },
           send: vi.fn(async () => ({ ok: true })),
         }),
@@ -380,6 +382,7 @@ describe("channels/dispatcher", () => {
     });
     const manager = {
       getAdapter: () => ({
+        getStatus: () => ({ enabled: true, phase: "running" }),
         capability: {
           text: true,
           image: true,

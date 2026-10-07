@@ -17,8 +17,23 @@ function message(parts: OutgoingMessage["parts"]): OutgoingMessage {
 }
 
 describe("ILinkBotAdapter.send", () => {
+  it("does not send media that finished uploading after disable", async () => {
+    const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
+    const sendMessage = vi.fn(async () => ({ ok: true }));
+    (adapter as any).client = { sendMessage };
+    (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
+    let complete!: (value: unknown) => void;
+    (adapter as any).uploadMedia = vi.fn(() => new Promise(resolve => { complete = resolve; }));
+    const sending = adapter.send(message([{ kind: "image", filePath: "test.png" }]));
+    await adapter.stop();
+    complete({ encrypt_query_param: "test", aes_key: "test", encrypt_type: 1 });
+    await expect(sending).resolves.toMatchObject({ ok: false, error: "channel_disabled" });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
   it("sends text replies through the protocol client with the cached context token", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const sendText = vi.fn(async () => ({ ok: true }));
     (adapter as any).client = { sendText };
     (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
@@ -31,6 +46,7 @@ describe("ILinkBotAdapter.send", () => {
 
   it("sends multiple text parts as separate messages", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const sendText = vi.fn(async () => ({ ok: true }));
     (adapter as any).client = { sendText };
     (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
@@ -49,6 +65,7 @@ describe("ILinkBotAdapter.send", () => {
 
   it("uploads image and sticker parts as image items in one sendmessage payload", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const sendText = vi.fn(async () => ({ ok: true }));
     const sendMessage = vi.fn(async () => ({ ok: true }));
     const uploadMedia = vi.fn(async (_client, _userId, filePath: string) => ({
@@ -99,6 +116,7 @@ describe("ILinkBotAdapter.send", () => {
 
   it("uploads file and video parts as file and video items", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const sendMessage = vi.fn(async () => ({ ok: true }));
     const uploadMedia = vi.fn(async (_client, _userId, filePath: string) => ({
       encrypt_query_param: `encrypted:${filePath}`,
@@ -146,6 +164,7 @@ describe("ILinkBotAdapter.send", () => {
 
   it("encodes and uploads audio parts as voice items", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const sendText = vi.fn(async () => ({ ok: true }));
     const sendMessage = vi.fn(async () => ({ ok: true }));
     const encodeVoice = vi.fn(async () => ({
@@ -192,6 +211,7 @@ describe("ILinkBotAdapter.send", () => {
 
   it("keeps the text reply successful when optional audio sending is rejected", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const sendText = vi.fn(async () => ({ ok: true }));
     const sendMessage = vi.fn(async () => ({ ok: false, error: "ret=-2" }));
     const encodeVoice = vi.fn(async () => ({
@@ -224,6 +244,7 @@ describe("ILinkBotAdapter.send", () => {
 describe("ILinkBotAdapter inbound media", () => {
   it("downloads supported image media into incoming attachments", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const onMessage = vi.fn(async () => null);
     (adapter as any).onMessage = onMessage;
     (adapter as any).client = { sendText: vi.fn() };
@@ -277,6 +298,7 @@ describe("ILinkBotAdapter inbound media", () => {
 
   it("does not dispatch to the agent when supported media download fails", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const onMessage = vi.fn(async () => null);
     const sendText = vi.fn(async () => ({ ok: true }));
     (adapter as any).onMessage = onMessage;
@@ -317,6 +339,7 @@ describe("ILinkBotAdapter inbound media", () => {
 
   it("saves a pending unsupported file when the user replies with save intent within five minutes", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const onMessage = vi.fn(async () => null);
     const sendText = vi.fn(async () => ({ ok: true }));
     (adapter as any).onMessage = onMessage;
@@ -370,6 +393,7 @@ describe("ILinkBotAdapter inbound media", () => {
 
   it("saves an unsupported file when it arrives after a save intent", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const onMessage = vi.fn(async () => null);
     const sendText = vi.fn(async () => ({ ok: true }));
     (adapter as any).onMessage = onMessage;
@@ -429,6 +453,7 @@ describe("ILinkBotAdapter inbound media", () => {
 
   it("saves an analyzable file instead of dispatching it when a save intent is already pending", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const onMessage = vi.fn(async () => null);
     const sendText = vi.fn(async () => ({ ok: true }));
     (adapter as any).onMessage = onMessage;
@@ -479,6 +504,7 @@ describe("ILinkBotAdapter inbound media", () => {
 
   it("transcribes inbound voice and dispatches the transcript when ASR is configured", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const onMessage = vi.fn(async () => null);
     const sendText = vi.fn(async () => ({ ok: true }));
     (adapter as any).onMessage = onMessage;
@@ -524,6 +550,7 @@ describe("ILinkBotAdapter inbound media", () => {
 
   it("does not dispatch inbound voice when ASR transcription fails", async () => {
     const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
     const onMessage = vi.fn(async () => null);
     const sendText = vi.fn(async () => ({ ok: true }));
     (adapter as any).onMessage = onMessage;

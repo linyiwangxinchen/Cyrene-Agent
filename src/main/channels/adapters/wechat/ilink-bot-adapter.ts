@@ -16,6 +16,7 @@ import {
   ILinkClient,
   MediaType,
   pollQrStatus,
+  RequestTimeoutError,
   SessionExpiredError,
   type CDNMedia,
   type Credentials,
@@ -51,6 +52,7 @@ import type {
 } from "../../types";
 import type { ChannelAdapter } from "../base";
 import { logger, LogTag } from "../../../logger";
+import { loadChannelsSettings } from "../../settings-store";
 
 const LOG_PREFIX = "[WechatBot]";
 const USER_PROFILE_FILE = "user-profile.json";
@@ -82,6 +84,7 @@ const CAPABILITY: ChannelCapability = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class ILinkBotAdapter implements ChannelAdapter {
+  constructor(private readonly onStatusChanged?: () => void) {}
   readonly id: ChannelId = "wechat";
   readonly displayName = "微信";
   readonly capability = CAPABILITY;
@@ -112,7 +115,14 @@ export class ILinkBotAdapter implements ChannelAdapter {
   // ── ChannelAdapter ────────────────────────────────────────────────────────
 
   async start(): Promise<void> {
-    this.status = { enabled: true, phase: "starting" };
+    if (this.pollAbort) await this.stop();
+    const configured = loadChannelsSettings().wechat.enabled;
+    if (!configured) {
+      await this.stop();
+      this.status = { enabled: false, phase: "offline", message: "微信未启用" };
+      return;
+    }
+    this.status = { enabled: true, phase: "starting", message: "正在验证微信收消息连接" };
     logger.info(LogTag.Wechat, "Starting...");
 
     // 1. 加载已存凭证
@@ -135,12 +145,12 @@ export class ILinkBotAdapter implements ChannelAdapter {
     this.pollAbort = new AbortController();
     this.pollLoopPromise = this.#pollLoop();
 
-    this.status = { enabled: true, phase: "running", message: "微信已连接" };
-    logger.info(LogTag.Wechat, `Connected as botId=${creds.ilinkBotId}`);
   }
 
   async stop(): Promise<void> {
     console.log(LOG_PREFIX, "Stopping...");
+    this.status = { enabled: false, phase: "offline", message: "微信未启用" };
+    this.onStatusChanged?.();
     this.pollAbort?.abort();
     if (this.pollLoopPromise) {
       try {
@@ -151,18 +161,24 @@ export class ILinkBotAdapter implements ChannelAdapter {
     this.pollAbort = null;
     this.client = null;
     this.isLoggedIn = false;
-    this.status = { enabled: false, phase: "offline" };
+    this.status = { enabled: false, phase: "offline", message: "微信未启用" };
   }
 
   async send(msg: OutgoingMessage): Promise<{ ok: boolean; error?: string }> {
-    if (!this.client) return { ok: false, error: "微信未连接" };
+    if (!this.client || !this.status.enabled) return { ok: false, error: "微信未连接" };
+    const client = this.client;
     const contextToken = this.replyContextByTarget.get(msg.targetId);
     if (!contextToken) return { ok: false, error: "缺少微信 context_token，无法回复" };
+    const sendMessage = (items: SendMessageItem[]) =>
+      this.client === client && this.status.enabled
+        ? client.sendMessage(msg.targetId, items, contextToken)
+        : Promise.resolve({ ok: false, error: "channel_disabled" });
 
     let anyOk = false;
     let lastErr: string | undefined;
 
     for (const part of msg.parts) {
+      if (this.client !== client || !this.status.enabled) return { ok: false, error: "channel_disabled" };
       if (part.kind === "text") {
         const text = part.text.trim();
         if (!text) continue;
@@ -176,7 +192,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
       } else if (part.kind === "image") {
         if (!part.filePath) return { ok: false, error: "微信图片发送需要本地 filePath" };
         const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.IMAGE);
-        const result = await this.client.sendMessage(msg.targetId, [buildImageItem(media)], contextToken);
+        const result = await sendMessage([buildImageItem(media)]);
         if (result.ok) anyOk = true;
         else {
           lastErr = result.error ?? "微信图片发送失败";
@@ -184,7 +200,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
         }
       } else if (part.kind === "sticker") {
         const media = await this.uploadMedia(this.client, msg.targetId, part.imagePath, MediaType.IMAGE);
-        const result = await this.client.sendMessage(msg.targetId, [buildImageItem(media)], contextToken);
+        const result = await sendMessage([buildImageItem(media)]);
         if (result.ok) anyOk = true;
         else {
           lastErr = result.error ?? "微信表情发送失败";
@@ -196,7 +212,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
           return null;
         });
         if (voice) {
-          const result = await this.client.sendMessage(msg.targetId, [voice], contextToken);
+          const result = await sendMessage([voice]);
           if (result.ok) anyOk = true;
           else {
             lastErr = result.error ?? "微信语音发送失败";
@@ -205,7 +221,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
         }
       } else if (part.kind === "file") {
         const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.FILE);
-        const result = await this.client.sendMessage(msg.targetId, [buildFileItem(media, path.basename(part.name ?? part.filePath))], contextToken);
+        const result = await sendMessage([buildFileItem(media, path.basename(part.name ?? part.filePath))]);
         if (result.ok) anyOk = true;
         else {
           lastErr = result.error ?? "微信文件发送失败";
@@ -213,7 +229,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
         }
       } else if (part.kind === "video") {
         const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.VIDEO);
-        const result = await this.client.sendMessage(msg.targetId, [buildVideoItem(media)], contextToken);
+        const result = await sendMessage([buildVideoItem(media)]);
         if (result.ok) anyOk = true;
         else {
           lastErr = result.error ?? "微信视频发送失败";
@@ -246,19 +262,35 @@ export class ILinkBotAdapter implements ChannelAdapter {
    *
    * @param qrcode  原始 qrcode 字符串（由 init.ts 传入）
    */
-  async login(qrcode: string): Promise<Credentials> {
+  async login(qrcode: string, signal?: AbortSignal): Promise<Credentials> {
     console.log(LOG_PREFIX, "Waiting for QR scan...");
+    let baseUrl = "https://ilinkai.weixin.qq.com";
+    const deadline = Date.now() + 5 * 60_000;
 
     while (true) {
+      if (signal?.aborted) throw new Error("login aborted");
+      if (Date.now() >= deadline) throw new Error("二维码登录超时，请重新扫码");
       let status: Awaited<ReturnType<typeof pollQrStatus>>;
       try {
-        status = await pollQrStatus(qrcode);
+        status = await pollQrStatus(qrcode, signal, baseUrl);
       } catch (err) {
         // timeout 是正常的 long-poll，继续
-        if ((err as Error).name === "AbortError") throw new Error("login aborted");
+        if (signal?.aborted) throw new Error("login aborted");
+        if (!(err instanceof RequestTimeoutError)) {
+          console.warn(LOG_PREFIX, "QR polling failed:", err instanceof Error ? err.message : String(err));
+          await waitForRetry(2_000, signal);
+        }
         continue;
       }
       console.log(LOG_PREFIX, "QR status:", status.status);
+      if (status.status === "scaned_but_redirect" && status.redirect_host) {
+        const redirect = new URL(`https://${status.redirect_host}`);
+        if (!redirect.hostname.endsWith(".weixin.qq.com") || redirect.port || redirect.username || redirect.password) throw new Error("微信返回了不受支持的登录重定向地址");
+        baseUrl = redirect.origin;
+        continue;
+      }
+      if (status.status === "need_verifycode" || status.status === "verify_code_blocked") throw new Error("微信要求手机配对验证，请重新扫码登录");
+      if (status.status === "binded_redirect") throw new Error("该二维码对应已绑定的客户端，请重新生成二维码登录");
       if (status.status === "confirmed") {
         if (!status.bot_token || !status.ilink_bot_id) {
           throw new Error("confirmed but missing bot_token or ilink_bot_id");
@@ -266,9 +298,10 @@ export class ILinkBotAdapter implements ChannelAdapter {
         const creds: Credentials = {
           botToken: status.bot_token,
           ilinkBotId: status.ilink_bot_id,
-          baseUrl: status.baseurl ?? "https://ilinkai.weixin.qq.com",
+          baseUrl: status.baseurl || baseUrl,
           ilinkUserId: status.ilink_user_id ?? "",
         };
+        if (signal?.aborted) throw new Error("login aborted");
         await saveCredentials(creds);
         return creds;
       }
@@ -294,40 +327,67 @@ export class ILinkBotAdapter implements ChannelAdapter {
     if (!this.client || !this.pollAbort) return;
     // 捕获本轮轮询的信号：stop() 会把它置空，循环体只认这一个信号。
     const signal = this.pollAbort.signal;
+    const client = this.client;
     let buf = "";
     let sessionExpired = false;
+    let failures = 0;
+    let timeoutCount = 0;
+    let receivedMessages = 0;
+    let lastPollAt: string | undefined;
 
     while (!signal.aborted && !sessionExpired) {
       try {
-        const { messages, buf: newBuf } = await this.client.getUpdates(buf, signal);
+        const { messages, buf: newBuf, pollCompleted } = await client.getUpdates(buf, signal);
+        if (signal.aborted) break;
+        if (pollCompleted === false) {
+          if (++timeoutCount >= 2) throw new Error("微信收消息请求持续超时，正在重连");
+          continue;
+        }
+        timeoutCount = 0;
+        if (this.status.phase !== "running") console.log(LOG_PREFIX, "Receive polling connected");
+        failures = 0;
+        lastPollAt = new Date().toISOString();
+        receivedMessages += messages.length;
+        this.status = { enabled: true, phase: "running", message: "微信已连接", detail: { lastPollAt, receivedMessages, consecutiveFailures: 0 } };
+        this.onStatusChanged?.();
         buf = newBuf;
         for (const msg of messages) {
-          await this.dispatchInbound(msg);
+          if (signal.aborted) break;
+          try { await this.dispatchInbound(msg); }
+          catch (error) { console.warn(LOG_PREFIX, "Inbound processing failed:", error instanceof Error ? error.message : String(error)); }
         }
       } catch (err) {
         if (err instanceof SessionExpiredError) {
           console.warn(LOG_PREFIX, "Session expired — please re-login");
           sessionExpired = true;
+          this.isLoggedIn = false;
           this.status = {
             enabled: true,
             phase: "error",
             message: "会话已过期，请重新扫码登录",
           };
+          this.onStatusChanged?.();
           break;
         }
         if (signal.aborted) break;
-        // 网络抖一下 backoff
-        await new Promise((r) => setTimeout(r, 2_000));
+        const error = err instanceof Error ? err.message : String(err);
+        failures++;
+        this.status = { enabled: true, phase: "error", message: `收消息失败，正在重试：${error}`, detail: { lastPollAt, receivedMessages, consecutiveFailures: failures } };
+        this.onStatusChanged?.();
+        if (failures === 1 || failures % 10 === 0) console.warn(LOG_PREFIX, "Receive polling failed:", error);
+        await waitForRetry(Math.min(2_000 * 2 ** Math.min(failures - 1, 4), 30_000), signal);
       }
     }
   }
 
   private async dispatchInbound(msg: WeixinMessage): Promise<void> {
+    if (!this.status.enabled) return;
+    const client = this.client;
     if (!this.onMessage) {
       console.warn(LOG_PREFIX, "onMessage 未注入，跳过消息");
       return;
     }
-    console.log(LOG_PREFIX, `inbound from=${msg.fromUserId} text=${(msg.content ?? "").slice(0, 80)}`);
+    console.log(LOG_PREFIX, `inbound received: items=${msg.items.length}, textLength=${msg.content?.length ?? 0}`);
     this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
 
     const media = describeInboundWechatMedia(msg.items);
@@ -353,6 +413,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
       _raw: msg,
     };
 
+    if (!this.status.enabled || this.client !== client) return;
     void this.onMessage(incoming).catch((err) => {
       console.error(LOG_PREFIX, "dispatcher error:", err);
     });
@@ -501,7 +562,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   }
 
   async #sendInterceptText(toUserId: string, contextToken: string, text: string): Promise<void> {
-    if (!this.client) return;
+    if (!this.client || !this.status.enabled) return;
     const result = await this.client.sendText(toUserId, text, contextToken);
     if (!result.ok) {
       console.warn(LOG_PREFIX, "入站媒体拦截回复发送失败:", result.error);
@@ -733,6 +794,15 @@ async function saveCredentials(creds: Credentials): Promise<void> {
   const p = credPath();
   await fs.mkdir(path.dirname(p), { recursive: true });
   await fs.writeFile(p, JSON.stringify(creds, null, 2), "utf8");
+}
+
+function waitForRetry(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise(resolve => {
+    const finish = () => { clearTimeout(timer); signal?.removeEventListener("abort", finish); resolve(); };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
 }
 
 async function deleteCredentials(): Promise<void> {

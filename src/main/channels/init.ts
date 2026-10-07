@@ -17,6 +17,7 @@ import {
   saveChannelsSettings,
 } from "./settings-store";
 import { channelManager } from "./manager";
+import { createChannelConfigLifecycle } from "./config-lifecycle";
 import type { MessageHandler } from "./types";
 import { getChannelConversationBindingStore } from "./conversation-binding-store";
 import { listSessions, getSession } from "../chats/chats-store";
@@ -49,6 +50,7 @@ export function setChannelsConversationLifecycle(lifecycle: typeof conversationL
 }
 /** 微信 adapter 全局引用（UI 登录按钮需要） */
 let wxAdapter: ILinkBotAdapter | null = null;
+let wxLoginAbort: AbortController | null = null;
 let qqAdapter: NapCatAdapter | null = null;
 let qqBotAdapter: QqBotAdapter | null = null;
 
@@ -62,6 +64,7 @@ function getPublicChannelsSettings(): Record<string, unknown> {
   const settings = loadChannelsSettings();
   return {
     ...settings,
+    feishu: { ...settings.feishu, appSecret: undefined, hasAppSecret: Boolean(settings.feishu.appSecret) },
     qq: {
       ...settings.qq,
       accessToken: undefined,
@@ -107,7 +110,7 @@ function registerAdapters(): void {
 
   // 注册微信 adapter（iLink 直连微信，不依赖 OpenClaw Gateway）
   // 改为 module-level handle，UI 登录按钮也能拿到
-  wxAdapter = new ILinkBotAdapter();
+  wxAdapter = new ILinkBotAdapter(broadcastChannelsStatus);
   channelManager.register(wxAdapter);
 
   qqAdapter = new NapCatAdapter(broadcastChannelsStatus);
@@ -145,6 +148,7 @@ export async function startChannels(signal?: AbortSignal): Promise<void> {
 
 /** app.on('before-quit') 调 */
 export async function shutdownChannels(): Promise<void> {
+  wxLoginAbort?.abort(); wxLoginAbort = null;
   await channelManager.stopAll();
   await stopInboundServer();
   initialized = false;
@@ -159,9 +163,17 @@ function registerChannelsIpc(
   const ipc = ipcOption ?? createIpcScope();
   ipc.handle(IPC.CHANNELS_GET_CONFIG, () => getPublicChannelsSettings());
 
-  ipc.handle(IPC.CHANNELS_SAVE_CONFIG, (_e, patch: unknown) => {
-    saveChannelsSettings(patch as Parameters<typeof saveChannelsSettings>[0]);
-    reloadDispatcherSettings();
+  const configLifecycle = createChannelConfigLifecycle({
+    load: loadChannelsSettings,
+    save: saveChannelsSettings,
+    reload: reloadDispatcherSettings,
+    restartOne: (id) => channelManager.restartOne(id),
+    restartAll: async () => { await channelManager.stopAll(); await channelManager.startAll(); },
+    cancelWechatLogin: () => { wxLoginAbort?.abort(); wxLoginAbort = null; },
+    broadcast: broadcastChannelsStatus,
+  });
+  ipc.handle(IPC.CHANNELS_SAVE_CONFIG, async (_e, patch: unknown) => {
+    await configLifecycle.save(patch as Parameters<typeof configLifecycle.save>[0]);
     return getPublicChannelsSettings();
   });
 
@@ -178,9 +190,7 @@ function registerChannelsIpc(
   );
 
   ipc.handle(IPC.CHANNELS_RESTART, async () => {
-    await channelManager.stopAll();
-    await channelManager.startAll();
-    broadcastChannelsStatus();
+    await configLifecycle.restart();
     return { ok: true };
   });
 
@@ -194,6 +204,8 @@ function registerChannelsIpc(
 	  // 扫码登录：Main Process 生成 PNG dataURL，推给 Renderer 显示 <img>
 	  ipc.handle(IPC.CHANNELS_WECHAT_LOGIN_START, async () => {
 	    if (!wxAdapter) return { ok: false, error: "adapter 未初始化" };
+	    wxLoginAbort?.abort();
+	    const loginAbort = wxLoginAbort = new AbortController();
 	    try {
 	      const { fetchQrCode } = await import("./adapters/wechat/ilink-protocol-client.js");
 	      const { createQrDataUrl } = await import("./adapters/wechat/qr.js");
@@ -201,11 +213,13 @@ function registerChannelsIpc(
 	      // 1. 拿原始 qrcode 字符串 + liteapp 二维码 URL
 	      //    - qrcode: 32 hex ticket（轮询 get_qrcode_status 用）
 	      //    - qrcode_img_content: liteapp.weixin.qq.com/q/... URL（扫了会拉起 iLink 灰度插件）
-	      const { qrcode, qrcode_img_content } = await fetchQrCode();
+	      const { qrcode, qrcode_img_content } = await fetchQrCode(loginAbort.signal);
+	      loginAbort.signal.throwIfAborted();
 
 	      // 2. Main Process 生成 PNG dataURL（用 liteapp URL 而不是裸 ticket，
 	      //    否则微信只识别为纯文本、不会触发 iLink 确认流程）
 	      const dataUrl = await createQrDataUrl(qrcode_img_content, 256);
+	      loginAbort.signal.throwIfAborted();
 
 	      // 3. 推给 Renderer
 	      const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -214,22 +228,32 @@ function registerChannelsIpc(
 	      // 4. 后台轮询扫码状态
 	      void (async () => {
 	        try {
-	          const creds = await wxAdapter!.login(qrcode);
+	          const creds = await wxAdapter!.login(qrcode, loginAbort.signal);
+	          if (loginAbort.signal.aborted) return;
+	          // 扫码登录本身就是用户明确的启用动作；持久化开关后重启才会自动连接。
+	          saveChannelsSettings({ wechat: { enabled: true } });
 	          await wxAdapter!.stop();
+	          if (loginAbort.signal.aborted) return;
 	          await wxAdapter!.start();
+	          broadcastChannelsStatus();
 	          win?.webContents.send(IPC.CHANNELS_WECHAT_LOGIN_DONE, { ok: true, botId: creds.ilinkBotId });
 	        } catch (err) {
+	          if (loginAbort.signal.aborted) return;
 	          win?.webContents.send(IPC.CHANNELS_WECHAT_LOGIN_DONE, { ok: false, error: String(err) });
+	        } finally {
+	          if (wxLoginAbort === loginAbort) wxLoginAbort = null;
 	        }
 	      })();
 
 	      return { ok: true, hint: "请扫描二维码" };
 	    } catch (err) {
+	      if (wxLoginAbort === loginAbort) wxLoginAbort = null;
 	      return { ok: false, error: String(err) };
 	    }
 	  });
 
   ipc.handle(IPC.CHANNELS_WECHAT_LOGIN_CANCEL, () => {
+    wxLoginAbort?.abort(); wxLoginAbort = null;
     return { ok: true };
   });
 
@@ -251,6 +275,7 @@ function registerChannelsIpc(
   ipc.handle(IPC.CHANNELS_WECHAT_PAIRING_APPROVE, () => ({ ok: false, error: "iLink 模式不支持 pairing" }));
 
   ipc.handle(IPC.CHANNELS_WECHAT_LOGOUT, async () => {
+    wxLoginAbort?.abort(); wxLoginAbort = null;
     if (!wxAdapter) return { ok: false };
     await wxAdapter.logout();
     return { ok: true };

@@ -18,6 +18,7 @@ export function createChannelDeliveryService(
       if (!adapter) {
         return { ok: false, error: "adapter_not_found" };
       }
+      if (!adapter.getStatus().enabled) return { ok: false, error: "channel_disabled" };
 
       try {
         const result = await adapter.send(message);

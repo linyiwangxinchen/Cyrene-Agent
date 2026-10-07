@@ -21,6 +21,7 @@ export class ChannelManager {
   private dispatchFn: DispatchFn | null = null;
   /** 启动后已开启的 adapter（start 成功的才会调 stop） */
   private startedAdapters = new Set<ChannelId>();
+  private stoppingAdapters = new Set<ChannelId>();
 
   has(id: ChannelId): boolean {
     return this.adapters.has(id);
@@ -93,15 +94,27 @@ export class ChannelManager {
   }
 
   /** 关闭所有已启动的 adapter */
+  async restartOne(id: ChannelId): Promise<void> {
+    const adapter = this.adapters.get(id);
+    if (!adapter) return;
+    this.stoppingAdapters.add(id);
+    try {
+      await adapter.stop();
+      this.startedAdapters.delete(id);
+      await this.startOne(id);
+    } finally { this.stoppingAdapters.delete(id); }
+  }
+
   async stopAll(): Promise<void> {
     for (const id of this.startedAdapters) {
       const adapter = this.adapters.get(id);
       if (!adapter) continue;
+      this.stoppingAdapters.add(id);
       try {
         await adapter.stop();
       } catch (err) {
         console.warn(LOG, `渠道停止失败 [${id}]:`, err instanceof Error ? err.message : err);
-      }
+      } finally { this.stoppingAdapters.delete(id); }
     }
     this.startedAdapters.clear();
   }
@@ -125,6 +138,7 @@ export class ChannelManager {
 
   private makeAdapterHandler(channel: ChannelId) {
     return async (msg: IncomingMessage): Promise<OutgoingMessage | null> => {
+      if (this.stoppingAdapters.has(channel) || !this.adapters.get(channel)?.getStatus().enabled) return null;
       if (!this.dispatchFn) {
         console.warn(LOG, `收到入站消息但 dispatcher 未注册 [${channel}]`);
         return null;
