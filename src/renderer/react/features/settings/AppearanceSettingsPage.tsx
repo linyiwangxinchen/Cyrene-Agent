@@ -120,6 +120,10 @@ export function AppearanceSettingsPage({ section, onSelectSection, onBackToWorks
   // 版本称号（如 1.3.0 的"正式版"）随版本走，普通版本查不到就不显示
   const versionTitleKey = resolveVersionTitleKey(packageJson.version);
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  function selectSection(next: AppearanceSettingsPageProps["section"]) {
+    onSelectSection(next); setMobileNavOpen(false);
+  }
   // 昔涟消息字体：ref 记住最新值，松手保存时不依赖可能过期的渲染闭包
   const typographyRef = useRef<MessageTypography>(DEFAULT_MESSAGE_TYPOGRAPHY);
 
@@ -239,7 +243,11 @@ export function AppearanceSettingsPage({ section, onSelectSection, onBackToWorks
   }
 
   return (
-    <div className="cy-page cy-settings-page">
+    <div className={`cy-page cy-settings-page${mobileNavOpen ? " is-mobile-nav-open" : ""}`}>
+      {window.__cyreneWeb && <>
+        <button type="button" className="cy-web-settings-toggle" aria-label={t("settingsPage.navigation")} aria-expanded={mobileNavOpen} onClick={() => setMobileNavOpen(value => !value)}><Settings2 size={20} /><span>{t("settingsPage.navigation")}</span></button>
+        {mobileNavOpen && <button type="button" className="cy-web-settings-backdrop" aria-label={t("settingsPage.navigation")} onClick={() => setMobileNavOpen(false)} />}
+      </>}
       <header className="cy-page-windows cy-settings-titlebar">
         <WindowControls
           onMinimize={() => window.chat?.minimize()}
@@ -255,30 +263,30 @@ export function AppearanceSettingsPage({ section, onSelectSection, onBackToWorks
         </Button>
         <nav className="cy-settings-sidebar__nav" aria-label={t("settingsPage.navigation")}>
         <div className="cy-settings-sidebar__group-title">{t("settingsPage.basicSettings")}</div>
-        <SettingsNavItem section="general" currentSection={section} icon={<Settings2 size={18} strokeWidth={1.8} />} label={t("settingsPage.general.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="appearance" currentSection={section} icon={<Palette size={18} strokeWidth={1.8} />} label={t("settingsPage.appearance")} onSelect={onSelectSection} />
-        <SettingsNavItem section="preferences" currentSection={section} icon={<Monitor size={18} strokeWidth={1.8} />} label={t("settingsPage.preferencesLabel")} onSelect={onSelectSection} />
-        <SettingsNavItem section="models" currentSection={section} icon={<Boxes size={18} strokeWidth={1.8} />} label={t("settingsPage.modelSettings.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="usage" currentSection={section} icon={<BarChart3 size={18} strokeWidth={1.8} />} label={t("settingsPage.usage.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="browser" currentSection={section} icon={<Globe size={18} strokeWidth={1.8} />} label={t("settingsPage.browserControl.navLabel")} onSelect={onSelectSection} />
-        <SettingsNavItem section="email" currentSection={section} icon={<Mail size={18} strokeWidth={1.8} />} label={t("settingsPage.emailSettings.title")} onSelect={onSelectSection} />
+        <SettingsNavItem section="general" currentSection={section} icon={<Settings2 size={18} strokeWidth={1.8} />} label={t("settingsPage.general.title")} onSelect={selectSection} />
+        <SettingsNavItem section="appearance" currentSection={section} icon={<Palette size={18} strokeWidth={1.8} />} label={t("settingsPage.appearance")} onSelect={selectSection} />
+        <SettingsNavItem section="preferences" currentSection={section} icon={<Monitor size={18} strokeWidth={1.8} />} label={t("settingsPage.preferencesLabel")} onSelect={selectSection} />
+        <SettingsNavItem section="models" currentSection={section} icon={<Boxes size={18} strokeWidth={1.8} />} label={t("settingsPage.modelSettings.title")} onSelect={selectSection} />
+        <SettingsNavItem section="usage" currentSection={section} icon={<BarChart3 size={18} strokeWidth={1.8} />} label={t("settingsPage.usage.title")} onSelect={selectSection} />
+        <SettingsNavItem section="browser" currentSection={section} icon={<Globe size={18} strokeWidth={1.8} />} label={t("settingsPage.browserControl.navLabel")} onSelect={selectSection} />
+        <SettingsNavItem section="email" currentSection={section} icon={<Mail size={18} strokeWidth={1.8} />} label={t("settingsPage.emailSettings.title")} onSelect={selectSection} />
         <div className="cy-settings-sidebar__group-title cy-settings-sidebar__group-title--spaced">{t("settingsPage.agentAbilities")}</div>
-        <SettingsNavItem section="toolToggle" currentSection={section} icon={<Power size={18} strokeWidth={1.8} />} label={t("settingsPage.toolToggle.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="tools" currentSection={section} icon={<Wrench size={18} strokeWidth={1.8} />} label={t("settingsPage.tools.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="subagents" currentSection={section} icon={<Bot size={18} strokeWidth={1.8} />} label={t("settingsPage.subagents.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="plugins" currentSection={section} icon={<Puzzle size={18} strokeWidth={1.8} />} label={t("pluginPanel.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="mcp" currentSection={section} icon={<MCP size={18} />} label={t("settingsPage.mcp.menuLabel")} onSelect={onSelectSection} />
-        <SettingsNavItem section="memory" currentSection={section} icon={<Brain size={18} strokeWidth={1.8} />} label={t("settingsPage.memory.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="knowledge" currentSection={section} icon={<BookOpen size={18} strokeWidth={1.8} />} label={t("settingsPage.knowledgeBase.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="cyrene" currentSection={section} icon={<Heart size={18} strokeWidth={1.8} />} label={t("settingsPage.cyrene.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="skill" currentSection={section} icon={<Sparkles size={18} strokeWidth={1.8} />} label={t("settingsPage.skill.title")} onSelect={onSelectSection} />
+        <SettingsNavItem section="toolToggle" currentSection={section} icon={<Power size={18} strokeWidth={1.8} />} label={t("settingsPage.toolToggle.title")} onSelect={selectSection} />
+        <SettingsNavItem section="tools" currentSection={section} icon={<Wrench size={18} strokeWidth={1.8} />} label={t("settingsPage.tools.title")} onSelect={selectSection} />
+        <SettingsNavItem section="subagents" currentSection={section} icon={<Bot size={18} strokeWidth={1.8} />} label={t("settingsPage.subagents.title")} onSelect={selectSection} />
+        <SettingsNavItem section="plugins" currentSection={section} icon={<Puzzle size={18} strokeWidth={1.8} />} label={t("pluginPanel.title")} onSelect={selectSection} />
+        <SettingsNavItem section="mcp" currentSection={section} icon={<MCP size={18} />} label={t("settingsPage.mcp.menuLabel")} onSelect={selectSection} />
+        <SettingsNavItem section="memory" currentSection={section} icon={<Brain size={18} strokeWidth={1.8} />} label={t("settingsPage.memory.title")} onSelect={selectSection} />
+        <SettingsNavItem section="knowledge" currentSection={section} icon={<BookOpen size={18} strokeWidth={1.8} />} label={t("settingsPage.knowledgeBase.title")} onSelect={selectSection} />
+        <SettingsNavItem section="cyrene" currentSection={section} icon={<Heart size={18} strokeWidth={1.8} />} label={t("settingsPage.cyrene.title")} onSelect={selectSection} />
+        <SettingsNavItem section="skill" currentSection={section} icon={<Sparkles size={18} strokeWidth={1.8} />} label={t("settingsPage.skill.title")} onSelect={selectSection} />
         <div className="cy-settings-sidebar__group-title cy-settings-sidebar__group-title--spaced">{t("settingsPage.externalChannels")}</div>
-        <SettingsNavItem section="channels" currentSection={section} icon={<Smartphone size={18} strokeWidth={1.8} />} label={t("settingsPage.channels.title")} onSelect={onSelectSection} />
+        <SettingsNavItem section="channels" currentSection={section} icon={<Smartphone size={18} strokeWidth={1.8} />} label={t("settingsPage.channels.title")} onSelect={selectSection} />
         <div className="cy-settings-sidebar__group-title cy-settings-sidebar__group-title--spaced">{t("settingsPage.voiceAbilities")}</div>
-        <SettingsNavItem section="tts" currentSection={section} icon={<AudioLines size={18} strokeWidth={1.8} />} label={t("settingsPage.tts.title")} onSelect={onSelectSection} />
-        <SettingsNavItem section="asr" currentSection={section} icon={<Headphones size={18} strokeWidth={1.8} />} label={t("settingsPage.asr.title")} onSelect={onSelectSection} />
+        <SettingsNavItem section="tts" currentSection={section} icon={<AudioLines size={18} strokeWidth={1.8} />} label={t("settingsPage.tts.title")} onSelect={selectSection} />
+        <SettingsNavItem section="asr" currentSection={section} icon={<Headphones size={18} strokeWidth={1.8} />} label={t("settingsPage.asr.title")} onSelect={selectSection} />
         <div className="cy-settings-sidebar__group-title cy-settings-sidebar__group-title--spaced">{t("settingsPage.usageNotice")}</div>
-        <SettingsNavItem section="disclaimer" currentSection={section} icon={<FileText size={18} strokeWidth={1.8} />} label={t("settingsPage.disclaimer.navLabel")} onSelect={onSelectSection} />
+        <SettingsNavItem section="disclaimer" currentSection={section} icon={<FileText size={18} strokeWidth={1.8} />} label={t("settingsPage.disclaimer.navLabel")} onSelect={selectSection} />
         </nav>
         <div className="cy-settings-sidebar__footer">
           v{packageJson.version}
@@ -356,7 +364,7 @@ export function AppearanceSettingsPage({ section, onSelectSection, onBackToWorks
                 </Card>
               </section>
 
-              <section className="cy-settings-section">
+              {!(window as any).__cyreneWeb && <section className="cy-settings-section">
                 <div className="cy-settings-section__heading">
                   <h2><Monitor size={18} />{t("settingsPage.pet")}</h2>
                   <p>{t("settingsPage.petDescription")}</p>
@@ -378,7 +386,7 @@ export function AppearanceSettingsPage({ section, onSelectSection, onBackToWorks
                     </div>
                   </div>
                 </Card>
-              </section>
+              </section>}
 
                 <div className="cy-settings-status" role="status" aria-live="polite">{status || t("settingsPage.autoApply")}</div>
               </>

@@ -1,8 +1,35 @@
+import "./ui/theme";
 import { useCallback, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import type { LearnExamAnswerValue, LearnExamChangedEvent, LearnExamView } from "../shared/learn-exam";
 import { LearnExamPanel } from "./react/features/chat/components/LearnExamPanel";
 import "./learn-exam-page.css";
+import { IPC } from "../shared/ipc-channels";
+
+const pageParameters = new URLSearchParams(location.search);
+if (pageParameters.get("web") === "1") {
+  const token = pageParameters.get("token") || "";
+  const host = window.parent as any;
+  const invoke = (channel: string, ...args: unknown[]) => host.__cyreneExamRequest(token, channel, args);
+  window.learnExamPage = {
+    getExam: () => invoke(IPC.LEARN_EXAM_PAGE_GET),
+    saveAnswer: (questionId, answer) => invoke(IPC.LEARN_EXAM_PAGE_SAVE_ANSWER, { questionId, answer }),
+    saveNavigation: (activeQuestionId, flaggedQuestionIds) => invoke(IPC.LEARN_EXAM_PAGE_SAVE_NAVIGATION, { activeQuestionId, flaggedQuestionIds }),
+    submit: () => invoke(IPC.LEARN_EXAM_PAGE_SUBMIT), retry: () => invoke(IPC.LEARN_EXAM_PAGE_RETRY),
+    onChanged: callback => {
+      const unsubscribe = host.__cyreneExamSubscribe(callback);
+      let subscribed = true;
+      const cleanup = () => {
+        if (!subscribed) return;
+        subscribed = false;
+        window.removeEventListener("pagehide", cleanup);
+        unsubscribe();
+      };
+      window.addEventListener("pagehide", cleanup, { once: true });
+      return cleanup;
+    },
+  };
+}
 
 function LearnExamPage() {
   const [exam, setExam] = useState<LearnExamView | null>(null);

@@ -88,6 +88,30 @@ export function ChannelsSettingsPanel() {
   const [qqToken, setQqToken] = useState("");
   const debounce = useRef<number | undefined>(undefined);
   const pendingGlobalPatch = useRef<Record<string, unknown>>({});
+  const wechatLoginActive = useRef(false);
+  const wechatLoginAttempt = useRef(0);
+
+  const cancelWechatLogin = useCallback(() => {
+    wechatLoginAttempt.current++;
+    const wasActive = wechatLoginActive.current;
+    wechatLoginActive.current = false;
+    setQrCode(""); setBusy("");
+    if (wasActive) void api?.channelsWechatLoginCancel().catch(() => setFeedback(t("settingsPage.channels.wechat.loginFailed")));
+  }, [api, t]);
+
+  const startWechatLogin = useCallback(async () => {
+    if (!api) return;
+    const attempt = ++wechatLoginAttempt.current;
+    wechatLoginActive.current = true;
+    setQrCode(""); setBusy("wechat-login"); setFeedback(t("settingsPage.channels.wechat.waitingQr"));
+    try {
+      const result = await api.channelsWechatLoginStart();
+      if (attempt !== wechatLoginAttempt.current) return;
+      if (!result.ok) { wechatLoginActive.current = false; setFeedback(result.error ?? t("settingsPage.channels.wechat.loginFailed")); }
+    } catch (error) {
+      if (attempt === wechatLoginAttempt.current) { wechatLoginActive.current = false; setFeedback(error instanceof Error ? error.message : t("settingsPage.channels.wechat.loginFailed")); }
+    } finally { if (attempt === wechatLoginAttempt.current) setBusy(""); }
+  }, [api, t]);
 
   const channelRows = useMemo(() => channelIds.map((id) => ({ id, status: statuses[id] })), [statuses]);
 
@@ -120,15 +144,18 @@ export function ChannelsSettingsPanel() {
       })
       .catch(() => { if (active) { setFeedback(t("settingsPage.channels.loadFailed")); setLoading(false); } });
     const offStatus = api.onChannelsStatusChanged((next) => setStatuses(next as ChannelStatuses));
-    const offQr = api.onChannelsWechatQrcode((dataUrl) => setQrCode(dataUrl));
+    const offQr = api.onChannelsWechatQrcode((dataUrl) => { if (wechatLoginActive.current) setQrCode(dataUrl); });
     const offLogin = api.onChannelsWechatLoginDone((result) => {
+      if (!wechatLoginActive.current) return;
+      wechatLoginActive.current = false;
       setFeedback(result.ok ? t("settingsPage.channels.wechat.loginSuccess") : result.error ?? t("settingsPage.channels.wechat.loginFailed"));
-      if (result.ok) { setQrCode(""); void refreshStatus(); }
+      if (result.ok) { setQrCode(""); setValues(current => ({ ...current, wechat: { ...current.wechat, enabled: true } })); void refreshStatus(); }
     });
     return () => { active = false; if (typeof offStatus === "function") offStatus(); if (typeof offQr === "function") offQr(); if (typeof offLogin === "function") offLogin(); };
   }, [api, refreshStatus, t]);
 
   useEffect(() => () => {
+    if (wechatLoginActive.current) { wechatLoginActive.current = false; void api?.channelsWechatLoginCancel().catch(() => {}); }
     if (debounce.current !== undefined) window.clearTimeout(debounce.current);
     if (api && Object.keys(pendingGlobalPatch.current).length) void api.channelsSaveConfig(pendingGlobalPatch.current).catch(() => {});
   }, [api]);
@@ -191,10 +218,19 @@ export function ChannelsSettingsPanel() {
     onOk: async () => { if (!api) return; await api.channelsLogClear(); await refreshLogs(); },
   });
 
-  const changeChannelSwitch = (id: ChannelId, checked: boolean) => {
+  const changeChannelSwitch = async (id: ChannelId, checked: boolean) => {
+    if (busy) return;
+    const previous = Boolean(values[id].enabled);
+    if (id === "wechat" && !checked) cancelWechatLogin();
     const patch = { enabled: checked };
     updateChannel(id, "enabled", checked);
-    void saveChannel(id, patch);
+    if (!await saveChannel(id, patch)) {
+      updateChannel(id, "enabled", previous);
+      // Saving may have succeeded before a connection error; reload authoritative state.
+      const saved = await api?.channelsGetConfig().catch(() => null);
+      if (saved) setValues((current) => ({ ...current, ...saved } as ChannelValues));
+      await refreshStatus();
+    }
   };
 
   const statusLabel = (status?: ChannelStatus) => status?.message || (status?.phase === "running" ? t("settingsPage.channels.running") : status?.phase === "starting" ? t("settingsPage.channels.starting") : status?.phase === "error" ? t("settingsPage.channels.error") : status?.phase === "config_missing" ? t("settingsPage.channels.configMissing") : t("settingsPage.channels.offline"));
@@ -203,13 +239,13 @@ export function ChannelsSettingsPanel() {
     const config = values[id];
     const enabled = Boolean(config.enabled);
     const title = channelName(t, id);
-    return <Modal key={id} className="cy-settings-theme-modal cy-channels-dialog" open={dialog === id} title={title} onCancel={() => { setDialog(null); setQrCode(""); setFeedback(""); }} footer={null} destroyOnHidden>
+    return <Modal key={id} className="cy-settings-theme-modal cy-channels-dialog" open={dialog === id} title={title} onCancel={() => { if (id === "wechat") cancelWechatLogin(); setDialog(null); setQrCode(""); setFeedback(""); }} footer={null} destroyOnHidden>
       <div className="cy-channels-dialog__body">
-        <div className="cy-settings-row"><div className="cy-settings-row__copy"><strong>{t("settingsPage.channels.enableChannel")}</strong><span>{statusLabel(statuses[id])}</span></div><SettingsSwitch ariaLabel={t("settingsPage.channels.enableChannel")} checked={enabled} onChange={(checked) => changeChannelSwitch(id, checked)} /></div>
+        <div className="cy-settings-row"><div className="cy-settings-row__copy"><strong>{t("settingsPage.channels.enableChannel")}</strong><span>{statusLabel(statuses[id])}</span></div><SettingsSwitch ariaLabel={t("settingsPage.channels.enableChannel")} checked={enabled} disabled={Boolean(busy)} onChange={(checked) => { void changeChannelSwitch(id, checked); }} /></div>
         {id === "wechat" && <>
           <p className="cy-channels-hint">{t("settingsPage.channels.wechat.description")}</p>
-          {qrCode && <div className="cy-channels-qr"><img src={qrCode} alt={t("settingsPage.channels.wechat.qrAlt")} /><Button onClick={() => setQrCode("")}>{t("settingsPage.channels.cancel")}</Button></div>}
-          <div className="cy-channels-actions"><Button loading={busy === "wechat-login"} onClick={async () => { if (!api) return; setBusy("wechat-login"); setFeedback(t("settingsPage.channels.wechat.waitingQr")); try { const result = await api.channelsWechatLoginStart(); if (!result.ok) setFeedback(result.error ?? t("settingsPage.channels.wechat.loginFailed")); } catch (error) { setFeedback(error instanceof Error ? error.message : t("settingsPage.channels.wechat.loginFailed")); } finally { setBusy(""); } }}>{t("settingsPage.channels.wechat.login")}</Button><Button onClick={async () => { setBusy("wechat"); try { await api?.channelsRestart(); setFeedback(t("settingsPage.channels.wechat.restarted")); await refreshStatus(); } catch { setFeedback(t("settingsPage.channels.saveFailed")); } finally { setBusy(""); } }}>{t("settingsPage.channels.wechat.restart")}</Button></div>
+          {qrCode && <div className="cy-channels-qr"><img src={qrCode} alt={t("settingsPage.channels.wechat.qrAlt")} /><Button onClick={cancelWechatLogin}>{t("settingsPage.channels.cancel")}</Button></div>}
+          <div className="cy-channels-actions"><Button loading={busy === "wechat-login"} onClick={() => { void startWechatLogin(); }}>{t("settingsPage.channels.wechat.login")}</Button><Button onClick={async () => { cancelWechatLogin(); setBusy("wechat"); try { await api?.channelsRestart(); setFeedback(t("settingsPage.channels.wechat.restarted")); await refreshStatus(); } catch { setFeedback(t("settingsPage.channels.saveFailed")); } finally { setBusy(""); } }}>{t("settingsPage.channels.wechat.restart")}</Button></div>
         </>}
         {id === "feishu" && <>
           <p className="cy-channels-hint">{t("settingsPage.channels.feishu.description")}</p>

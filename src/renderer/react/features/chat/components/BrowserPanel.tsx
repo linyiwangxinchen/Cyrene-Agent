@@ -4,6 +4,7 @@ import { useTranslation } from "../../../i18n";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import type { BrowserPanelState, BrowserPanelTabState } from "../../../../../shared/browser-panel-types";
 import "./BrowserPanel.css";
+import { WebBrowserViewport } from "../../../../web/WebBrowserViewport";
 
 const EMPTY_STATE: BrowserPanelState = {
   activeTabId: "",
@@ -219,6 +220,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
           {pageError && <div className="cy-browser-panel__error" role="status"><span>{pageError}</span>{activeTab.crashed && <button type="button" onClick={() => void window.browserPanel?.reload()}>{t("browserPanel.reload")}</button>}</div>}
           {commandError && <div className="cy-browser-panel__error" role="alert">{commandError}<button type="button" aria-label={t("common.close")} onClick={() => setCommandError("")}><X size={13} /></button></div>}
           <div className="cy-browser-panel__webview" ref={hostRef}>
+            {(window as any).__cyreneWeb && activeTab.url && <WebBrowserViewport url={activeTab.url} tabId={activeTab.id} kind={activeTab.kind} active={active} />}
             {!activeTab.url && <div className="cy-browser-panel__empty">{t("browserPanel.emptyHint")}</div>}
           </div>
         </div>

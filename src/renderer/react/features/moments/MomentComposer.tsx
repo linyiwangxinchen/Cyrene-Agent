@@ -57,6 +57,10 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<PendingImage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [preparing, setPreparing] = useState(false);
+  const submitLock = useRef(false);
+  const imagesRef = useRef(images);
+  imagesRef.current = images;
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
 
@@ -92,12 +96,12 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
   // 卸载时回收 objectURL
   useEffect(() => {
     return () => {
-      for (const image of images) URL.revokeObjectURL(image.previewUrl);
+      for (const image of imagesRef.current) URL.revokeObjectURL(image.previewUrl);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const canSubmit = !submitting && (text.trim().length > 0 || images.length > 0);
+  const canSubmit = !submitting && !preparing && (text.trim().length > 0 || images.length > 0);
 
   function handleTextChange(nextText: string) {
     setText(nextText);
@@ -190,30 +194,39 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
   }
 
   async function handleSubmit() {
-    if (!canSubmit) return;
+    if (!canSubmit || submitLock.current) return;
+    submitLock.current = true;
+    setPreparing(true);
     setError(null);
-    const payload: MomentCreatePostInput = {
-      title: title.trim() || undefined,
-      text: text.trim(),
-      mentions: deriveMentions(),
-      images: await Promise.all(
-        images.map(async (image) => ({
-          name: image.file.name,
-          mime: image.file.type,
-          bytes: await image.file.arrayBuffer(),
-        })),
-      ),
-    };
-    const failure = await onPublish(payload);
-    if (failure) {
-      setError(failure);
-      return;
+    try {
+      const payload: MomentCreatePostInput = {
+        title: title.trim() || undefined,
+        text: text.trim(),
+        mentions: deriveMentions(),
+        images: await Promise.all(
+          images.map(async (image) => ({
+            name: image.file.name,
+            mime: image.file.type,
+            bytes: await image.file.arrayBuffer(),
+          })),
+        ),
+      };
+      const failure = await onPublish(payload);
+      if (failure) {
+        setError(failure);
+        return;
+      }
+      for (const image of images) URL.revokeObjectURL(image.previewUrl);
+      setTitle("");
+      setText("");
+      setImages([]);
+      setPicker(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : t("moments.publishFailed"));
+    } finally {
+      submitLock.current = false;
+      setPreparing(false);
     }
-    for (const image of images) URL.revokeObjectURL(image.previewUrl);
-    setTitle("");
-    setText("");
-    setImages([]);
-    setPicker(null);
   }
 
   return (
@@ -225,6 +238,7 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
         maxLength={MOMENT_MAX_POST_TITLE_LENGTH}
         placeholder={t("moments.composerTitlePlaceholder")}
         onChange={(event) => setTitle(event.target.value)}
+        disabled={submitting || preparing}
       />
       <textarea
         ref={textareaRef}
@@ -235,6 +249,7 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
         placeholder={t("moments.composerPlaceholder")}
         onChange={(event) => handleTextChange(event.target.value)}
         onKeyDown={handleTextKeyDown}
+        disabled={submitting || preparing}
       />
 
       {picker && (
@@ -282,6 +297,7 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
                 className="moments-composer__preview-remove"
                 aria-label={t("moments.delete")}
                 onClick={() => removeImage(index)}
+                disabled={submitting || preparing}
               >
                 <CloseOutlined />
               </button>
@@ -296,6 +312,7 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
             type="button"
             className="moments-composer__tool"
             onClick={() => fileInputRef.current?.click()}
+            disabled={submitting || preparing}
           >
             <PictureOutlined />
             <span>{t("moments.addImages")}</span>
@@ -313,7 +330,7 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
             hidden
             onChange={(event) => handlePickImages(event.target.files)}
           />
-          {error && <span className="moments-composer__error">{error}</span>}
+          {error && <span className="moments-composer__error" role="alert">{error}</span>}
         </div>
         <button
           type="button"
@@ -321,7 +338,7 @@ export function MomentComposer({ submitting, onPublish }: MomentComposerProps) {
           disabled={!canSubmit}
           onClick={() => void handleSubmit()}
         >
-          {submitting ? t("moments.publishing") : t("moments.publish")}
+          {submitting || preparing ? t("moments.publishing") : t("moments.publish")}
         </button>
       </div>
     </section>

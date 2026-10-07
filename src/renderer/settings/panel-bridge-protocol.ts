@@ -33,6 +33,7 @@ export interface PanelTheme {
 
 /** 面板 origin：与协议层 PLUGIN_ID_RE 同语法的插件 id 才有合法 origin */
 export function panelOriginFor(pluginId: string): string {
+  if (typeof window !== "undefined" && (window as any).__cyreneWeb) return "*";
   return `${PANEL_SCHEME}://${pluginId}`;
 }
 

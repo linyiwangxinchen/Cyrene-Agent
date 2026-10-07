@@ -381,13 +381,16 @@ export function ChatComposer({
 
   useEffect(() => {
     let active = true;
-    void window.chat?.getEnabledStickers?.().then((items) => {
+    const refresh = () => { void window.chat?.getEnabledStickers?.().then((items) => {
       if (active) setEnabledStickers(items);
     }).catch(() => {
       if (active) setEnabledStickers([]);
-    });
+    }); };
+    refresh();
+    const off = window.chat?.onStickersChanged?.(refresh);
     return () => {
       active = false;
+      off?.();
     };
   }, []);
 
@@ -791,7 +794,7 @@ export function ChatComposer({
             >
               <Plus size={20} aria-hidden="true" />
             </button>
-            <button
+            {!window.__cyreneWeb && <button
               type="button"
               className="cy-composer__icon-button"
               aria-label={t("composer.screenshot")}
@@ -799,7 +802,7 @@ export function ChatComposer({
               onClick={onScreenshot}
             >
               <ScanLine size={20} aria-hidden="true" />
-            </button>
+            </button>}
             {supportsStickers && <StickerPicker onChoose={onChooseSticker} />}
           </div>
         }

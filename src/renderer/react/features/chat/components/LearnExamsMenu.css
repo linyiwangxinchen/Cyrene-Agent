@@ -1,0 +1,8 @@
+.cy-learn-exams-menu { width: min(340px, calc(100vw - 48px)); color: var(--rb-text-primary); }
+.cy-learn-exams-menu > strong { display: block; padding-bottom: 8px; }
+.cy-learn-exams-menu > p { margin: 8px 0; color: var(--rb-text-secondary); }
+.cy-learn-exams-menu__list { max-height: 55vh; overflow: auto; display: grid; gap: 6px; }
+.cy-learn-exams-menu__list > button { display: grid; gap: 4px; width: 100%; text-align: left; padding: 10px 12px; border: 1px solid var(--rb-border-default); border-radius: 8px; color: inherit; background: var(--rb-surface-elevated); cursor: pointer; }
+.cy-learn-exams-menu__list > button:hover { border-color: var(--rb-accent); }
+.cy-learn-exams-menu__list > button:disabled { opacity: .6; cursor: wait; }
+.cy-learn-exams-menu__list small { color: var(--rb-text-secondary); }

@@ -83,7 +83,7 @@ export function useCallSession() {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
       });
-      if (stateRef.current === "ENDED") {
+      if (stateRef.current === "ENDED" || stateRef.current === "ERROR") {
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
@@ -91,7 +91,7 @@ export function useCallSession() {
       const context = new AudioContext({ sampleRate: 16000 });
       audioContextRef.current = context;
       await context.audioWorklet.addModule(new URL("../call/pcm-processor.js", import.meta.url));
-      if (stateRef.current === "ENDED") {
+      if (stateRef.current === "ENDED" || stateRef.current === "ERROR") {
         stream.getTracks().forEach((track) => track.stop());
         void context.close();
         return;
@@ -105,7 +105,10 @@ export function useCallSession() {
 
       const worklet = new AudioWorkletNode(context, "pcm-processor");
       workletRef.current = worklet;
-      worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => window.call?.sendAudioFrame(event.data);
+      worklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => { if (stateRef.current === "LISTENING" && !pendingRef.current) window.call?.sendAudioFrame(event.data); };
+      // Keep the worklet in the render graph without playing the microphone.
+      const silent = context.createGain(); silent.gain.value = 0; worklet.connect(silent); silent.connect(context.destination);
+      await context.resume();
       source.connect(worklet);
 
       vadIntervalRef.current = window.setInterval(() => {
@@ -130,6 +133,7 @@ export function useCallSession() {
       stopMicrophone();
       setError(cause instanceof Error ? cause.message : "无法访问麦克风，请检查权限");
       transition("ERROR");
+      if ((window as any).__cyreneWeb) void (window.parent as any).__cyreneCallRelease?.();
     }
   }, [stopMicrophone, submitTurn, transition]);
 
@@ -138,7 +142,7 @@ export function useCallSession() {
     stopMicrophone();
     stopPlayback();
     transition("ENDED");
-    window.setTimeout(() => window.close(), 350);
+    if (!(window as any).__cyreneWeb) window.setTimeout(() => window.close(), 350);
   }, [stopMicrophone, stopPlayback, transition]);
 
   useEffect(() => {
@@ -159,13 +163,13 @@ export function useCallSession() {
           setMessages((items) => applyCallTranscriptEvent(items, { speaker: "user", text: result.final!, final: true }));
         }
       }),
-      call?.onTtsAudio(({ base64, text }) => {
+      call?.onTtsAudio(({ base64, text, format }) => {
         setError("");
         if (text) setMessages((items) => applyCallTranscriptEvent(items, { speaker: "assistant", text, final: true }));
         stopPlayback();
         const token = ++speechTokenRef.current;
         const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-        const url = URL.createObjectURL(new Blob([bytes], { type: "audio/mp3" }));
+        const url = URL.createObjectURL(new Blob([bytes], { type: format === "wav" ? "audio/wav" : "audio/mpeg" }));
         audioUrlRef.current = url;
         const audio = new Audio(url);
         currentAudioRef.current = audio;
@@ -204,7 +208,7 @@ export function useCallSession() {
     const timer = window.setInterval(() => {
       if (startedAtRef.current !== null) setElapsed(Date.now() - startedAtRef.current);
     }, 500);
-    return () => {
+    const dispose = () => {
       disposed = true;
       window.clearInterval(timer);
       off.forEach((unsubscribe) => unsubscribe());
@@ -212,6 +216,8 @@ export function useCallSession() {
       stopPlayback();
       if (stateRef.current !== "ENDED") call?.stop();
     };
+    window.addEventListener("pagehide", dispose, { once: true });
+    return () => { window.removeEventListener("pagehide", dispose); dispose(); };
   }, [startMicrophone, stopMicrophone, stopPlayback, transition]);
 
   return { state, messages, elapsed, error, volume, submitTurn, hangup };

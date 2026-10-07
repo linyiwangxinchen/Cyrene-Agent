@@ -47,6 +47,17 @@ afterEach(() => {
 });
 
 describe("useSessionMessages", () => {
+  it("deduplicates queue append racing with persisted hydration in one React batch", () => {
+    const user = userItem("claimed-user", "one send");
+    const assistant: ChatMessageItem = { id: "answer", role: "assistant", content: "", loading: true };
+    act(() => {
+      latest.hydrateMessages("s1", [user], false);
+      latest.appendMessages("s1", [user, assistant]);
+      latest.appendMessages("s1", [user, assistant]);
+    });
+    expect(latest.messagesBySession.s1.map(item => item.id)).toEqual(["claimed-user", "answer"]);
+    expect(latest.messagesBySession.s1[0]).toBe(user);
+  });
   it("appendMessages 按会话追加且保序，replace 整体替换", () => {
     act(() => {
       latest.appendMessages("s1", [userItem("u1", "hello"), userItem("u2", "world")]);

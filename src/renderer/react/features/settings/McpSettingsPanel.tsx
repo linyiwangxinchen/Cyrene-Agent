@@ -16,6 +16,7 @@ const MCP_TRANSPORTS: McpTransport[] = ["stdio", "http", "sse"];
 interface McpFormState {
   name: string;
   transport: McpTransport;
+  cwd?: string;
   command: string;   // stdio：启动命令
   args: string;      // stdio：参数（空格分隔）
   url: string;       // 远程：服务地址
@@ -24,11 +25,28 @@ interface McpFormState {
 }
 
 const MCP_FORM_DEFAULTS: McpFormState = {
-  name: "", transport: "stdio", command: "", args: "", url: "", env: "", headers: "",
+  name: "", cwd: "", transport: "stdio", command: "", args: "", url: "", env: "", headers: "",
 };
 
-function splitArgs(text: string): string[] {
-  return text.trim().split(/\s+/).filter(Boolean);
+export function splitArgs(text: string): string[] {
+  const input = text.trim();
+  if (input.startsWith("[")) {
+    const parsed: unknown = JSON.parse(input);
+    if (!Array.isArray(parsed) || parsed.some(value => typeof value !== "string")) throw new Error("MCP args 必须是字符串数组");
+    return parsed;
+  }
+  const args: string[] = []; let token = "", quote = "", started = false;
+  for (let index = 0; index < input.length; index++) {
+    const char = input[index], next = input[index + 1];
+    if (char === "\\" && next && (next === quote || next === "\\" || (!quote && /\s/.test(next)))) { token += next; index++; started = true; }
+    else if (quote) { if (char === quote) quote = ""; else token += char; }
+    else if (char === '"' || char === "'") { quote = char; started = true; }
+    else if (/\s/.test(char)) { if (started) { args.push(token); token = ""; started = false; } }
+    else { token += char; started = true; }
+  }
+  if (quote) throw new Error("MCP 参数引号未闭合");
+  if (started) args.push(token);
+  return args;
 }
 
 /** 解析 JSON 对象文本（环境变量/请求头）。空文本返回空对象；格式错误抛异常。 */
@@ -87,9 +105,11 @@ export function resolveTransport(entry: Record<string, unknown>): McpTransport {
 export function entryToConfig(name: string, entry: Record<string, unknown>, existingIds: string[]): McpServerConfigView {
   const transport = resolveTransport(entry);
   const config: McpServerConfigView = { id: deriveServerId(name, existingIds), name, transport };
+  if (entry.effectKindOverrides && typeof entry.effectKindOverrides === "object" && !Array.isArray(entry.effectKindOverrides)) config.effectKindOverrides = entry.effectKindOverrides as McpServerConfigView["effectKindOverrides"];
   if (transport === "stdio") {
     if (typeof entry.command === "string" && entry.command.trim()) config.command = entry.command.trim();
     if (Array.isArray(entry.args)) config.args = entry.args.map((v) => String(v)).filter(Boolean);
+    if (typeof entry.cwd === "string" && entry.cwd.trim()) config.cwd = entry.cwd.trim();
     const env = toOptionalRecord(entry.env);
     if (env) config.env = env;
   } else {
@@ -118,6 +138,7 @@ export function formToEntry(form: McpFormState): Record<string, unknown> {
   const entry: Record<string, unknown> = {};
   if (form.transport === "stdio") {
     entry.command = form.command.trim();
+    if (form.cwd?.trim()) entry.cwd = form.cwd.trim();
     const args = splitArgs(form.args);
     if (args.length > 0) entry.args = args;
     const env = parseJsonRecord(form.env);
@@ -136,8 +157,9 @@ export function entryToFormPatch(name: string, entry: Record<string, unknown>): 
   const transport = resolveTransport(entry);
   const patch: Partial<McpFormState> = { name, transport };
   if (transport === "stdio") {
+    patch.cwd = typeof entry.cwd === "string" ? entry.cwd : "";
     patch.command = typeof entry.command === "string" ? entry.command : "";
-    patch.args = Array.isArray(entry.args) ? entry.args.map(String).join(" ") : "";
+    patch.args = Array.isArray(entry.args) ? entry.args.map(value => JSON.stringify(String(value))).join(" ") : "";
     patch.env = toOptionalRecord(entry.env) ? JSON.stringify(entry.env, null, 2) : "";
   } else {
     patch.url = typeof entry.url === "string" ? entry.url : "";
@@ -242,6 +264,7 @@ function AddMcpServerModal({ open, initialForm, existingIds, onClose, onAdded }:
         const entry: Record<string, unknown> = {};
         if (form.transport === "stdio") {
           entry.command = form.command.trim();
+          if (form.cwd?.trim()) entry.cwd = form.cwd.trim();
           const args = splitArgs(form.args);
           if (args.length > 0) entry.args = args;
           if (Object.keys(env).length > 0) entry.env = env;
@@ -343,6 +366,10 @@ function AddMcpServerModal({ open, initialForm, existingIds, onClose, onAdded }:
             <label htmlFor="cy-mcp-args">{t("settingsPage.mcp.args")}</label>
             <SettingsInput id="cy-mcp-args" value={form.args} placeholder={t("settingsPage.mcp.argsPlaceholder")} onChange={(event) => updateForm({ args: event.target.value })} autoComplete="off" spellCheck={false} />
           </div>
+          <div className="cy-settings-mcp-modal__field">
+            <label htmlFor="cy-mcp-cwd">{t("settingsPage.mcp.cwd")}</label>
+            <SettingsInput id="cy-mcp-cwd" value={form.cwd || ""} placeholder={t("settingsPage.mcp.cwdPlaceholder")} onChange={event => updateForm({ cwd: event.target.value })} />
+          </div>
         </> : (
           <div className="cy-settings-mcp-modal__field">
             <label htmlFor="cy-mcp-url">{t("settingsPage.mcp.url")}</label>
@@ -391,6 +418,7 @@ export function McpSettingsPanel() {
   const [status, setStatus] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [addPreset, setAddPreset] = useState<Partial<McpFormState> | undefined>(undefined);
+  const [reconnectingId, setReconnectingId] = useState("");
   const [removingId, setRemovingId] = useState("");
   const [fsEnabled, setFsEnabled] = useState<boolean | null>(null);
 
@@ -419,7 +447,7 @@ export function McpSettingsPanel() {
     }
   }
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void refresh(); const timer = setInterval(() => void refresh(), 5000); return () => clearInterval(timer); }, []);
 
   // 内置 Filesystem MCP 开关状态（general settings）
   useEffect(() => {
@@ -445,6 +473,14 @@ export function McpSettingsPanel() {
   function openAddModal(preset?: Partial<McpFormState>) {
     setAddPreset(preset);
     setAddOpen(true);
+  }
+
+  async function reconnectServer(server: McpServerConfigView) {
+    if (!window.settings?.reconnectMcpServer || reconnectingId) return;
+    setReconnectingId(server.id);
+    try { const result = await window.settings.reconnectMcpServer(server.id); setStatus(result.ok ? t("settingsPage.mcp.reconnected") : result.error || t("settingsPage.mcp.reconnectFailed")); await refresh(); }
+    catch (error) { setStatus(error instanceof Error ? error.message : t("settingsPage.mcp.reconnectFailed")); }
+    finally { setReconnectingId(""); }
   }
 
   async function removeServer(server: McpServerConfigView) {
@@ -494,6 +530,7 @@ export function McpSettingsPanel() {
                 {detail && <span className="cy-settings-mcp__detail">{detail}</span>}
               </div>
               <div className="cy-settings-row__control">
+                <Button loading={reconnectingId === server.id} disabled={Boolean(reconnectingId) || Boolean(removingId)} onClick={() => void reconnectServer(server)}>{t("settingsPage.mcp.reconnect")}</Button>
                 <Popconfirm
                   title={t("settingsPage.mcp.removeConfirmTitle")}
                   description={t("settingsPage.mcp.removeConfirm", { name: server.name })}

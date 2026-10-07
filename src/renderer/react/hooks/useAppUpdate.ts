@@ -9,12 +9,13 @@ export function useAppUpdate(): AppUpdateState {
   const [state, setState] = useState<AppUpdateState>({ phase: "idle", currentVersion: "" });
 
   useEffect(() => {
+    if (window.__cyreneWeb) return;
     const api = window.appUpdate;
     if (!api) return;
     let active = true;
     void api.getState().then((next) => {
       if (active) setState(next);
-    });
+    }).catch(() => {});
     const unsubscribe = api.onStateChanged((next) => {
       if (active) setState(next);
     });

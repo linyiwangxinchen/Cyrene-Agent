@@ -343,6 +343,7 @@ export const IPC = {
   MCP_ADD_SERVER: "mcp:add-server",
   MCP_REMOVE_SERVER: "mcp:remove-server",
   MCP_LIST_SERVERS: "mcp:list-servers",
+  MCP_RECONNECT_SERVER: "mcp:reconnect-server",
   MCP_LIST_SERVER_CONFIGS: "mcp:list-server-configs",
 
   // tool (plugin) toggle

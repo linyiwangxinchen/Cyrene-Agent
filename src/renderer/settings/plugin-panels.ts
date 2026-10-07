@@ -48,7 +48,7 @@ window.addEventListener("message", (event: MessageEvent) => {
   const pluginId = panelRegistry.get(event.source as Window);
   if (!pluginId) return;
   // 第二道校验：origin 必须是该插件自己的面板 origin（拦截 iframe 导航攻击）
-  if (event.origin !== panelOriginFor(pluginId)) return;
+  if ((window as any).__cyreneWeb ? event.origin !== "null" : event.origin !== panelOriginFor(pluginId)) return;
   const message = parsePanelMessage(event.data);
   if (!message) return;
   const contentWindow = event.source as Window;
@@ -101,7 +101,10 @@ function mountPanel(
   // allow-same-origin 保留面板真实 origin，使双校验成立；
   // 跨源访问由同源策略阻挡，设置页与 cyrene-plugin:// 结构性不同源
   iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
-  iframe.setAttribute("src", `${PANEL_SCHEME}://${plugin.id}/${plugin.settingsPanel}`);
+  if ((window as any).__cyreneWeb) {
+    iframe.setAttribute("sandbox", "allow-scripts");
+    iframe.setAttribute("src", `/api/plugin-panel/${plugin.id}/${plugin.settingsPanel}`);
+  } else iframe.setAttribute("src", `${PANEL_SCHEME}://${plugin.id}/${plugin.settingsPanel}`);
   iframe.className = "plugin-panel-card__frame";
   iframe.style.height = `${PANEL_MIN_HEIGHT}px`;
 

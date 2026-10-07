@@ -121,8 +121,10 @@ export function MomentsPanel() {
       const result = await api.createPost(input);
       // 成功后由 moments:changed 广播触发 reload，无需手动刷新
       return result.applied ? null : t(`moments.error.${result.reason}`);
-    } catch {
-      return t("moments.publishFailed");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "";
+      if (["unsupported_mime", "image_too_large", "too_many_images"].includes(reason)) return t(`moments.error.${reason}`);
+      return reason ? `${t("moments.publishFailed")}：${reason}` : t("moments.publishFailed");
     } finally {
       setSubmitting(false);
     }

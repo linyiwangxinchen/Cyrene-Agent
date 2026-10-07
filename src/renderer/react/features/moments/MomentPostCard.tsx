@@ -8,6 +8,7 @@ import {
   type MomentFeedItem,
 } from "../../../../shared/moments-types";
 import { resolveAsset } from "../../../../shared/renderer-base";
+import { browserResourceUrl } from "../../../../shared/browser-resource";
 import { useCyreneAvatar } from "../../hooks/useCyreneAvatar";
 import { translateCharacterName, useTranslation } from "../../i18n";
 import { useFeedback } from "../../components/feedback/FeedbackProvider";
@@ -152,11 +153,13 @@ export function MomentPostCard({
             {post.media.map((media) => (
               <img
                 key={media.id}
-                src={media.origin !== "character_asset"
+                src={browserResourceUrl(media.origin !== "character_asset"
                   ? buildMomentMediaUrl(post.id, media.ref)
-                  : media.ref.startsWith("local-sticker:")
+                  : media.ref.startsWith("local-sticker:") || media.ref.startsWith("/api/core/resource?")
                     ? media.ref
-                    : resolveAsset(media.ref)}
+                    : resolveAsset(media.ref), Boolean(window.__cyreneWeb))}
+                alt={post.title || media.ref}
+                loading="lazy"
                 draggable={false}
               />
             ))}

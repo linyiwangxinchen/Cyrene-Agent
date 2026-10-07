@@ -4,13 +4,17 @@ import { siAlibabacloud, siMinimax } from "simple-icons";
 import { BrandIcon } from "../../components/ui/BrandIcon";
 import { SettingsInput, SettingsPasswordInput, SettingsSelect, SettingsSlider, SettingsSwitch } from "../../components/ui/SettingsControls";
 import { useTranslation } from "../../i18n";
+import { WebAsrTest } from "../../../web/WebAsrTest";
 import { Card } from "../../components/ui/Card";
 
 type AsrEngine = "off" | "aliyun" | "mossland" | "minimax" | "local";
 type AsrLanguage = "zh" | "en";
-type SecretField = "asrAliyunAppKey" | "asrAliyunAccessKeyId" | "asrAliyunAccessKeySecret" | "ttsMosslandKey" | "asrMinimaxKey";
+type SecretField = "asrLocalUrl" | "asrLocalModel" | "asrLocalKey" | "asrAliyunAppKey" | "asrAliyunAccessKeyId" | "asrAliyunAccessKeySecret" | "ttsMosslandKey" | "asrMinimaxKey";
 type AsrValues = {
   asrEngine: AsrEngine;
+  asrLocalUrl: string;
+  asrLocalModel: string;
+  asrLocalKey: string;
   asrAliyunAppKey: string;
   asrAliyunAccessKeyId: string;
   asrAliyunAccessKeySecret: string;
@@ -24,6 +28,9 @@ type AsrValues = {
 
 const defaults: AsrValues = {
   asrEngine: "off",
+  asrLocalUrl: "http://127.0.0.1:8000/v1/audio/transcriptions",
+  asrLocalModel: "whisper-1",
+  asrLocalKey: "",
   asrAliyunAppKey: "",
   asrAliyunAccessKeyId: "",
   asrAliyunAccessKeySecret: "",
@@ -38,6 +45,9 @@ const defaults: AsrValues = {
 function readAsrValues(config: Record<string, unknown>): AsrValues {
   return {
     asrEngine: config.asrEngine === "aliyun" || config.asrEngine === "mossland" || config.asrEngine === "minimax" || config.asrEngine === "local" ? config.asrEngine : "off",
+    asrLocalUrl: typeof config.asrLocalUrl === "string" ? config.asrLocalUrl : defaults.asrLocalUrl,
+    asrLocalModel: typeof config.asrLocalModel === "string" ? config.asrLocalModel : defaults.asrLocalModel,
+    asrLocalKey: typeof config.asrLocalKey === "string" ? config.asrLocalKey : "",
     asrAliyunAppKey: typeof config.asrAliyunAppKey === "string" ? config.asrAliyunAppKey : "",
     asrAliyunAccessKeyId: typeof config.asrAliyunAccessKeyId === "string" ? config.asrAliyunAccessKeyId : "",
     asrAliyunAccessKeySecret: typeof config.asrAliyunAccessKeySecret === "string" ? config.asrAliyunAccessKeySecret : "",
@@ -121,7 +131,7 @@ export function AsrSettingsPanel() {
 
   function update<K extends keyof AsrValues>(key: K, value: AsrValues[K]) {
     setValues((current) => ({ ...current, [key]: value }));
-    if (key === "asrAliyunAppKey" || key === "asrAliyunAccessKeyId" || key === "asrAliyunAccessKeySecret" || key === "ttsMosslandKey" || key === "asrMinimaxKey") {
+    if (key === "asrLocalUrl" || key === "asrLocalModel" || key === "asrLocalKey" || key === "asrAliyunAppKey" || key === "asrAliyunAccessKeyId" || key === "asrAliyunAccessKeySecret" || key === "ttsMosslandKey" || key === "asrMinimaxKey") {
       scheduleSecret(key, String(value));
     } else {
       void persist(key, value);
@@ -154,7 +164,7 @@ export function AsrSettingsPanel() {
           <label><span>{t("settingsPage.asr.appKey")}</span><SettingsInput value={values.asrAliyunAppKey} onChange={(event) => update("asrAliyunAppKey", event.target.value)} onBlur={() => flushSecret("asrAliyunAppKey")} autoComplete="off" /></label>
           <label><span>{t("settingsPage.asr.accessKeyId")}</span><SettingsInput value={values.asrAliyunAccessKeyId} onChange={(event) => update("asrAliyunAccessKeyId", event.target.value)} onBlur={() => flushSecret("asrAliyunAccessKeyId")} autoComplete="off" /></label>
           <label><span>{t("settingsPage.asr.accessKeySecret")}</span><SettingsPasswordInput showLabel={t("settingsPage.asr.showSecret")} hideLabel={t("settingsPage.asr.hideSecret")} value={values.asrAliyunAccessKeySecret} onChange={(event) => update("asrAliyunAccessKeySecret", event.target.value)} onBlur={() => flushSecret("asrAliyunAccessKeySecret")} autoComplete="off" /></label>
-          <label><span>{t("settingsPage.asr.language")}</span><SettingsSelect ariaLabel={t("settingsPage.asr.language")} value={values.asrLanguage} options={[{ value: "zh", label: t("settingsPage.asr.chinese") }, { value: "en", label: t("settingsPage.asr.english") }]} onChange={(value) => update("asrLanguage", value)} /></label>
+          <p>阿里云识别语言由 Appkey 对应项目的模型决定；请在阿里云控制台选择所需语种。</p>
         </Card>
       </section>}
 
@@ -168,6 +178,15 @@ export function AsrSettingsPanel() {
         <Card className="cy-asr-fields"><label><span>{t("settingsPage.asr.minimaxKey")}</span><SettingsPasswordInput showLabel={t("settingsPage.asr.showSecret")} hideLabel={t("settingsPage.asr.hideSecret")} value={values.asrMinimaxKey} onChange={(event) => update("asrMinimaxKey", event.target.value)} onBlur={() => flushSecret("asrMinimaxKey")} autoComplete="off" /></label></Card>
       </section>}
 
+      {values.asrEngine === "local" && <section className="cy-settings-section">
+        <div className="cy-settings-section__heading"><h2><Headphones size={18} />本地 / 自部署 ASR</h2><p>填写服务器可访问的 OpenAI 兼容转写接口；可对接 Whisper 等服务。</p></div>
+        <Card className="cy-asr-fields">
+          <label><span>转写 Endpoint URL</span><SettingsInput aria-label="转写 Endpoint URL" value={values.asrLocalUrl} onChange={event => update("asrLocalUrl", event.target.value)} onBlur={() => flushSecret("asrLocalUrl")} /></label>
+          <label><span>ASR 模型</span><SettingsInput aria-label="ASR 模型" value={values.asrLocalModel} onChange={event => update("asrLocalModel", event.target.value)} onBlur={() => flushSecret("asrLocalModel")} /></label>
+          <label><span>API Key（可选）</span><SettingsPasswordInput showLabel={t("settingsPage.asr.showSecret")} hideLabel={t("settingsPage.asr.hideSecret")} value={values.asrLocalKey} onChange={event => update("asrLocalKey", event.target.value)} onBlur={() => flushSecret("asrLocalKey")} autoComplete="off" /></label>
+        </Card>
+      </section>}
+      {(window as any).__cyreneWeb && values.asrEngine !== "off" && <WebAsrTest />}
       <section className="cy-settings-section">
         <div className="cy-settings-section__heading"><h2><Headphones size={18} />{t("settingsPage.asr.callTitle")}</h2><p>{t("settingsPage.asr.callDescription")}</p></div>
         <Card>

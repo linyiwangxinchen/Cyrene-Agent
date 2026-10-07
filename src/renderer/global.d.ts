@@ -40,6 +40,7 @@ interface ChatWindowApi {
   toggleMaximize: () => void;
   /** 已启用的贴纸列表（主进程返回 { id, src } 结构） */
   getEnabledStickers: () => Promise<Array<{ id: string; src: string }>>;
+  onStickersChanged?: (callback: () => void) => () => void;
   /** 重新扫描并读取当前会话模式下可调用的 slash 技能。 */
   getSkillSuggestions: (mode: SkillSuggestionMode) => Promise<SkillSuggestionItem[]>;
   /** 读取本地图片并转为 dataUrl 预览；失败返回 ok=false + error */
@@ -74,6 +75,7 @@ interface SettingsWindowApi {
   addMcpServer: (config: import("./settings/shared/types").McpServerConfigView) => Promise<{ ok: boolean; toolIds?: string[]; error?: string }>;
   removeMcpServer: (serverId: string) => Promise<{ ok: boolean; error?: string }>;
   listMcpServers: () => Promise<Array<{ id: string; name: string; connected: boolean; toolCount: number; toolIds: string[] }>>;
+  reconnectMcpServer: (id: string) => Promise<{ ok: boolean; error?: string; toolIds?: string[] }>;
   listMcpServerConfigs: () => Promise<import("./settings/shared/types").McpServerConfigView[]>;
   saveGeneral: (payload: Record<string, unknown>) => Promise<unknown>;
   getPermissionLevel: () => Promise<{ level: string }>;
@@ -188,6 +190,8 @@ interface BrowserPanelApi {
 
 declare global {
   interface Window {
+    /** True only for the authenticated headless Web host. */
+    __cyreneWeb?: boolean;
     cyrene?: {
       quit: () => void;
     };
@@ -227,7 +231,7 @@ declare global {
       stop: () => void;
       onState: (callback: (state: string) => void) => () => void;
       onAsrResult: (callback: (data: { partial?: string; final?: string }) => void) => () => void;
-      onTtsAudio: (callback: (data: { base64: string; text?: string }) => void) => () => void;
+      onTtsAudio: (callback: (data: { base64: string; text?: string; format?: "wav" | "mp3" | "pcm" }) => void) => () => void;
       onError: (callback: (data: { message: string }) => void) => () => void;
     };
     live2dSpeech?: {

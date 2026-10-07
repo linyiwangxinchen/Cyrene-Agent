@@ -1,5 +1,5 @@
 import { Popover, Segmented } from "antd";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   computeReasoningDropdown,
   type ReasoningDropdownItem,
@@ -24,7 +24,7 @@ interface ReasoningState {
 }
 
 interface ChatReasoningApi {
-  getReasoningState: (payload?: { sessionId?: string; modelProfileId?: string }) => Promise<ReasoningState>;
+  getReasoningState: (payload?: { sessionId?: string; modelProfileId?: string; model?: string }) => Promise<ReasoningState>;
   setReasoning: (payload: { sessionId?: string; modelProfileId?: string | null; providerKey: string; preference: ReasoningPreference }) => Promise<void>;
 }
 
@@ -77,22 +77,29 @@ export function ReasoningControl({ sessionId, modelProfileId, model }: { session
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const refreshGeneration = useRef(0);
 
   async function refresh() {
     const api = reasoningApi();
     if (!api) return;
+    const generation = ++refreshGeneration.current;
     try {
-      const state = await api.getReasoningState({ sessionId, modelProfileId });
+      const state = await api.getReasoningState({ sessionId, modelProfileId, model });
+      if (generation !== refreshGeneration.current) return;
       setProviderKey(state.providerKey);
       setResolvedProfileId(state.modelProfileId ?? null);
       setDefaultEffort(resolveConfiguredReasoningCapability(state.providerId, state.model, state.manualReasoning).defaultEffort);
       setView(computeReasoningDropdown(state.providerId, state.model, state.preference, state.thinkingOverride, state.transport, state.manualReasoning));
     } catch {
-      setView(undefined);
+      if (generation === refreshGeneration.current) setView(undefined);
     }
   }
 
-  useEffect(() => { void refresh(); }, [sessionId, modelProfileId, model]);
+  useEffect(() => {
+    setView(undefined);
+    void refresh();
+    return () => { ++refreshGeneration.current; };
+  }, [sessionId, modelProfileId, model]);
 
   const label = `thinking · ${view ? (view.disabled ? view.statusText : preferenceLabel(view.activePreference)) : "载入中"}`;
   const sliderItems = view?.items.filter((item) => item.preference.mode === "off"

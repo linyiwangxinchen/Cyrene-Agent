@@ -89,6 +89,7 @@ import {
 import "../../../components/ui/SidebarToggle.css";
 import { InspectorToggle } from "../../../components/ui/InspectorToggle";
 import { OpenWorkspaceMenu } from "../components/OpenWorkspaceMenu";
+import { LearnExamsMenu } from "../components/LearnExamsMenu";
 import "../../../components/ui/ModeSwitch.css";
 import "../../../components/ui/WindowControls.css";
 import "../../../components/ui/SettingsButton.css";
@@ -261,6 +262,8 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
   const sessionSelectionGeneration = useRef(0);
+  // An intentional blank task must survive background list refreshes.
+  const draftModesRef = useRef(new Set<ConversationMode>());
   const sidebarSelectionRequest = useRef(0);
 
   const activeRunsBySession = useRef<Record<string, { assistantId: string; runId?: string; mode: ConversationMode }>>({});
@@ -782,6 +785,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     const generation = ++sessionSelectionGeneration.current;
     const session = await store.get(sessionId);
     if (!session || generation !== sessionSelectionGeneration.current) return;
+    draftModesRef.current.delete(targetMode);
     setActiveSession(session);
     // 环形图快照初始化：session 级（压缩后写入）与消息级（最近 run 留下）取最新；
     // 分母统一换成主进程实时解析的窗口容量，避免展示陈旧值。
@@ -880,7 +884,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       if (existing && sessionMetaListEqual(existing, listed)) return current;
       return { ...current, [targetMode]: listed };
     });
-    if (!selectCurrent) return;
+    if (!selectCurrent || draftModesRef.current.has(targetMode)) return;
     const currentId = activeSessionIdsRef.current[targetMode];
     const nextId = listed.some((session) => session.id === currentId) ? currentId : listed[0]?.id;
     if (nextId) {
@@ -1356,6 +1360,8 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     const targetMode = mode;
     const store = chatStore();
     if (!store) return;
+    draftModesRef.current.add(targetMode);
+    ++sessionSelectionGeneration.current;
 
     // 点“新建”不真正创建 session，只清空当前模式的状态并回到欢迎页。
     // 工作区保留：如果当前 session 已绑定项目，新任务继续在该项目下创建；
@@ -1834,16 +1840,29 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   const navToggleCollapsed = useCallback(() => {
     pageRef.current?.classList.toggle("is-collapsed");
   }, []);
+  const closeMobileSidebar = () => {
+    if (window.__cyreneWeb && window.matchMedia("(max-width: 760px)").matches) pageRef.current?.classList.add("is-collapsed");
+  };
+  useEffect(() => {
+    if (!window.__cyreneWeb) return;
+    const media = window.matchMedia("(max-width: 760px)");
+    const collapse = () => { if (media.matches) pageRef.current?.classList.add("is-collapsed"); };
+    collapse(); media.addEventListener("change", collapse);
+    return () => media.removeEventListener("change", collapse);
+  }, []);
   const navModeChange = useCallback((nextMode: string) => {
     if (isConversationMode(nextMode)) setMode(nextMode);
   }, []);
   const navNewTask = useCallback(() => {
+    closeMobileSidebar();
     void navActionsRef.current.createNewTask();
   }, []);
   const navTogglePanel = useCallback((panel: ChatPagePanel) => {
+    closeMobileSidebar();
     setActivePanel((current) => current === panel ? null : panel);
   }, []);
   const navSelectSession = useCallback((sessionId: string, targetMode?: ConversationMode) => {
+    closeMobileSidebar();
     setActivePanel(null);
     if (targetMode && targetMode !== activeModeRef.current) setMode(targetMode);
     const modeToSelect = targetMode ?? activeModeRef.current;
@@ -1876,6 +1895,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
 
   return (
     <div ref={pageRef} className="cy-page cy-page--chat">
+      {window.__cyreneWeb && <button type="button" className="cy-web-mobile-backdrop" aria-label={t("ui.toggleSidebar")} onClick={() => pageRef.current?.classList.add("is-collapsed")} />}
       <ChatPageNavigation
         activePanel={activePanel}
         mode={mode}
@@ -1908,7 +1928,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
         // 拖动条命中区外溢到两侧（视觉条只有 12px，命中区鼠标 24px / 触屏 33px）
         resizeTargetMinimumSize={{ coarse: 33, fine: 24 }}
       >
-        <Panel id="chat" minSize={480} className="cy-dock-body">
+        <Panel id="chat" minSize={window.__cyreneWeb ? "25%" : 480} className="cy-dock-body">
       <main
         ref={workspaceRef}
         className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""}`}
@@ -1931,6 +1951,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
         {/* 白色工作区右上角：浏览器入口与右侧面板开关；工具/技能等面板页不显示。 */}
         {!activePanel && (
           <span className="cy-inspector-toggle-float">
+            {mode === "learn" && activeSessionId && <LearnExamsMenu key={activeSessionId} conversationId={activeSessionId} onOpened={openBrowserTab} />}
             {activeSession?.workspaceBinding && activeSessionId && (
               <>
                 <OpenWorkspaceMenu sessionId={activeSessionId} />
@@ -2185,7 +2206,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
         {inspectorTabIds.length > 0 && (
           <>
             <Separator className="cy-dock-separator" />
-            <Panel id="inspector" defaultSize="45" minSize={320} maxSize="70%" className="cy-dock-body">
+            <Panel id="inspector" defaultSize="45%" minSize={320} maxSize="70%" className="cy-dock-body">
               <ChatPageInspector
                 sessionId={activeSessionId}
                 workspaceRoot={activeSession?.workspaceBinding?.workspaceRoot}

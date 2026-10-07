@@ -316,8 +316,8 @@ const callApi = {
     ipcRenderer.on(IPC.CALL_ASR_RESULT, handler);
     return () => ipcRenderer.removeListener(IPC.CALL_ASR_RESULT, handler);
   },
-  onTtsAudio: (callback: (data: { base64: string; text?: string }) => void) => {
-    const handler = (_event: unknown, data: { base64: string; text?: string }) => callback(data);
+  onTtsAudio: (callback: (data: { base64: string; text?: string; format?: "wav" | "mp3" | "pcm" }) => void) => {
+    const handler = (_event: unknown, data: { base64: string; text?: string; format?: "wav" | "mp3" | "pcm" }) => callback(data);
     ipcRenderer.on(IPC.CALL_TTS_AUDIO, handler);
     return () => ipcRenderer.removeListener(IPC.CALL_TTS_AUDIO, handler);
   },
@@ -402,6 +402,7 @@ const settingsApi = {
   addMcpServer: (config: unknown) => ipcRenderer.invoke(IPC.MCP_ADD_SERVER, config),
   removeMcpServer: (serverId: string) => ipcRenderer.invoke(IPC.MCP_REMOVE_SERVER, serverId),
   listMcpServers: () => ipcRenderer.invoke(IPC.MCP_LIST_SERVERS),
+  reconnectMcpServer: (serverId: string) => ipcRenderer.invoke(IPC.MCP_RECONNECT_SERVER, serverId),
   listMcpServerConfigs: () => ipcRenderer.invoke(IPC.MCP_LIST_SERVER_CONFIGS),
   // 多渠道（微信/飞书/QQ/QQ 机器人）
   channelsGetConfig: () => ipcRenderer.invoke(IPC.CHANNELS_GET_CONFIG),

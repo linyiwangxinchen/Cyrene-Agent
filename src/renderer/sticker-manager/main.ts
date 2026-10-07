@@ -1,3 +1,4 @@
+import "../web/embedded-host";
 import "../ui/base.css";
 import "./style.css";
 import "../ui/theme";

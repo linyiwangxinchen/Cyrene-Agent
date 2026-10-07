@@ -44,6 +44,7 @@ import { Archive, ScanLine } from "lucide-react";
 import type { BrowserElementSelection } from "../../../../../shared/browser-panel-types";
 import { Marker, MarkerContent, MarkerIcon } from "../../../components/ui/marker";
 import { VirtualChatMessageList } from "./VirtualChatMessageList";
+import { useChatScrollFollow } from "./useChatScrollFollow";
 import { AttachmentImage } from "./AttachmentImage";
 import { GeneratedImageAttachments } from "./GeneratedImageAttachments";
 import { MailDraftCard } from "./MailDraftCard";
@@ -1441,38 +1442,16 @@ export function ChatMessageList({
       setEditDraft("");
     });
   }, [editDraft, editingMessageId, onEditLastUserMessage, revisionBusy]);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const isNearBottomRef = useRef(true);
-
-  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
-    const el = containerRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior });
-  }, []);
+  const { containerRef, contentRef, isNearBottomRef, scrollToBottom, updateScrollState } = useChatScrollFollow({
+    conversationId, revision: messages,
+    latestUserId: messages.findLast((message) => message.role === "user")?.id,
+    onVisibilityChange: onScrollToBottomVisibilityChange,
+  });
 
   // 向父组件注册滚动到底部的回调
   useEffect(() => {
     onRegisterScrollToBottom?.(scrollToBottom);
   }, [onRegisterScrollToBottom, scrollToBottom]);
-
-  const updateScrollState = useCallback(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const nearBottom = distance < 100;
-    isNearBottomRef.current = nearBottom;
-    onScrollToBottomVisibilityChange?.(!nearBottom);
-  }, [onScrollToBottomVisibilityChange]);
-
-  // 打开/切换会话时滚动到底部
-  useEffect(() => {
-    scrollToBottom("auto");
-    // 内容渲染后再次兜底滚动
-    const timer = window.setTimeout(() => scrollToBottom("auto"), 100);
-    isNearBottomRef.current = true;
-    onScrollToBottomVisibilityChange?.(false);
-    return () => window.clearTimeout(timer);
-  }, [conversationId, onScrollToBottomVisibilityChange, scrollToBottom]);
 
   // roles 不闭包 lastTurn（footer 动作组件经 LastTurnIdsContext 读取）：流式阶段边界
   // （推理结束/正文开始/运行结束）lastTurn 在 null 与非 null 间切换是真实值变化，若进入
@@ -1513,13 +1492,16 @@ export function ChatMessageList({
 
   useEffect(() => {
     let active = true;
-    void window.chat?.getEnabledStickers?.().then((stickers) => {
+    const refresh = () => { void window.chat?.getEnabledStickers?.().then((stickers) => {
       if (active) setEnabledStickers(stickers);
     }).catch(() => {
       if (active) setEnabledStickers([]);
-    });
+    }); };
+    refresh();
+    const off = window.chat?.onStickersChanged?.(refresh);
     return () => {
       active = false;
+      off?.();
     };
   }, []);
 
@@ -1556,6 +1538,7 @@ export function ChatMessageList({
             aria-live="polite"
             onScroll={updateScrollState}
           >
+            <div ref={contentRef} className="cy-message-list__content">
             {channelConversationLabel && (
               <div className="cy-message-list__channel-context" role="note" aria-label={channelConversationLabel}>
                 <span className="cy-message-list__channel-dot" aria-hidden="true" />
@@ -1572,8 +1555,9 @@ export function ChatMessageList({
                 layoutKey={channelConversationLabel}
               />
             ) : (
-              <Bubble.List items={items} role={roles} autoScroll />
+              <Bubble.List items={items} role={roles} autoScroll={false} styles={{ root: { minHeight: 0, maxHeight: "none" }, scroll: { maxHeight: "none", overflowY: "visible" } }} />
             )}
+            </div>
           </div>
         </LastTurnIdsContext.Provider>
       </FileLinkContext.Provider>

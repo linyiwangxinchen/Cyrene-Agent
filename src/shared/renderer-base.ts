@@ -26,7 +26,7 @@ function computeRendererBase(): string {
   // 生产模式下 vite base 是 "./"，子目录窗口需要往上走一级
   // 检测：如果 root 末尾是 react/ sidebar/ tasks/ settings/ call/ sticker-manager/，往上走
   if (viteBase === "./") {
-    const subDirs = ["react/", "sidebar/", "tasks/", "settings/", "call/", "sticker-manager/"];
+    const subDirs = ["web/", "react/", "sidebar/", "tasks/", "settings/", "call/", "call-react/", "music/", "toast/", "sticker-manager/"];
     for (const sub of subDirs) {
       if (root.endsWith("/" + sub)) {
         root = root.replace(/[^/]+\/$/, "");

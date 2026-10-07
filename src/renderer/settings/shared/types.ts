@@ -242,6 +242,7 @@ export interface MemorySummaryPayload {
  * 与主进程 McpServerConfig 对应（effectKindOverrides 等高级字段对 UI 不可见）。
  */
 export interface McpServerConfigView {
+  effectKindOverrides?: Record<string, "read" | "mutation" | "verification" | "external_side_effect" | "unknown">;
   id: string;
   name: string;
   transport: "stdio" | "sse" | "http";
@@ -315,6 +316,7 @@ export interface SettingsApi {
   addMcpServer?: (config: McpServerConfigView) => Promise<{ ok: boolean; toolIds?: string[]; error?: string }>;
   removeMcpServer?: (serverId: string) => Promise<{ ok: boolean; error?: string }>;
   listMcpServers?: () => Promise<Array<{ id: string; name: string; connected: boolean; toolCount: number; toolIds: string[] }>>;
+  reconnectMcpServer?: (id: string) => Promise<{ ok: boolean; error?: string; toolIds?: string[] }>;
   listMcpServerConfigs?: () => Promise<McpServerConfigView[]>;
   getPermissionLevel?: () => Promise<{ level: "read-only" | "scoped" | "per-action" | "full" }>;
   setPermissionLevel?: (level: string) => Promise<{ ok: boolean; level?: string; error?: string }>;
@@ -361,6 +363,7 @@ export interface SettingsApi {
   onChannelsWechatQrcode: (callback: (dataUrl: string) => void) => (() => void) | void;
   onChannelsWechatLoginDone: (callback: (payload: { ok: boolean; botId?: string; error?: string }) => void) => (() => void) | void;
   channelsWechatLoginStart: () => Promise<{ ok: boolean; error?: string }>;
+  channelsWechatLoginCancel: () => Promise<{ ok: boolean }>;
   channelsGetStatus: () => Promise<Record<string, { phase?: string; message?: string }>>;
   onChannelsStatusChanged: (callback: (status: unknown) => void) => (() => void) | void;
   beginScreenshotHotkeyCapture: () => Promise<boolean>;

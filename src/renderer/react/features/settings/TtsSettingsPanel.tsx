@@ -1,3 +1,4 @@
+import { WebTtsPreview } from "../../../web/WebTtsPreview";
 import { useEffect, useState } from "react";
 import { Alert, Button, Input } from "antd";
 import { AudioLines, Cloud, FileAudio, Headphones, Laptop, ListMusic, Mic2, Volume2, WandSparkles } from "lucide-react";
@@ -138,6 +139,9 @@ function readValues(raw: Record<string, unknown>): TtsValues {
 }
 
 function playAudio(base64: string, format: "wav" | "mp3" = "mp3") {
+  if ((window as any).__cyreneWeb) {
+    window.dispatchEvent(new CustomEvent("cyrene:web-tts-preview", { detail: { base64, format } })); return;
+  }
   const bytes = Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
   const url = URL.createObjectURL(new Blob([bytes], { type: format === "wav" ? "audio/wav" : "audio/mp3" }));
   const audio = new Audio(url);
@@ -390,6 +394,7 @@ export function TtsSettingsPanel() {
   return <div className="cy-tts-page">
     <h1>{t("settingsPage.tts.title")}</h1>
     <p className="cy-settings-intro">{t("settingsPage.tts.description")}</p>
+    {(window as any).__cyreneWeb && <WebTtsPreview />}
     {error && <Alert className="cy-settings-alert" type="error" showIcon message={error} closable onClose={() => setError("")} />}
     {loading ? <div className="cy-asr-loading" role="status" aria-label={t("settingsPage.tts.loading")}><AudioLines size={18} aria-hidden="true" /></div> : <>
       <section className="cy-settings-section">

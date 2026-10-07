@@ -1,3 +1,4 @@
+import "../web/embedded-host";
 import "./message-typography";
 import { normalizeUiTheme, resolveUiTheme, type UiTheme, type UiThemeChoice } from "../../shared/ui-theme";
 

@@ -54,6 +54,7 @@ interface OpenWorkspaceMenuProps {
 
 export function OpenWorkspaceMenu({ sessionId }: OpenWorkspaceMenuProps) {
   const { t } = useTranslation();
+  const web = window.__cyreneWeb === true;
   const [open, setOpen] = useState(false);
   // null = 尚未拉取（菜单显示检测中提示）
   const [apps, setApps] = useState<OpenInAppEntry[] | null>(null);
@@ -112,7 +113,7 @@ export function OpenWorkspaceMenu({ sessionId }: OpenWorkspaceMenuProps) {
   const currentName = current ? displayName(current) : t("openWorkspace.appExplorer");
   const title = phase === "error"
     ? t("openWorkspace.openError")
-    : t("openWorkspace.tooltip", { app: currentName });
+    : web ? t("openWorkspace.serverBrowse") : t("openWorkspace.tooltip", { app: currentName });
 
   const launch = (appId: string): void => {
     if (inFlight.current) return;
@@ -154,7 +155,7 @@ export function OpenWorkspaceMenu({ sessionId }: OpenWorkspaceMenuProps) {
       >
         <AppIcon app={current} size={16} />
       </button>
-      <button
+      {!web && <button
         type="button"
         className={`cy-open-workspace__chevron ${open ? "is-open" : ""}`}
         onClick={() => setOpen((value) => !value)}
@@ -167,7 +168,7 @@ export function OpenWorkspaceMenu({ sessionId }: OpenWorkspaceMenuProps) {
           strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M6 9l6 6 6-6" />
         </svg>
-      </button>
+      </button>}
       {open && (
         <div className="cy-open-workspace__menu" role="menu">
           {apps === null && <div className="cy-open-workspace__hint">{t("openWorkspace.detecting")}</div>}
