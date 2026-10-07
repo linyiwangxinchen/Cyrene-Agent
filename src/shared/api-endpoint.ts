@@ -6,6 +6,16 @@ export interface ResolvedApiEndpoint {
   appendedSuffix: string | null;
 }
 
+/** Correct only MiniMax's known preset bases, preserving custom gateways. */
+export function alignPresetApiBase(baseUrl: string, transport: ApiTransport): string {
+  try {
+    const url = new URL(baseUrl);
+    if (!["api.minimaxi.com", "api.minimax.io", "api.minimax.cn"].includes(url.hostname) || url.search || url.hash) return baseUrl;
+    if (!["/v1", "/anthropic", "/anthropic/v1"].includes(url.pathname.replace(/\/+$/, ""))) return baseUrl;
+    return `${url.origin}${transport === "anthropic" ? "/anthropic" : "/v1"}`;
+  } catch { return baseUrl; }
+}
+
 /**
  * 把设置页填写的 Base URL 解析成实际请求地址。
  * Main 进程和 Settings UI 必须共用这一实现，避免提示与真实请求产生漂移。

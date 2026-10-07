@@ -22,6 +22,7 @@ import type { syncPlaywrightMcp, syncFilesystemMcp } from "../sync-mcp-builtin";
 import { broadcastChatsChanged } from "../chats/chats-ipc";
 import { normalizeMemoryMode, type MemoryMode } from "../memory/memory-mode";
 import { getEffectiveUiTheme, watchSystemUiTheme } from "../system-ui-theme";
+import { getModelInstallStatus } from "../rag/model-status";
 
 export interface SettingsIpcDependencies {
   get windowManager(): WindowManager | null;
@@ -125,18 +126,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
 
   ipc.handle(IPC.UI_THEME_RADIUS_GET, () => getGeneralSettings().uiThemeRadius);
 
-  ipc.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSettings>) => {
-    const saved = saveGeneralSettings(settings);
-    if ("proactiveChatMode" in settings || "proactiveDeliveryTarget" in settings) {
-      proactiveLifecycle.getProactiveChatService()?.invalidate();
-    }
-    return saved;
-  });
-
-  // TTS 面板调用的通用设置读写入口（历史命名遗留）
-  ipc.handle(IPC.TTS_LOAD_SETTINGS, () => getGeneralSettings());
-
-  ipc.handle(IPC.TTS_SAVE_SETTINGS, async (_event, tts: Partial<GeneralSettings>) => {
+  async function saveGeneralWithEffects(tts: Partial<GeneralSettings>) {
     const before = getGeneralSettings();
     const saved = saveGeneralSettings({ ...before, ...tts });
 
@@ -160,13 +150,16 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     }
 
     // 主动聊天总开关变化时使现有评估失效（频率档位由 ProactiveChat 内部判定，无需重启）。
-    if ("proactiveChatMode" in tts) {
+    if ("proactiveChatMode" in tts || "proactiveDeliveryTarget" in tts) {
       proactiveLifecycle.getProactiveChatService()?.invalidate();
     }
 
-    // 返回不含密钥明文的副本（前端展示用）
     return saved;
-  });
+  }
+  ipc.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSettings>) => saveGeneralWithEffects(settings));
+  // Retain the historical TTS settings API with the same side effects.
+  ipc.handle(IPC.TTS_LOAD_SETTINGS, () => getGeneralSettings());
+  ipc.handle(IPC.TTS_SAVE_SETTINGS, (_event, settings: Partial<GeneralSettings>) => saveGeneralWithEffects(settings));
 
   ipc.handle(IPC.SETTINGS_OPEN_CUSTOM_STYLE_PROMPT, async () => {
     const filePath = ensureCustomStylePrompt();
@@ -214,7 +207,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     return saved;
   });
 
-  ipc.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: VendorConfig) => testVendorConnection(cfg));
+  ipc.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: VendorConfig) => testVendorConnection({ ...cfg, testTimeoutMs: getTimeoutSettings().testTimeout }));
   ipc.handle(IPC.SETTINGS_PREVIEW_REASONING, (_event, cfg: VendorConfig) => {
     const request = getAdapterForConfig(cfg).buildRequest({
       model: cfg.model,
@@ -284,7 +277,6 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   ipc.handle(IPC.RERANKER_GET_STATUS, () => getRerankerInstallStatus());
 
   ipc.handle(IPC.MODEL_GET_INSTALL_STATUS, () => {
-    const { getModelInstallStatus } = require("../rag/model-status");
     return getModelInstallStatus();
   });
 

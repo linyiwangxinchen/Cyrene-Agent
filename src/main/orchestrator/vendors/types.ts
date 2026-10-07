@@ -23,6 +23,8 @@ export type {
 
 /** 调度层传入适配器的厂商运行时配置（结构兼容 main/index.ts 的 ModelSettings）。 */
 export interface VendorConfig {
+  /** Host-provided connection-test timeout; adapters also run in headless Node. */
+  testTimeoutMs?: number;
   provider: string; // 厂商显示名，如 "MiniMax（稀宇科技）"，与 capability 表的 displayName 对齐
   baseUrl: string;
   model: string;

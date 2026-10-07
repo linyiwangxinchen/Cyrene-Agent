@@ -22,7 +22,7 @@ import { authHeaderFor } from "./auth";
 import { resolveEffectiveReasoning } from "../../../shared/reasoning";
 import { applyManualReasoningBody, normalizeManualReasoningConfig, resolveConfiguredReasoningCapability } from "../../../shared/manual-reasoning";
 import { applyReasoningPreference } from "./reasoning";
-import { getTimeoutSettings } from "../../timeout-manager";
+import { DEFAULT_TIMEOUT_SETTINGS } from "../../../shared/timeout-types";
 import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./tool-choice-policy";
 import { getVendorRuntimeSettings } from "./runtime-settings";
 import { resolveApiEndpoint } from "../../../shared/api-endpoint";
@@ -417,7 +417,7 @@ export class ResponsesAdapter implements ChatVendorAdapter {
   async testConnection(cfg: VendorConfig): Promise<TestConnectionResult> {
     const start = Date.now();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), getTimeoutSettings().testTimeout);
+    const timer = setTimeout(() => controller.abort(), cfg.testTimeoutMs ?? DEFAULT_TIMEOUT_SETTINGS.testTimeout);
     try {
       const req: ChatRequest = {
         model: cfg.model,
