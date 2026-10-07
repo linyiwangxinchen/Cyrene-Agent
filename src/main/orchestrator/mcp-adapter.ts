@@ -4,7 +4,10 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { createHash } from "node:crypto";
 import { ToolDefinition, toolRegistry, type ToolEffectKind } from "./tools/registry/tool-registry";
+import { checkExecutionPolicy } from "./shell-execution-policy";
+import { ToolExecutionError } from "./tools/registry/tool-execution-error";
 
 const LOG_PREFIX = "[MCP Adapter]";
 
@@ -71,7 +74,9 @@ function resolveMcpEffectKind(
  * 连接一个 MCP server，发现其工具并注册到 ToolRegistry。
  * 返回注册的工具 ID 列表。
  */
-export async function connectMcpServer(config: McpServerConfig): Promise<string[]> {
+export async function connectMcpServer(config: McpServerConfig, options: { signal?: AbortSignal } = {}): Promise<string[]> {
+  options.signal?.throwIfAborted();
+  await disconnectMcpServer(config.id);
   console.log(LOG_PREFIX, "连接 MCP server:", config.name, "(" + config.id + ")");
 
   let transport: Transport;
@@ -113,7 +118,19 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   );
 
   try {
-    await client.connect(transport);
+    // SDK request timeouts start after transport.start(); SSE can stall before that.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: (() => void) | undefined;
+    try {
+      await Promise.race([
+        client.connect(transport, { timeout: 20_000, signal: options.signal }),
+        new Promise<never>((_resolve, reject) => {
+          const stop = (message: string) => { void client.close().catch(() => {}); reject(new Error(message)); };
+          timer = setTimeout(() => stop("MCP 连接超时（20 秒）"), 20_000);
+          abort = () => stop("MCP 连接已取消"); options.signal?.addEventListener("abort", abort, { once: true });
+        }),
+      ]);
+    } finally { clearTimeout(timer); if (abort) options.signal?.removeEventListener("abort", abort); }
     console.log(LOG_PREFIX, "已连接到", config.name);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -136,7 +153,7 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   }> = [];
 
   try {
-    const result = await client.listTools();
+    const result = await client.listTools(undefined, { timeout: 20_000, signal: options.signal });
     mcpTools = result.tools as Array<{
       name: string;
       description?: string;
@@ -160,7 +177,9 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   for (const mt of mcpTools) {
     // 用短横线拼接，不用冒号——Kimi 等厂商 function.name 正则不允许冒号
     // （Kimi: ^[a-zA-Z_][a-zA-Z0-9-_]$）。短横线所有厂商都接受。
-    const toolId = config.id + "-" + mt.name;
+    const rawId = config.id + "-" + mt.name;
+    const toolId = /^[a-zA-Z0-9_-]{1,64}$/.test(rawId) ? rawId
+      : rawId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 55) + "-" + createHash("sha256").update(rawId).digest("hex").slice(0, 8);
 
     // 如果已存在同名工具，跳过
     if (toolRegistry.getById(toolId)) {
@@ -180,20 +199,25 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       description: mt.description || mt.name,
       enabled: true,
       effectKind: resolvedEffectKind,
+      risk: resolvedEffectKind === "read" ? "fs-read" : "fs-write",
       inputSchema: {
         type: "object",
         properties: mt.inputSchema?.properties as Record<string, { type: string; description: string }> || {},
         required: mt.inputSchema?.required,
       },
-      // TODO: 未来若 MCP 工具需要 ToolContext，在此将 ctx 映射为 MCP 协议 arguments 的隐藏字段。
-      // 当前 MCP 工具 execute 签名不带 ctx，按需接入时改签名为 (args, ctx?) 并在这里处理。
-      execute: async (args: Record<string, unknown>) => {
+      needsContext: true,
+      execute: async (args, ctx) => {
+        // Both the Harness and legacy callers reach this boundary. Unknown MCP
+        // effects must be refused before any remote side effect can occur.
+        const policy = checkExecutionPolicy(resolvedEffectKind, "none", toolId);
+        if (!policy.allowed) throw new ToolExecutionError(policy.errorCode!, policy.message!, "permission_denied");
+        ctx?.signal?.throwIfAborted();
         console.log(LOG_PREFIX, "调用工具:", toolId, JSON.stringify(args));
         try {
           const result = await client.callTool({
             name: mt.name,
             arguments: args,
-          });
+          }, undefined, { signal: ctx?.signal });
           // 提取文本内容
           const texts: string[] = [];
           if (result.content && Array.isArray(result.content)) {
@@ -232,6 +256,12 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     toolIds: registeredIds,
   };
   mcpServerStates.set(config.id, state);
+  client.onclose = () => {
+    if (mcpServerStates.get(config.id) !== state) return;
+    state.connected = false;
+    for (const toolId of state.toolIds) toolRegistry.unregister(toolId);
+    state.toolIds = [];
+  };
 
   console.log(LOG_PREFIX, "MCP server 就绪:", config.name, "(" + registeredIds.length + " 个工具)");
   return registeredIds;

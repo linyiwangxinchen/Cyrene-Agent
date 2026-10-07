@@ -121,7 +121,7 @@ describe("initMcpManager 启动自动连接", () => {
   });
 
   it("单个连接失败不阻塞其余配置", async () => {
-    writeConfigFile([{ id: "bad" }, { id: "good" }]);
+    writeConfigFile([{ ...stdioConfig, id: "bad" }, { ...stdioConfig, id: "good" }]);
     adapterMocks.connectMcpServer
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValueOnce([]);

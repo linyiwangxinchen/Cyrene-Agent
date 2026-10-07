@@ -8,7 +8,7 @@ import { getStickerManagerConfig, setStickerEnabled } from "../orchestrator/stic
 import { addUserSticker, deleteUserSticker } from "../sticker-storage";
 import { loadMemoryPanelData } from "./panel";
 import { CYRENE_AVATAR_EXTENSIONS, findCyreneAvatarPath, getCyreneAvatarPath, loadUserProfile, saveUserProfile, getAvatarPath } from "../settings-store";
-import { addMcpServer, removeMcpServer, listMcpServers, listMcpServerConfigs } from "../orchestrator/mcp-manager";
+import { addMcpServer, reconnectMcpServer, removeMcpServer, listMcpServers, listMcpServerConfigs } from "../orchestrator/mcp-manager";
 import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import { loadGeneralSettings, saveGeneralSettings } from "../settings/settings-facade";
@@ -326,11 +326,13 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
 
   // MCP servers
   ipc.handle(IPC.MCP_ADD_SERVER, async (_event, config: unknown) => {
-    console.log("[MCP IPC] add-server:", JSON.stringify(config).slice(0, 200));
+    console.log("[MCP IPC] add-server:", (config as { id?: string })?.id);
     const result = await addMcpServer(config as Parameters<typeof addMcpServer>[0]);
     console.log("[MCP IPC] add-server result:", JSON.stringify(result));
     return result;
   });
+
+  ipc.handle(IPC.MCP_RECONNECT_SERVER, (_event, serverId: string) => reconnectMcpServer(serverId));
 
   ipc.handle(IPC.MCP_REMOVE_SERVER, async (_event, serverId: string) => {
     console.log("[MCP IPC] remove-server:", serverId);

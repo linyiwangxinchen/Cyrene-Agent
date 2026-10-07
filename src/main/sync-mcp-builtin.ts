@@ -46,8 +46,8 @@ export function buildPlaywrightMcpConfig(): McpServerConfig {
     name: "Playwright 浏览器",
     transport: "stdio",
     command: process.execPath,
-    args: [resolvePlaywrightMcpCliPath(), "--isolated", "--headless", "--browser", "msedge"],
-    env: { ELECTRON_RUN_AS_NODE: "1" },
+    args: [resolvePlaywrightMcpCliPath(), "--isolated", "--headless", "--browser", process.env.CYRENE_HEADLESS === "1" ? "chromium" : "msedge"],
+    env: process.env.CYRENE_HEADLESS === "1" ? {} : { ELECTRON_RUN_AS_NODE: "1" },
   };
 }
 
@@ -75,7 +75,7 @@ export function buildFilesystemMcpConfig(allowedDir: string): McpServerConfig {
     transport: "stdio",
     command: process.execPath,
     args: [resolveFilesystemMcpCliPath(), allowedDir],
-    env: { ELECTRON_RUN_AS_NODE: "1" },
+    env: process.env.CYRENE_HEADLESS === "1" ? {} : { ELECTRON_RUN_AS_NODE: "1" },
   };
 }
 

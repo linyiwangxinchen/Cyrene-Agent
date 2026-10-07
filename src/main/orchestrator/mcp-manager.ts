@@ -6,6 +6,29 @@ import { connectMcpServer, disconnectMcpServer, getMcpServerStates, McpServerCon
 import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[MCP Manager]";
+let mutations: Promise<unknown> = Promise.resolve();
+function mutate<T>(action: () => Promise<T>): Promise<T> {
+  const next = mutations.then(action, action); mutations = next.catch(() => undefined); return next;
+}
+
+
+/** Validate before spawning a process or opening a remote connection. */
+export function validateMcpConfig(config: McpServerConfig): void {
+  if (!config || typeof config !== "object" || typeof config.id !== "string" || !/^[a-zA-Z0-9_-]{1,48}$/.test(config.id) || typeof config.name !== "string" || !config.name.trim()) throw new Error("MCP 名称或 ID 无效（ID 只能包含字母、数字、下划线和短横线）");
+  if (!["stdio", "http", "sse"].includes(config.transport)) throw new Error("不支持的 MCP 连接类型");
+  if (config.transport === "stdio") {
+    if (typeof config.command !== "string" || !config.command.trim()) throw new Error("请填写 MCP 启动命令");
+    if (config.args !== undefined && (!Array.isArray(config.args) || config.args.some(arg => typeof arg !== "string"))) throw new Error("MCP args 必须是字符串数组");
+    if (config.cwd !== undefined && (typeof config.cwd !== "string" || !path.isAbsolute(config.cwd) || !fs.statSync(config.cwd).isDirectory())) throw new Error("MCP 工作目录必须是服务器上的绝对目录");
+  } else {
+    const url = new URL(config.url || "");
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error("MCP URL 必须使用 HTTP 或 HTTPS");
+  }
+  for (const record of [config.env, config.headers]) {
+    if (record !== undefined && (!record || typeof record !== "object" || Array.isArray(record) || Object.values(record).some(value => typeof value !== "string"))) throw new Error("MCP 环境变量和请求头必须是字符串对象");
+  }
+  if (config.effectKindOverrides && Object.values(config.effectKindOverrides).some(value => !["read", "mutation", "verification", "external_side_effect", "unknown"].includes(value))) throw new Error("MCP 工具 effectKind 无效");
+}
 
 function getConfigPath(): string {
   const userDataPath = app.getPath("userData");
@@ -34,10 +57,14 @@ function saveConfigs(configs: McpServerConfig[]): void {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(getConfigPath(), JSON.stringify(configs, null, 2), "utf-8");
+    const temporary = getConfigPath() + ".tmp";
+    fs.writeFileSync(temporary, JSON.stringify(configs, null, 2), { encoding: "utf-8", mode: 0o600 });
+    fs.renameSync(temporary, getConfigPath());
+    if (process.platform !== "win32") fs.chmodSync(getConfigPath(), 0o600);
     console.log(LOG_PREFIX, "已保存 " + configs.length + " 个 MCP server 配置");
   } catch (err) {
     console.error(LOG_PREFIX, "保存配置失败:", (err as Error).message);
+    throw err;
   }
 }
 
@@ -96,7 +123,8 @@ export async function initMcpManager(options: { signal?: AbortSignal } = {}): Pr
       break;
     }
     try {
-      await connectMcpServer(config);
+      validateMcpConfig(config);
+      await mutate(() => signal ? connectMcpServer(config, { signal }) : connectMcpServer(config));
       connected++;
       // 连接完成后再核对一次信号：退出中则立刻断开这条迟到连接
       if (signal?.aborted) {
@@ -124,23 +152,37 @@ export async function addMcpServer(config: McpServerConfig): Promise<{
   toolIds?: string[];
   error?: string;
 }> {
-  console.log(LOG_PREFIX, "添加 MCP server:", config.name);
+  return mutate(async () => {
+    try { validateMcpConfig(config); } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+    console.log(LOG_PREFIX, "添加 MCP server:", config.name);
 
-  // 检查是否已存在
-  const configs = loadConfigs();
-  if (configs.some(c => c.id === config.id)) {
-    return { ok: false, error: "已存在相同 ID 的 MCP server: " + config.id };
-  }
+    // 检查是否已存在
+    const configs = loadConfigs();
+    if (configs.some(c => c.id === config.id)) {
+      return { ok: false, error: "已存在相同 ID 的 MCP server: " + config.id };
+    }
 
-  try {
-    const toolIds = await connectMcpServer(config);
-    configs.push(config);
-    saveConfigs(configs);
-    return { ok: true, toolIds };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: msg };
-  }
+    try {
+      const toolIds = await connectMcpServer(config);
+      const current = loadConfigs();
+      if (!current.some(entry => entry.id === config.id)) current.push(config);
+      saveConfigs(current);
+      return { ok: true, toolIds };
+    } catch (err) {
+      await disconnectMcpServer(config.id);
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
+  });
+}
+
+export async function reconnectMcpServer(serverId: string): Promise<{ ok: boolean; toolIds?: string[]; error?: string }> {
+  return mutate(async () => {
+    const config = loadConfigs().find(entry => entry.id === serverId);
+    if (!config) return { ok: false, error: "MCP 配置不存在" };
+    try { validateMcpConfig(config); await disconnectMcpServer(serverId); return { ok: true, toolIds: await connectMcpServer(config) }; }
+    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+  });
 }
 
 /**
@@ -152,13 +194,15 @@ export async function addMcpServer(config: McpServerConfig): Promise<{
  * 且永远无法修复。
  */
 export async function removeMcpServer(serverId: string): Promise<{ ok: boolean; error?: string }> {
-  console.log(LOG_PREFIX, "移除 MCP server:", serverId);
+  return mutate(async () => {
+    console.log(LOG_PREFIX, "移除 MCP server:", serverId);
 
-  await disconnectMcpServer(serverId);
+    await disconnectMcpServer(serverId);
 
-  const configs = loadConfigs().filter(c => c.id !== serverId);
-  saveConfigs(configs);
-  return { ok: true };
+    const configs = loadConfigs().filter(c => c.id !== serverId);
+    saveConfigs(configs);
+    return { ok: true };
+  });
 }
 
 /**

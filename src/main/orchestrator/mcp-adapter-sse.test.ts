@@ -156,6 +156,7 @@ describe("mcp-adapter transport split", () => {
 				listTools: vi.fn().mockResolvedValue({
 					tools: [{
 						name: "explode",
+						annotations: { readOnlyHint: true },
 						description: "always fails",
 						inputSchema: { type: "object", properties: { value: { type: "string" } } },
 					}],
@@ -175,7 +176,7 @@ describe("mcp-adapter transport split", () => {
 		const tool = toolRegistry.getById("test-error-explode");
 
 		await expect(tool?.execute({ value: "x" })).rejects.toThrow("E_MCP_TOOL_FAILED");
-		expect(callTool).toHaveBeenCalledWith({ name: "explode", arguments: { value: "x" } });
+    expect(callTool).toHaveBeenCalledWith({ name: "explode", arguments: { value: "x" } }, undefined, { signal: undefined });
 	});
 });
 
@@ -231,6 +232,7 @@ describe("mcp-adapter effectKind 推导（安全放行依据）", () => {
 		await mockClientReturning([{ name: "t", inputSchema: { type: "object", properties: {} } }]);
 		await connectMcpServer(baseConfig);
 		expect(toolRegistry.getById("ef-t")?.effectKind).toBe("unknown");
+		await expect(toolRegistry.getById("ef-t")!.execute({})).rejects.toMatchObject({ code: "E_UNKNOWN_TOOL_EFFECT", category: "permission_denied" });
 	});
 
 	it("本地 effectKindOverrides 优先级最高", async () => {
@@ -248,6 +250,31 @@ describe("mcp-adapter 连接失败清理与生命周期", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		for (const t of toolRegistry.getAllTools()) toolRegistry.unregister(t.id);
+	});
+
+	it("cancels a transport stalled before the SDK initialize request", async () => {
+		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
+		const close = vi.fn().mockResolvedValue(undefined);
+		Client.mockImplementation(function () { return { connect: vi.fn(() => new Promise(() => {})), close }; });
+		const controller = new AbortController();
+		const connection = connectMcpServer({ id: "cancel", name: "Cancel", transport: "sse", url: "https://example.com/sse" }, { signal: controller.signal });
+		const rejection = expect(connection).rejects.toThrow("取消");
+		await vi.waitFor(() => expect(Client).toHaveBeenCalled()); controller.abort(); await rejection;
+		expect(close).toHaveBeenCalled(); expect(mockSseClose).toHaveBeenCalled();
+		expect(getMcpServerStates().some(state => state.id === "cancel")).toBe(false);
+	});
+
+	it("maps long/non-ASCII tool names without collisions and forwards cancellation", async () => {
+		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
+		const callTool = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "done" }] });
+		const names = ["工具/" + "a".repeat(80), "工具/" + "a".repeat(79) + "b"];
+		Client.mockImplementation(function () { return { connect: vi.fn().mockResolvedValue(undefined), listTools: vi.fn().mockResolvedValue({ tools: names.map(name => ({ name, inputSchema: { type: "object", properties: {} }, annotations: { readOnlyHint: true } })) }), callTool, close: vi.fn().mockResolvedValue(undefined) }; });
+		const ids = await connectMcpServer({ id: "unicode", name: "Unicode", transport: "stdio", command: "node" });
+		expect(new Set(ids).size).toBe(2); for (const id of ids) expect(id).toMatch(/^[a-zA-Z0-9_-]{1,64}$/);
+		const signal = new AbortController().signal;
+		await toolRegistry.getById(ids[0])!.execute({ value: 1 }, { signal } as any);
+		expect(callTool).toHaveBeenCalledWith({ name: names[0], arguments: { value: 1 } }, undefined, { signal });
+		await disconnectMcpServer("unicode");
 	});
 
 	it("client.connect 失败时关闭 transport 并上抛错误", async () => {
@@ -284,16 +311,16 @@ describe("mcp-adapter 连接失败清理与生命周期", () => {
 		expect(close).toHaveBeenCalledTimes(1);
 	});
 
-	it("重复注册同 toolId 的工具会被跳过", async () => {
+	it("重新连接会清理旧工具再注册新实例", async () => {
 		const tools = [{ name: "dup", inputSchema: { type: "object", properties: {} } }];
 		await mockClientReturning(tools);
 		const first = await connectMcpServer({ id: "dup", name: "DUP", transport: "stdio", command: "node" });
 		expect(first).toEqual(["dup-dup"]);
 
-		// 第二次连接同 id：toolId 已存在，全部跳过
+		// 第二次连接同 id：先清理旧实例，再重新发现工具
 		await mockClientReturning(tools);
 		const second = await connectMcpServer({ id: "dup", name: "DUP", transport: "stdio", command: "node" });
-		expect(second).toEqual([]);
+		expect(second).toEqual(["dup-dup"]);
 	});
 
 	it("disconnectMcpServer 注销工具；未知的 id 返回 false", async () => {
