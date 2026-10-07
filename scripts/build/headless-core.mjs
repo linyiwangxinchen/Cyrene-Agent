@@ -11,4 +11,7 @@ await build({
   external: ['electron-updater'],
 });
 await build({ entryPoints: [path.join(root, 'src/main/knowledge-base/knowledge-index-worker.ts')], outfile: path.join(root, 'dist/headless/knowledge-index-worker.js'), bundle: true, platform: 'node', target: 'node24', format: 'cjs', packages: 'external' });
+// The bundled database client resolves its worker beside core.cjs. Ship the
+// compiled worker so production releases do not need TypeScript or esbuild.
+await build({ entryPoints: [path.join(root, 'src/main/storage/conversation-database-worker.ts')], outfile: path.join(root, 'dist/headless/conversation-database-worker.js'), bundle: true, platform: 'node', target: 'node24', format: 'cjs', packages: 'external' });
 await cp(path.join(root, 'src/main/plugin-panel'), path.join(root, 'dist/plugin-panel'), { recursive: true });

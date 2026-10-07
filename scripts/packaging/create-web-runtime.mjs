@@ -14,7 +14,7 @@ if (!relative || (!relative.startsWith('..' + path.sep) && relative !== '..' && 
 try { await access(output); throw new Error('Release directory already exists; choose a new directory'); }
 catch (error) { if (error.code !== 'ENOENT') throw error; }
 
-for (const required of ['dist/server/server/index.js', 'dist/headless/core.cjs', 'dist/headless/knowledge-index-worker.js', 'dist/plugin-panel', 'dist/renderer/web/index.html', 'dist/renderer/avatars/cyrene-avatar.png', 'prompts/chat_identity.md']) {
+for (const required of ['dist/server/server/index.js', 'dist/headless/core.cjs', 'dist/headless/knowledge-index-worker.js', 'dist/headless/conversation-database-worker.js', 'dist/plugin-panel', 'dist/renderer/web/index.html', 'dist/renderer/avatars/cyrene-avatar.png', 'prompts/chat_identity.md']) {
   await access(path.join(root, required));
 }
 // Product assets under dist/renderer are source files in the upstream repository.

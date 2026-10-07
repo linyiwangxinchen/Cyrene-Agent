@@ -15,6 +15,7 @@ import { registerCodeGitIpc } from "../../main/code-git/code-git-ipc";
 import { createGitService } from "../../main/code-git/git-service";
 import { resolveGitExecutable } from "../../main/code-git/git-executable";
 import * as chatsStore from "../../main/chats/chats-store";
+import { closeConversationDatabases } from "../../main/storage/conversation-database-client";
 import { activeConversationRegistry } from "../../main/chats/active-conversation-registry";
 import { createAgentRuntime } from "../../main/orchestrator/agent-runtime";
 import { createRuntimeStateService } from "../../main/orchestrator/runtime-state-service";
@@ -103,7 +104,7 @@ export async function startHeadlessCore() {
     scope.handle(channel, channel.startsWith("mcp:") ? async (...args: any[]) => { await restoreMcp; return listener(...args); } : listener);
   } };
   setReactChatWindow(chatWindow as any);
-  chatsStore.initialize();
+  await chatsStore.initialize();
   await initSkills();
   const runtimeStateService = createRuntimeStateService();
   const broadcast = (channel: string, ...args: unknown[]) => chatWindow.webContents.send(channel, ...args);
@@ -302,9 +303,10 @@ export async function startHeadlessCore() {
       toast.dispose();
       scheduler.stop(); proactive.stopProactiveTrigger(); momentsService.stopReactionScanner(); await browser.close(); await music.shutdown();
       await channels.shutdown(); await plugins?.stop();
-      await flushAllSummaryMemory(); await enableWikiMemoryScheduler(false); await flushRAGStore(); flushUsage();
+      await flushAllSummaryMemory(); await enableWikiMemoryScheduler(false); await flushRAGStore(); await flushUsage();
       await disposeVectorMemory();
       await lsp.disposeAll(); await git.dispose(); await knowledge.close(); ipc.dispose();
+      await closeConversationDatabases();
     },
   };
 }
