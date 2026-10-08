@@ -280,62 +280,60 @@ sudo systemd-analyze verify /etc/systemd/system/cyrene-web.service
 
 ### 5.3.1 已有 Clone 目录的原地更新
 
-如果服务器已经完成 `git clone`、依赖安装和首次构建，后续更新不需要重新安装操作系统依赖，也不需要重新 clone。以下命令在**当前源码目录根部**执行；先确认服务使用的程序目录和数据目录：
+如果服务器已经完成 `git clone`、依赖安装和首次构建，进入原来的 Clone 目录后，下面整段代码直接粘贴执行即可。它会自动检查当前目录、读取 systemd 的数据目录和浏览器目录、备份数据、拉取本仓库 `master`、重新构建并重启服务。代码假定当前分支是 `master` 且没有未提交修改；它不会删除本地修改或强制 reset：
 
 ```bash
-pwd -P
-git status --short
-sudo systemctl cat cyrene-web | grep -E 'WorkingDirectory=|ExecStart=|CYRENE_DATA_DIR=|PLAYWRIGHT_BROWSERS_PATH='
-```
+set -Eeuo pipefail
+SERVICE=cyrene-web
+APP_DIR="$(pwd -P)"
+test -f "$APP_DIR/package.json" && test -f "$APP_DIR/pnpm-lock.yaml" || { echo "请在源码/运行包根目录执行" >&2; exit 1; }
+test "$(git branch --show-current)" = master || { echo "当前分支不是 master，已停止" >&2; exit 1; }
+test -z "$(git status --porcelain)" || { echo "存在未提交修改，请先保存后再更新" >&2; git status --short; exit 1; }
+SERVICE_DIR="$(sudo systemctl show "$SERVICE" -p WorkingDirectory --value)"
+test "$SERVICE_DIR" = "$APP_DIR" || { echo "当前目录与 systemd WorkingDirectory 不一致" >&2; echo "当前: $APP_DIR"; echo "服务: $SERVICE_DIR"; exit 1; }
+SERVICE_ENV="$(sudo systemctl show "$SERVICE" -p Environment --value)"
+DATA_DIR="$(printf '%s\n' "$SERVICE_ENV" | grep -o 'CYRENE_DATA_DIR=[^ ]*' | head -n1 | cut -d= -f2- || true)"
+BROWSER_DIR="$(printf '%s\n' "$SERVICE_ENV" | grep -o 'PLAYWRIGHT_BROWSERS_PATH=[^ ]*' | head -n1 | cut -d= -f2- || true)"
+test -n "$DATA_DIR" && test -d "$DATA_DIR" || { echo "无法从 systemd 读取有效 CYRENE_DATA_DIR" >&2; exit 1; }
+DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
+BROWSER_DIR="${BROWSER_DIR:-$APP_DIR/.browsers}"
+OLD_COMMIT="$(git rev-parse HEAD)"
+BACKUP_DIR="${DATA_DIR}.backup-$(date +%Y%m%d-%H%M%S)"
+sudo cp -a -- "$DATA_DIR" "$BACKUP_DIR"
+echo "数据已备份到: $BACKUP_DIR"
 
-`git status --short` 必须为空，或者你已经确认并保存了自己的本地修改。不要用 `git reset --hard` 清掉未提交修改，也不要在正在运行的服务目录直接覆盖文件。把上一条命令显示的 `CYRENE_DATA_DIR` 复制到下面的输入中；它必须是当前正式账号、会话、模型和渠道所使用的数据目录：
-
-```bash
-read -r -p "粘贴 systemd 中 CYRENE_DATA_DIR 的值: " CYRENE_DATA_DIR
-test -d "$CYRENE_DATA_DIR" || { echo "数据目录不存在，停止更新"; exit 1; }
-CYRENE_DATA_DIR="$(cd "$CYRENE_DATA_DIR" && pwd -P)"
-CYRENE_BACKUP_DIR="../cyrene-data-backup-$(date +%Y%m%d-%H%M%S)"
-sudo cp -a -- "$CYRENE_DATA_DIR" "$CYRENE_BACKUP_DIR"
-echo "数据备份: $CYRENE_BACKUP_DIR"
-```
-
-确认备份完成后，停止服务、拉取本仓库已经验收过的 `master`，并在原目录重新构建：
-
-```bash
-sudo systemctl stop cyrene-web
-
+sudo systemctl stop "$SERVICE"
 git fetch origin --prune
 git pull --ff-only origin master
-
-# 只在锁文件允许时安装；不会下载 Electron 二进制。
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 corepack pnpm@10.33.0 install --frozen-lockfile
 corepack pnpm@10.33.0 run check:server
 corepack pnpm@10.33.0 run check:renderer
 corepack pnpm@10.33.0 run build:web
-
-# 使用原程序目录下的浏览器，缺失时才安装；已有浏览器无需重复下载。
-export PLAYWRIGHT_BROWSERS_PATH="$(pwd -P)/.browsers"
+export PLAYWRIGHT_BROWSERS_PATH="$BROWSER_DIR"
 if ! compgen -G "$PLAYWRIGHT_BROWSERS_PATH/chromium-*" > /dev/null; then
   corepack pnpm@10.33.0 exec playwright install chromium
 fi
-
 sudo systemctl daemon-reload
-sudo systemctl restart cyrene-web
-sudo systemctl status cyrene-web --no-pager -l
+sudo systemctl restart "$SERVICE"
+sudo systemctl status "$SERVICE" --no-pager -l
 curl --fail --show-error --max-time 10 http://localhost:4317/healthz
+echo "更新完成；旧版本提交: $OLD_COMMIT；数据备份: $BACKUP_DIR"
 ```
 
 如果 systemd 配置中的 `WorkingDirectory`、Node 路径或浏览器路径已经变化，不要手改旧文件，回到第 4.1 节在当前目录重新生成服务配置，再执行 `daemon-reload` 和 `restart`。如果使用 HTTPS，健康检查仍在服务器上访问 `localhost`；浏览器继续使用原来的 HTTPS 反向代理地址。重启后应强制刷新浏览器，以加载新的带 hash 的 Web 资源。
 
-`git pull --ff-only` 如果提示本地分支有分叉或未提交修改，应停止并先保存修改，不能强制 reset。若拉取后类型检查或构建失败，先保持服务停止，回退到更新前提交并重新构建：
+如果整段代码在构建或检查阶段中止，服务会保持停止状态，终端会保留更新前提交号。确认需要回退时，再粘贴下面这一段；它只切换 Git 提交，不会自动删除数据：
 
 ```bash
-git reflog -n 5
-read -r -p "输入更新前的提交号: " CYRENE_OLD_COMMIT
+set -Eeuo pipefail
+CYRENE_OLD_COMMIT="$(git reflog --format=%H -n 2 | tail -n1)"
+test -n "$CYRENE_OLD_COMMIT" || { echo "找不到更新前提交" >&2; exit 1; }
 git switch --detach "$CYRENE_OLD_COMMIT"
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 corepack pnpm@10.33.0 install --frozen-lockfile
 corepack pnpm@10.33.0 run build:web
 sudo systemctl restart cyrene-web
+curl --fail --show-error --max-time 10 http://localhost:4317/healthz
+echo "已回退到: $CYRENE_OLD_COMMIT"
 ```
 
 回退后保留刚才的数据备份；如果新版本执行过数据库迁移，必须按照 SQLite 回退说明恢复**完整数据目录**，不能只切换 Git 提交。
