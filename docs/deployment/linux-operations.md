@@ -280,7 +280,9 @@ sudo systemd-analyze verify /etc/systemd/system/cyrene-web.service
 
 ### 5.3.1 已有 Clone 目录的原地更新
 
-如果服务器已经完成 `git clone`、依赖安装和首次构建，进入原来的 Clone 目录后，下面整段代码直接粘贴执行即可。它会自动检查当前目录、读取 systemd 的数据目录和浏览器目录、备份数据、拉取本仓库 `master`、重新构建并重启服务。代码假定当前分支是 `master` 且没有未提交修改；它不会删除本地修改或强制 reset：
+如果服务器已经完成 `git clone`、依赖安装和首次构建，进入原来的 Clone 目录后，下面整段代码直接粘贴执行即可。它会自动检查当前目录、读取 systemd 的数据目录和浏览器目录、备份数据、拉取本仓库 `master`、重新构建并重启服务。代码假定当前分支是 `master`，不会删除本地修改或强制 reset。
+
+更新前的保护检查会拦截已跟踪源码/配置的修改，也会拦截普通位置的未跟踪文件。项目根目录的 `models/` 专门用于本地模型缓存，其中的未跟踪模型文件会被放行；`models/` 之外的模型建议放在 `CYRENE_DATA_DIR` 或 Clone 目录之外。`dist/renderer/models/` 属于随程序发布的产品资源，修改它仍会阻止更新。若仍然看到“存在未提交修改”，先查看 `git status --short --untracked-files=all` 输出的具体路径。
 
 ```bash
 set -Eeuo pipefail
@@ -288,7 +290,10 @@ SERVICE=cyrene-web
 APP_DIR="$(pwd -P)"
 test -f "$APP_DIR/package.json" && test -f "$APP_DIR/pnpm-lock.yaml" || { echo "请在源码/运行包根目录执行" >&2; exit 1; }
 test "$(git branch --show-current)" = master || { echo "当前分支不是 master，已停止" >&2; exit 1; }
-test -z "$(git status --porcelain)" || { echo "存在未提交修改，请先保存后再更新" >&2; git status --short; exit 1; }
+TRACKED_CHANGES="$(git diff --name-only; git diff --cached --name-only)"
+test -z "$TRACKED_CHANGES" || { echo "存在已跟踪源码/配置修改，请先保存后再更新" >&2; git status --short; exit 1; }
+UNTRACKED_BLOCKING="$(git status --porcelain=v1 --untracked-files=all | sed -n 's/^?? //p' | grep -vE '^models(/|$)' || true)"
+test -z "$UNTRACKED_BLOCKING" || { echo "存在未跟踪文件（models/ 之外），请先保存或移出后再更新" >&2; printf '%s\n' "$UNTRACKED_BLOCKING"; exit 1; }
 SERVICE_DIR="$(sudo systemctl show "$SERVICE" -p WorkingDirectory --value)"
 test "$SERVICE_DIR" = "$APP_DIR" || { echo "当前目录与 systemd WorkingDirectory 不一致" >&2; echo "当前: $APP_DIR"; echo "服务: $SERVICE_DIR"; exit 1; }
 SERVICE_ENV="$(sudo systemctl show "$SERVICE" -p Environment --value)"
