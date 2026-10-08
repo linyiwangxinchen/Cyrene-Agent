@@ -278,7 +278,73 @@ sudo systemd-analyze verify /etc/systemd/system/cyrene-web.service
 
 ### 5.3 更新程序
 
-更新前备份独立数据目录和旧程序，短暂停止服务以取得一致的数据副本。在新的版本目录完成安装、构建与检查后切换服务路径，或停止后更新既有程序目录；不要把账号、API Key、微信凭据、记忆、会话、用户上传打进升级包。源码升级可 `git pull --ff-only` 后执行第 2 节，失败时不要替换正常服务。避免新 HTML 引用的 hash 资源没有同步或更新时删除旧资源。
+### 5.3.1 已有 Clone 目录的原地更新
+
+如果服务器已经完成 `git clone`、依赖安装和首次构建，后续更新不需要重新安装操作系统依赖，也不需要重新 clone。以下命令在**当前源码目录根部**执行；先确认服务使用的程序目录和数据目录：
+
+```bash
+pwd -P
+git status --short
+sudo systemctl cat cyrene-web | grep -E 'WorkingDirectory=|ExecStart=|CYRENE_DATA_DIR=|PLAYWRIGHT_BROWSERS_PATH='
+```
+
+`git status --short` 必须为空，或者你已经确认并保存了自己的本地修改。不要用 `git reset --hard` 清掉未提交修改，也不要在正在运行的服务目录直接覆盖文件。把上一条命令显示的 `CYRENE_DATA_DIR` 复制到下面的输入中；它必须是当前正式账号、会话、模型和渠道所使用的数据目录：
+
+```bash
+read -r -p "粘贴 systemd 中 CYRENE_DATA_DIR 的值: " CYRENE_DATA_DIR
+test -d "$CYRENE_DATA_DIR" || { echo "数据目录不存在，停止更新"; exit 1; }
+CYRENE_DATA_DIR="$(cd "$CYRENE_DATA_DIR" && pwd -P)"
+CYRENE_BACKUP_DIR="../cyrene-data-backup-$(date +%Y%m%d-%H%M%S)"
+sudo cp -a -- "$CYRENE_DATA_DIR" "$CYRENE_BACKUP_DIR"
+echo "数据备份: $CYRENE_BACKUP_DIR"
+```
+
+确认备份完成后，停止服务、拉取本仓库已经验收过的 `master`，并在原目录重新构建：
+
+```bash
+sudo systemctl stop cyrene-web
+
+git fetch origin --prune
+git pull --ff-only origin master
+
+# 只在锁文件允许时安装；不会下载 Electron 二进制。
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 corepack pnpm@10.33.0 install --frozen-lockfile
+corepack pnpm@10.33.0 run check:server
+corepack pnpm@10.33.0 run check:renderer
+corepack pnpm@10.33.0 run build:web
+
+# 使用原程序目录下的浏览器，缺失时才安装；已有浏览器无需重复下载。
+export PLAYWRIGHT_BROWSERS_PATH="$(pwd -P)/.browsers"
+if ! compgen -G "$PLAYWRIGHT_BROWSERS_PATH/chromium-*" > /dev/null; then
+  corepack pnpm@10.33.0 exec playwright install chromium
+fi
+
+sudo systemctl daemon-reload
+sudo systemctl restart cyrene-web
+sudo systemctl status cyrene-web --no-pager -l
+curl --fail --show-error --max-time 10 http://localhost:4317/healthz
+```
+
+如果 systemd 配置中的 `WorkingDirectory`、Node 路径或浏览器路径已经变化，不要手改旧文件，回到第 4.1 节在当前目录重新生成服务配置，再执行 `daemon-reload` 和 `restart`。如果使用 HTTPS，健康检查仍在服务器上访问 `localhost`；浏览器继续使用原来的 HTTPS 反向代理地址。重启后应强制刷新浏览器，以加载新的带 hash 的 Web 资源。
+
+`git pull --ff-only` 如果提示本地分支有分叉或未提交修改，应停止并先保存修改，不能强制 reset。若拉取后类型检查或构建失败，先保持服务停止，回退到更新前提交并重新构建：
+
+```bash
+git reflog -n 5
+read -r -p "输入更新前的提交号: " CYRENE_OLD_COMMIT
+git switch --detach "$CYRENE_OLD_COMMIT"
+ELECTRON_SKIP_BINARY_DOWNLOAD=1 corepack pnpm@10.33.0 install --frozen-lockfile
+corepack pnpm@10.33.0 run build:web
+sudo systemctl restart cyrene-web
+```
+
+回退后保留刚才的数据备份；如果新版本执行过数据库迁移，必须按照 SQLite 回退说明恢复**完整数据目录**，不能只切换 Git 提交。
+
+### 5.3.2 新目录切换更新
+
+需要降低停机时间时，在当前 Clone 目录之外创建新目录，按第 2 节完成构建和第 4.1 节生成配置，确认新目录的服务可启动后再停止旧服务、备份数据并切换 systemd 的 `WorkingDirectory`/`ExecStart`。不要让两个版本同时写同一 `CYRENE_DATA_DIR`；切换完成后只保留一个启用的 `cyrene-web` 服务。
+
+更新前备份独立数据目录和旧程序，短暂停止服务以取得一致的数据副本。在新的版本目录完成安装、构建与检查后切换服务路径，或停止后更新既有程序目录；不要把账号、API Key、微信凭据、记忆、会话、用户上传打进升级包。避免新 HTML 引用的 hash 资源没有同步或更新时删除旧资源。
 
 ### SQLite 存储迁移后的升级与回退
 

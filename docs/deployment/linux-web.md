@@ -72,4 +72,4 @@ stdio 进程运行在 Linux Server 上。先安装该 MCP 所需的 Node / npx /
 
 在安装了开发依赖的源码构建目录执行 `pnpm run verify:shared-core` 和 `pnpm run verify:voice-mcp`，会使用临时数据、本地模型/音频协议服务、真实 MCP SDK 测试服务、bundled Filesystem 进程和隔离渠道网关验证完整调用链，不改管理员的正式会话；精简运行包不包含这些验收脚本。然后浏览器登录验收实际模型、音频供应商与渠道账号。需要检查真实账户的 QR/长连接/收发，不能用本地模拟网关代替供应商验收。
 
-Linux 版通过重新构建并 `systemctl restart cyrene-web` 更新，界面不会显示 Windows 安装器更新按钮。浏览器音频播放使用浏览器扬声器，不要求服务器安装 GUI 或 mpv。
+已有 Clone 目录的更新顺序是：备份当前 `CYRENE_DATA_DIR` → 停止 systemd → `git pull --ff-only origin master` → 使用 `corepack pnpm@10.33.0` 安装锁定依赖并执行 `check:server`、`check:renderer`、`build:web` → `systemctl restart cyrene-web` → 健康检查和浏览器强制刷新。完整命令、失败回退和 SQLite 数据备份要求见 [Linux 操作指南第 5.3 节](linux-operations.md#53-更新程序)。界面不会显示 Windows 安装器更新按钮。浏览器音频播放使用浏览器扬声器，不要求服务器安装 GUI 或 mpv。
