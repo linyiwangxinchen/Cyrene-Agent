@@ -33,7 +33,7 @@ import type {
   TaskDelegationDisplayRecord,
 } from "../../../../../shared/chat-types";
 import type { SidebarOrganizationDraft, SidebarOrganizationSnapshot } from "../../../../../shared/sidebar-organization";
-import { type ContextUsageSnapshot } from "../../../../../shared/context-usage";
+import { isContextUsageSnapshot, type ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import type { ModelFailureInfo } from "../../../../../shared/model-error";
 import { ChatPagePanelHost } from "../components/ChatPagePanelHost";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
@@ -238,7 +238,14 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   useEffect(() => {
     const store = chatStore();
     if (!store?.onCompactionPhase) return;
-    return store.onCompactionPhase(({ sessionId, phase }) => {
+    return store.onCompactionPhase(({ sessionId, phase, contextUsage }) => {
+      if (isContextUsageSnapshot(contextUsage)) {
+        setSessionContextUsageBySession((current) => {
+          const previous = current[sessionId];
+          if (previous && previous.updatedAt > contextUsage.updatedAt) return current;
+          return { ...current, [sessionId]: contextUsage };
+        });
+      }
       setAutoCompactingSessionId((current) =>
         phase === "running" ? sessionId : current === sessionId ? null : current,
       );
@@ -958,6 +965,13 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       api: aguiApi(),
       store: chatStore(),
       host: {
+        appendMessages,
+        onAssistantSegment: (previousId, nextId) => {
+          if (activeMailDraftControllersRef.current[previousId] === controller) {
+            delete activeMailDraftControllersRef.current[previousId];
+          }
+          activeMailDraftControllersRef.current[nextId] = controller;
+        },
         patchMessage: updateMessage,
         setInteraction: setInteractionForSession,
         clearInteraction: clearInteractionForSession,
@@ -1054,8 +1068,8 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     try {
       await controller.start();
     } finally {
-      if (activeMailDraftControllersRef.current[input.assistantId] === controller) {
-        delete activeMailDraftControllersRef.current[input.assistantId];
+      for (const [messageId, active] of Object.entries(activeMailDraftControllersRef.current)) {
+        if (active === controller) delete activeMailDraftControllersRef.current[messageId];
       }
     }
   }
@@ -1650,7 +1664,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
 
   const isCurrentScopeRunning = Boolean(activeSessionId && activeRunsBySession.current[activeSessionId]);
   const currentPendingQueue = activeSessionId
-    ? (pendingQueueBySession[activeSessionId] ?? []).map((item) => ({
+    ? (pendingQueueBySession[activeSessionId] ?? []).filter((item) => item.adjustAcceptedAt === undefined).map((item) => ({
       id: item.id,
       content: item.visibleContent || item.rawContent,
       attachmentCount: item.attachments?.length,

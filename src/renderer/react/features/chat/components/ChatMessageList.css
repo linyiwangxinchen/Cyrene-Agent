@@ -591,6 +591,11 @@
   box-shadow: none;
 }
 
+/* 插话后的过程沿用任务头，保留头像占位以对齐时间线。 */
+.cy-message--activity-continuation .ant-bubble-avatar {
+  visibility: hidden;
+}
+
 .cy-run-activity {
   width: 100%;
 }
@@ -898,13 +903,63 @@
   padding-block: 4px;
 }
 
+.cy-tool-executions__chain .ant-thought-chain-node-box {
+  flex: 1;
+  min-width: 0;
+}
+
 .cy-tool-executions__description {
   display: flex;
+  flex-wrap: wrap;
   width: 100%;
   max-width: 100%;
   min-width: 0;
   align-items: center;
   gap: 7px;
+}
+
+.cy-file-link.cy-tool-executions__file {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  gap: 5px;
+  padding: 2px 0;
+  color: var(--rb-text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.cy-tool-executions__file .cy-file-link__icon {
+  width: 14px;
+  height: 14px;
+  opacity: 1;
+}
+
+.cy-tool-executions__file-stats {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 5px;
+  font-family: var(--rb-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.cy-tool-executions__file-stats .is-add {
+  color: var(--rb-diff-add-text, #116329);
+}
+
+.cy-tool-executions__file-stats .is-remove {
+  color: var(--rb-diff-remove-text, #82071e);
+}
+
+.cy-tool-executions__file:focus-visible {
+  outline: 2px solid var(--rb-accent);
+  outline-offset: 3px;
+  border-radius: 3px;
+}
+
+.cy-tool-executions__file.is-unavailable {
+  cursor: default;
+  text-decoration: none;
 }
 
 .cy-tool-executions__status {
@@ -939,36 +994,40 @@
   white-space: pre-wrap;
 }
 
-/* ask_user 工具卡展开后的问答配对：问题弱化、回答强调 */
 .cy-ask-user-qa {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 7px 0 2px;
-  padding: 0;
-  list-style: none;
+  display: grid;
+  gap: 12px;
+  margin: 4px 0;
+  padding-inline-start: 1.5em;
+  color: var(--rb-text-primary);
+  font: 13px/1.7 var(--rb-font-sans, sans-serif);
+  list-style: decimal;
 }
 
 .cy-ask-user-qa__row {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 7px 9px;
-  border-radius: 8px;
-  background: #f4f4f5;
+  padding-inline-start: 3px;
 }
 
-.cy-ask-user-qa__question {
-  color: var(--rb-text-secondary);
-  font-size: 12px;
-  line-height: 1.5;
+.cy-ask-user-qa__row::marker {
+  color: var(--rb-text-primary);
+}
+
+.cy-ask-user-qa__question,
+.cy-ask-user-qa__answer {
+  display: grid;
+  grid-template-columns: 1.5em minmax(0, 1fr);
+  gap: 4px;
+  color: var(--rb-text-primary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .cy-ask-user-qa__answer {
-  color: var(--rb-text-primary);
-  font-size: 12.5px;
-  line-height: 1.5;
-  font-weight: 500;
+  margin-top: 2px;
+}
+
+.cy-ask-user-qa__label {
+  font-weight: 600;
 }
 
 .cy-message-reasoning {

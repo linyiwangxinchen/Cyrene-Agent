@@ -142,7 +142,7 @@ export interface HarnessConfig {
   reservedOutputTokens: number;
   /** 固定安全余量（token） */
   safetyMarginTokens: number;
-  /** 压缩触发阈值比例（默认 0.7） */
+  /** 压缩触发阈值占总上下文窗口的比例（默认 0.85），同时受可用输入预算限制。 */
   compactionThreshold: number;
   /** 压缩后原样保留的近期 transcript 占上下文窗口比例（默认 0.16）。 */
   compactionRetainRatio: number;
@@ -158,7 +158,7 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
   contextWindowTokens: 256_000,
   reservedOutputTokens: 8_192,
   safetyMarginTokens: 512,
-  compactionThreshold: 0.7,
+  compactionThreshold: 0.85,
   compactionRetainRatio: 0.16,
 };
 
@@ -168,6 +168,7 @@ export type HarnessEvent =
   | { type: "model_retry"; status: import("../../../shared/model-retry").ModelRetryStatus }
   | { type: "round_start"; roundId: string }
   | { type: "round_end"; roundId: string }
+  | { type: "run_adjustment"; messages: RunAdjustmentMessage[]; assistantMessageId: string }
   | { type: "candidate_text_delta"; roundId: string; delta: string }
   | { type: "candidate_text_discard"; roundId: string }
   | { type: "progress_text"; content: string }
@@ -228,6 +229,8 @@ export interface RunAdjustmentMessage {
   id: string;
   /** 模型可见的原始文字。 */
   rawContent: string;
+  /** 与队列投影和权威轨迹共用的展示消息。 */
+  userMessage?: import("../../../shared/chat-types").ChatMessage;
 }
 
 export interface HarnessToolSpec extends ToolSpec {
@@ -287,6 +290,12 @@ export interface HarnessInput {
   onToolFinished?: (event: HarnessToolFinishedEvent) => void;
   /** 压缩前后持久化事务边界。 */
   onCompactionLifecycle?: (event: HarnessCompactionLifecycleEvent) => void;
+  /** 保存会话压缩检查点并返回权威模型历史；临时运行信息只参与占用计量。 */
+  compactTranscript?: (input: {
+    retainTokens: number;
+    transientMessages: ChatMessage[];
+    signal?: AbortSignal;
+  }) => Promise<ChatMessage[]>;
   /** 每次模型请求前的非敏感缓存结构诊断。 */
   onCacheDiagnostic?: (diagnostic: HarnessCacheDiagnostic) => void;
   /**
@@ -301,6 +310,8 @@ export interface HarnessInput {
   requestUserClarification?: (card: unknown) => Promise<unknown>;
   /** 是否向模型公布并允许 Ask/不确定副作用确认工具；默认 true。 */
   includeInteractiveTools?: boolean;
+  /** 可选的运行层工具白名单；子任务据此限制模型清单与执行入口。 */
+  allowedBuiltinToolIds?: ReadonlySet<string>;
   /** 计划模式状态；控制计划工具组可见性（undefined = 不注入计划工具，兼容旧调用方/子任务）。 */
   planState?: import("../plan-mode").PlanStateName;
   /** 工具上下文（权限检查等） */

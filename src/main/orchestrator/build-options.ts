@@ -67,8 +67,12 @@ import { policyFor, type ToolRiskLevel } from "../permission-policy";
 import { resolveTranscriptRetainTokens, type MaterializedTranscript } from "./conversation-transcript-context";
 import type { UncertainEffect } from "./harness/types";
 import { DEFAULT_HARNESS_CONFIG } from "./harness/types";
+import { resolveCompactionTriggerTokens } from "./harness/compaction";
 import { estimateMessageTokens } from "./context-manager";
-import { createTranscriptCompactionRequiredError } from "./conversation-transcript-compactor";
+import {
+  createTranscriptCompactionRequiredError,
+  type TranscriptCompactionModelSettings,
+} from "./conversation-transcript-compactor";
 import { MAX_PARALLEL_TOOL_CALLS } from "../../shared/task-session";
 import { normalizeMemoryMode } from "../memory/memory-mode";
 
@@ -139,6 +143,9 @@ export interface BuildOptionsDeps {
     conversationId: string;
     trigger: "automatic" | "manual";
     retainTokens: number;
+    modelSettings: TranscriptCompactionModelSettings;
+    transientMessages?: ChatMessage[];
+    signal?: AbortSignal;
   }) => Promise<unknown>;
   chatRequestTimeoutMs: number;
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
@@ -576,24 +583,23 @@ export async function buildAgentRunOptions(
   // 预算检查对传入与自建上下文一视同仁：长会话无论从桌面还是渠道入口进入，
   // 都必须先提交自动压缩检查点，再重读 journal 作为最终上下文。
   if (input.currentUser && input.sessionId && transcriptContext) {
-    const usableInputBudget = contextWindowTokens
-      - DEFAULT_HARNESS_CONFIG.reservedOutputTokens
-      - DEFAULT_HARNESS_CONFIG.safetyMarginTokens;
+    const compactionTriggerTokens = resolveCompactionTriggerTokens(contextWindowTokens);
     const estimatedMessages = estimateMessageTokens(transcriptContext.messages);
-    if (estimatedMessages >= usableInputBudget * DEFAULT_HARNESS_CONFIG.compactionThreshold) {
+    if (estimatedMessages >= compactionTriggerTokens) {
       if (!deps.compactTranscript) throw new Error("TRANSCRIPT_COMPACTION_REQUIRED");
       try {
         await deps.compactTranscript({
           conversationId: input.sessionId,
           trigger: "automatic",
           retainTokens: Math.max(1, Math.floor(contextWindowTokens * DEFAULT_HARNESS_CONFIG.compactionRetainRatio)),
+          modelSettings: settings,
         });
       } catch (error) {
         console.error("[BuildOptions] transcript compaction failed", error);
         throw createTranscriptCompactionRequiredError(error);
       }
       transcriptContext = await requireBuildModelContext(deps)(input.sessionId, retainTokens);
-      if (estimateMessageTokens(transcriptContext.messages) >= usableInputBudget * DEFAULT_HARNESS_CONFIG.compactionThreshold) {
+      if (estimateMessageTokens(transcriptContext.messages) >= compactionTriggerTokens) {
         throw createTranscriptCompactionRequiredError();
       }
     }
@@ -1051,6 +1057,19 @@ export async function buildAgentRunOptions(
       cleanMessages: cleanFcMessages,
       conversationId,
       assistantTurnId: input.assistantTurnId,
+      ...(input.sessionId && deps.compactTranscript && deps.buildModelContext ? {
+        compactTranscript: async ({ retainTokens: tailTokens, transientMessages, signal }) => {
+          await deps.compactTranscript!({
+            conversationId: input.sessionId!,
+            trigger: "automatic",
+            retainTokens: tailTokens,
+            modelSettings: settings,
+            transientMessages,
+            signal,
+          });
+          return (await requireBuildModelContext(deps)(input.sessionId!, tailTokens)).messages;
+        },
+      } : {}),
       executionMode,
       originalQuery: latestUserText,
       contextualizedQuery,

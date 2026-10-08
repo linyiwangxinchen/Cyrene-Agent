@@ -5,7 +5,7 @@ import { app, chatWindow, ipcMain, emitHost, webContents, invocation } from "./p
 import { createIpcScope } from "../../main/application/ipc-scope";
 import { setReactChatWindow } from "../../main/windows/window-state";
 import { loadGeneralSettings, saveGeneralSettings, onGeneralSettingsChanged } from "../../main/settings/settings-facade";
-import { loadModelSettings, saveModelSettings, resolveModelSettingsProfile } from "../../main/settings/model-settings";
+import { loadModelSettings, saveModelSettings } from "../../main/settings/model-settings";
 import { loadUserProfile } from "../../main/settings-store";
 import { registerSettingsIpc } from "../../main/settings/settings-ipc";
 import { registerChatUiIpc } from "../../main/chats/chat-ui-ipc";
@@ -176,7 +176,14 @@ export async function startHeadlessCore() {
     });
   }
   if (isMemoryEnabled()) await switchMemoryMode("vector");
-  const transcriptCompactor = createModelBackedConversationTranscriptCompactor({ store: getConversationTranscriptStore(root), runReader: getHarnessRunStore(root), loadModelSettings: () => resolveModelSettingsProfile(loadModelSettings()), onPhase: (phase, id) => broadcastCompactionPhase(id, phase) });
+  // The upstream compactor now receives the active model settings per request.
+  // Web keeps resolving the session model in the shared runtime before invoking
+  // compaction; do not re-read the global profile here and overwrite it.
+  const transcriptCompactor = createModelBackedConversationTranscriptCompactor({
+    store: getConversationTranscriptStore(root),
+    runReader: getHarnessRunStore(root),
+    onPhase: (phase, id) => broadcastCompactionPhase(id, phase),
+  });
   const lifecycle = createLifecyclePublisher({ publish: (event, payload) => plugins ? plugins.publishHostEvent(event, payload) : Promise.resolve() });
   const pending = createPendingTurnLifecycle({ publisher: lifecycle });
   let plugins: Awaited<ReturnType<typeof startPluginRuntime>> | undefined;
