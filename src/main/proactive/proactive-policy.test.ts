@@ -11,6 +11,7 @@ import {
   markUserActivity,
 } from "./proactive-policy";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive-types";
+import { getZonedDateParts } from "./proactive-trigger";
 
 const NOW = Date.UTC(2026, 6, 13, 6, 0, 0);
 
@@ -37,6 +38,16 @@ function candidate(patch: Partial<ProactiveCandidate> = {}): ProactiveCandidate 
 }
 
 describe("proactive hard policy", () => {
+  it("uses user quiet hours when UTC server time is in a different day/night window", () => {
+    const state = createDefaultProactiveState();
+    for (const [utcHour, expectedHour, allowed] of [[1, 9, true], [15, 23, false]] as const) {
+      const now = Date.UTC(2026, 9, 9, utcHour);
+      const localHour = getZonedDateParts(new Date(now), "Asia/Shanghai").hour;
+      expect(localHour).toBe(expectedHour);
+      expect(canStartProactiveGeneration(snapshot({ now, localHour, idleSec: 120 }), state, candidate()).allowed).toBe(allowed);
+    }
+  });
+
   it("enforces normal quiet period and global proactive interval", () => {
     const state = createDefaultProactiveState();
     state.lastNormalConversationEndedAt = NOW - NORMAL_QUIET_MS + 1;

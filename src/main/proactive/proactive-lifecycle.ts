@@ -24,7 +24,7 @@ import { routeProactiveDelivery } from "./proactive-delivery-routing";
 import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive-prompt";
 import { canCommitProactiveMessage } from "./proactive-policy";
 import { loadProactiveState, saveProactiveState } from "./proactive-state-store";
-import { createProactiveTrigger, type ProactiveTriggerController } from "./proactive-trigger";
+import { createProactiveTrigger, getZonedDateParts, type ProactiveTriggerController } from "./proactive-trigger";
 import { runProactiveModel } from "./proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive-types";
 
@@ -98,7 +98,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     try { idleSec = powerMonitor.getSystemIdleTime(); } catch { /* app 尚未 ready */ }
     return {
       now,
-      localHour: new Date(now).getHours(),
+      // The server's system timezone can differ from the user's timezone.
+      // Policy quiet hours must use the same clock as candidate selection.
+      localHour: getZonedDateParts(new Date(now), resolveChatContextTimezone(loadUserProfile().timezone)).hour,
       idleSec,
       enabled: options.loadGeneralSettings().proactiveChatMode === "on",
       conversationBusy: normalConversationBusyCount > 0,
