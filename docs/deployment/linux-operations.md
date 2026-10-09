@@ -280,9 +280,25 @@ sudo systemd-analyze verify /etc/systemd/system/cyrene-web.service
 
 ### 5.3.1 已有 Clone 目录的原地更新
 
-如果服务器已经完成 `git clone`、依赖安装和首次构建，进入原来的 Clone 目录后，下面整段代码直接粘贴执行即可。它会自动检查当前目录、读取 systemd 的数据目录和浏览器目录、备份数据、拉取本仓库 `master`、重新构建并重启服务。代码假定当前分支是 `master`，不会删除本地修改或强制 reset。
+如果服务器已经完成 `git clone`、依赖安装和首次构建，进入原来的 Clone 目录后，先执行下面的资源差异检查，再执行更新代码。更新代码会自动检查当前目录、读取 systemd 的数据目录和浏览器目录、备份数据、拉取本仓库 `master`、重新构建并重启服务。代码假定当前分支是 `master`，不会删除本地修改或强制 reset。
 
 更新前的保护检查会拦截已跟踪源码/配置的修改，也会拦截普通位置的未跟踪文件。项目根目录的 `models/` 专门用于本地模型缓存，其中的未跟踪模型文件会被放行；`models/` 之外的模型建议放在 `CYRENE_DATA_DIR` 或 Clone 目录之外。`dist/renderer/models/` 属于随程序发布的产品资源，修改它仍会阻止更新。若仍然看到“存在未提交修改”，先查看 `git status --short --untracked-files=all` 输出的具体路径。
+
+构建会把 `src/renderer/public/` 的资源复制到 `dist/renderer/`，可能导致已跟踪资源出现换行符差异。在当前 Clone 根目录先粘贴这一段；检测会忽略行尾空白（包括 CRLF/LF 差异）。只有忽略行尾空白后没有差异时才恢复资源，检测到其他内容修改时保留文件，先检查或备份后再更新：
+
+```bash
+if git diff --ignore-space-at-eol --quiet -- dist/renderer; then
+  echo "确认只有换行差异，恢复构建改写的资源"
+  git restore -- dist/renderer
+else
+  echo "存在实际内容修改，请先保留或检查，不要直接恢复"
+  git diff --stat -- dist/renderer
+fi
+
+git status --short
+```
+
+随后粘贴更新代码：
 
 ```bash
 set -Eeuo pipefail
