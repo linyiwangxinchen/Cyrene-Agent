@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
   <meta name="color-scheme" content="light dark" />
   <title>昔涟 · Cyrene Agent</title>
+  <style>
+    html, body { background: #fff8fb; }
+    #cyrene-web-loading { min-height: 100vh; display: grid; place-items: center; padding: 24px; color: #806c75; font: 14px/1.6 system-ui, sans-serif; }
+    #cyrene-web-loading__card { width: min(420px, 100%); padding: 28px; text-align: center; border: 1px solid rgba(133, 90, 106, .18); border-radius: 20px; background: rgba(255,255,255,.9); box-shadow: 0 18px 60px rgba(91,39,58,.12); }
+    #cyrene-web-loading__spinner { width: 28px; height: 28px; margin: 0 auto 14px; border: 3px solid #ffd1df; border-top-color: #ff5b8a; border-radius: 50%; animation: cyrene-web-spin .8s linear infinite; }
+    @keyframes cyrene-web-spin { to { transform: rotate(360deg); } }
+  </style>
   <link rel="stylesheet" href="../ui/tokens.css" />
   <link rel="stylesheet" href="../ui/fonts.css" />
   <link rel="stylesheet" href="../ui/base.css" />
@@ -13,7 +20,7 @@
   <link rel="stylesheet" href="../react/styles/react-root.css" />
 </head>
 <body>
-  <div id="cyrene-web-root"></div>
+  <div id="cyrene-web-root"><div id="cyrene-web-loading" role="status" aria-live="polite"><div id="cyrene-web-loading__card"><div id="cyrene-web-loading__spinner"></div><strong>正在加载 Cyrene</strong><div>首次打开或网络较慢时，大型界面资源会在后台继续加载。</div></div></div></div>
   <script type="module" src="./main.tsx"></script>
 </body>
 </html>

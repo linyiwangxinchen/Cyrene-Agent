@@ -93,6 +93,31 @@ describe("legacy web data migration regression", () => {
     }
   });
 
+  it("requires a challenge after repeated login failures", async () => {
+    const fixture = await startFixture();
+    try {
+      const jsonHeaders = { "Content-Type": "application/json" };
+      const good = JSON.stringify({ username: "admin", password: "a sufficiently long password" });
+      await fetch(`${fixture.base}/api/auth/bootstrap`, { method: "POST", headers: { ...jsonHeaders, "X-Cyrene-Setup-Token": "fixture-setup-token" }, body: good });
+      const bad = JSON.stringify({ username: "admin", password: "wrong password" });
+      expect((await fetch(`${fixture.base}/api/auth/login`, { method: "POST", headers: jsonHeaders, body: bad })).status).toBe(401);
+      expect((await fetch(`${fixture.base}/api/auth/login`, { method: "POST", headers: jsonHeaders, body: bad })).status).toBe(401);
+      const challenge = await (await fetch(`${fixture.base}/api/auth/challenge`)).json() as { challengeId: string; captchaRequired: boolean; captchaImage: string };
+      expect(challenge.captchaRequired).toBe(true);
+      const svg = decodeURIComponent(challenge.captchaImage.split(",", 2)[1]);
+      const answer = /<text[^>]*>([^<]+)<\/text>/.exec(svg)?.[1]?.replace(/\s/g, "");
+      expect(answer).toMatch(/^[A-F0-9]{5}$/);
+      const login = await fetch(`${fixture.base}/api/auth/login`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ username: "admin", password: "a sufficiently long password", challengeId: challenge.challengeId, captcha: answer }),
+      });
+      expect(login.status).toBe(200);
+    } finally {
+      await closeFixture(fixture.handle);
+    }
+  });
+
   it("serves the Web SPA and falls back for extensionless routes", async () => {
     const fixture = await startFixture();
     try {

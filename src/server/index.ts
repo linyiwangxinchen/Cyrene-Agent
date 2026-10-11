@@ -34,7 +34,24 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4317;
 const MAX_BODY_BYTES = 64 * 1024;
 const SESSION_COOKIE = "cyrene_session";
+const AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
+const AUTH_CAPTCHA_AFTER_FAILURES = 2;
+const AUTH_MAX_FAILURES = 5;
+const AUTH_LOCKOUT_MS = 60 * 1000;
 const execFileAsync = promisify(execFile);
+
+interface LoginAttemptState {
+  failures: number;
+  blockedUntil: number;
+}
+
+interface LoginChallenge {
+  id: string;
+  ip: string;
+  expiresAt: number;
+  captchaRequired: boolean;
+  captchaAnswer?: string;
+}
 
 export interface WebServerOptions {
   /** Legacy transport exists only for migration regression fixtures. Production uses the shared core. */
@@ -118,7 +135,10 @@ async function readJson(request: IncomingMessage, limit = MAX_BODY_BYTES): Promi
 }
 
 function validCredentials(payload: Record<string, unknown>): payload is { username: string; password: string } {
-  return typeof payload.username === "string" && typeof payload.password === "string";
+  return typeof payload.username === "string"
+    && payload.username.length <= 64
+    && typeof payload.password === "string"
+    && payload.password.length <= 512;
 }
 
 function sessionCookie(token: string, secure: boolean): string {
@@ -177,22 +197,33 @@ async function serveStatic(
     filePath = entry;
   }
   try {
-    const body = await readFile(filePath);
+    const info = await stat(filePath);
+    if (!info.isFile()) throw new Error("STATIC_FILE_REQUIRED");
+    const cacheControl = filePath === entry || !/[.-][a-zA-Z0-9_-]{8,}\.[^.]+$/.test(path.basename(filePath))
+      ? "no-cache"
+      : "public, max-age=31536000, immutable";
     response.writeHead(200, {
       "Content-Type": contentType(filePath),
-      "Cache-Control": filePath === entry || !/[.-][a-zA-Z0-9_-]{8,}\.[^.]+$/.test(path.basename(filePath)) ? "no-cache" : "public, max-age=31536000, immutable",
+      "Cache-Control": cacheControl,
+      "Content-Length": String(info.size),
     });
-    response.end(body);
+    await pipeline(createReadStream(filePath), response);
     return true;
   } catch {
+    if (response.headersSent || response.destroyed) return true;
     if (path.extname(relative)) { writeJson(response, 404, { error: "ASSET_NOT_FOUND" }); return true; }
     if (filePath === entry) return false;
     try {
-      const body = await readFile(entry);
-      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
-      response.end(body);
+      const info = await stat(entry);
+      response.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-cache",
+        "Content-Length": String(info.size),
+      });
+      await pipeline(createReadStream(entry), response);
       return true;
     } catch {
+      if (response.headersSent || response.destroyed) return true;
       return false;
     }
   }
@@ -203,6 +234,44 @@ function sameSecret(actual: string | undefined, expected: string): boolean {
   const actualBuffer = Buffer.from(actual);
   const expectedBuffer = Buffer.from(expected);
   return actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer);
+}
+
+function remoteAddress(request: IncomingMessage): string {
+  return request.socket.remoteAddress || "unknown";
+}
+
+function isLoopbackAddress(address: string): boolean {
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+/**
+ * Only loopback HTTP is allowed for direct local checks. Remote authentication
+ * must arrive through TLS, either directly or from a trusted local reverse proxy.
+ */
+function isSecureRequest(request: IncomingMessage): boolean {
+  if ("encrypted" in request.socket && Boolean((request.socket as { encrypted?: boolean }).encrypted)) return true;
+  const forwarded = headerValue(request.headers["x-forwarded-proto"])?.toLowerCase();
+  return forwarded === "https" && (isLoopbackAddress(remoteAddress(request)) || process.env.CYRENE_TRUST_PROXY === "1");
+}
+
+function applySecurityHeaders(response: ServerResponse, secure: boolean): void {
+  response.setHeader("X-Content-Type-Options", "nosniff");
+  response.setHeader("X-Frame-Options", "DENY");
+  response.setHeader("Referrer-Policy", "same-origin");
+  response.setHeader("Permissions-Policy", "camera=(), geolocation=(), payment=(), usb=()");
+  response.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  if (secure) response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+}
+
+function captchaSvg(answer: string): string {
+  const bars = Array.from({ length: 5 }, (_, index) => `<path d="M${index * 48 + 12} 8L${index * 37 + 18} 52" stroke="#ff5b8a" stroke-width="2" opacity=".45"/>`).join("");
+  const safeAnswer = answer.replace(/[&<>\"]/g, (value) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" }[value] || value));
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="60" viewBox="0 0 240 60"><rect width="240" height="60" rx="10" fill="#fff3f7"/>${bars}<text x="120" y="40" text-anchor="middle" font-family="monospace" font-size="28" font-weight="700" letter-spacing="8" fill="#33252b">${safeAnswer}</text></svg>`;
+}
+
+function randomCaptcha(): { answer: string; image: string } {
+  const answer = randomBytes(4).toString("hex").slice(0, 5).toUpperCase();
+  return { answer, image: `data:image/svg+xml,${encodeURIComponent(captchaSvg(answer))}` };
 }
 
 function authStatus(auth: AuthStore, request: IncomingMessage): Promise<AuthStatus> {
@@ -296,6 +365,8 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
   const core = options.sharedCore === false ? null : new SharedCoreClient(dataDir, process.env.CYRENE_APP_ROOT || path.resolve(__dirname, "..", "..", ".."), logger);
   const running = new Map<string, { cancelled: boolean; sessionId: string; assistantId: string; controller: AbortController }>();
   const browserStates = new Map<string, BrowserPanelState>();
+  const loginAttempts = new Map<string, LoginAttemptState>();
+  const loginChallenges = new Map<string, LoginChallenge>();
   const websocketServer = new WebSocketServer({ noServer: true });
   const broadcast = (event: unknown): void => {
     const encoded = JSON.stringify(event);
@@ -347,6 +418,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
     try {
       const url = new URL(request.url || "/", "http://cyrene.local");
       const method = request.method || "GET";
+      applySecurityHeaders(response, isSecureRequest(request));
       const origin = headerValue(request.headers.origin);
       if (origin && new URL(origin).host !== request.headers.host) { writeJson(response, 403, { error: "ORIGIN_FORBIDDEN" }); return; }
       const cookies = parseCookies(request);
@@ -362,9 +434,37 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
         return;
       }
 
+      if (method === "GET" && url.pathname === "/api/auth/challenge") {
+        const ip = remoteAddress(request);
+        const now = Date.now();
+        for (const [id, challenge] of loginChallenges) if (challenge.expiresAt <= now) loginChallenges.delete(id);
+        const attempt = loginAttempts.get(ip) ?? { failures: 0, blockedUntil: 0 };
+        const captchaRequired = attempt.failures >= AUTH_CAPTCHA_AFTER_FAILURES;
+        const challenge: LoginChallenge = {
+          id: randomBytes(18).toString("base64url"),
+          ip,
+          expiresAt: now + AUTH_CHALLENGE_TTL_MS,
+          captchaRequired,
+        };
+        const captcha = captchaRequired ? randomCaptcha() : null;
+        if (captcha) challenge.captchaAnswer = captcha.answer;
+        loginChallenges.set(challenge.id, challenge);
+        writeJson(response, 200, {
+          challengeId: challenge.id,
+          expiresAt: challenge.expiresAt,
+          captchaRequired,
+          ...(captcha ? { captchaImage: captcha.image } : {}),
+        });
+        return;
+      }
+
       if (method === "POST" && url.pathname === "/api/auth/bootstrap") {
         if (await auth.isInitialized()) {
           writeJson(response, 409, { ok: false, error: "ALREADY_INITIALIZED" });
+          return;
+        }
+        if (!isSecureRequest(request) && !isLoopbackAddress(remoteAddress(request))) {
+          writeJson(response, 426, { ok: false, error: "HTTPS_REQUIRED" });
           return;
         }
         if (!sameSecret(headerValue(request.headers["x-cyrene-setup-token"]), setupToken)) {
@@ -389,11 +489,42 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       }
 
       if (method === "POST" && url.pathname === "/api/auth/login") {
+        const ip = remoteAddress(request);
+        const now = Date.now();
+        const attempt = loginAttempts.get(ip) ?? { failures: 0, blockedUntil: 0 };
+        if (attempt.blockedUntil > now) {
+          writeJson(response, 429, { ok: false, error: "LOGIN_RATE_LIMITED", retryAfter: Math.ceil((attempt.blockedUntil - now) / 1000) }, { "Retry-After": String(Math.ceil((attempt.blockedUntil - now) / 1000)) });
+          return;
+        }
+        // A password-bearing login is accepted only on loopback or TLS. The
+        // existing JSON protocol remains compatible, but cannot leak a remote
+        // password over direct HTTP.
+        if (!isSecureRequest(request) && !isLoopbackAddress(ip)) {
+          writeJson(response, 426, { ok: false, error: "HTTPS_REQUIRED" });
+          return;
+        }
         const payload = await readJson(request);
+        const challengeId = stringValue(payload.challengeId);
+        const challenge = challengeId ? loginChallenges.get(challengeId) : undefined;
+        if (challengeId) loginChallenges.delete(challengeId);
+        const captchaRequired = attempt.failures >= AUTH_CAPTCHA_AFTER_FAILURES;
+        const captchaValid = !captchaRequired
+          || Boolean(challenge && challenge.ip === ip && challenge.expiresAt > now && challenge.captchaRequired && sameSecret(stringValue(payload.captcha).toUpperCase(), challenge.captchaAnswer || ""));
+        if (!captchaValid) {
+          attempt.failures += 1;
+          if (attempt.failures >= AUTH_MAX_FAILURES) attempt.blockedUntil = now + AUTH_LOCKOUT_MS;
+          loginAttempts.set(ip, attempt);
+          writeJson(response, 400, { ok: false, error: "CAPTCHA_REQUIRED" });
+          return;
+        }
         if (!validCredentials(payload) || !(await auth.verify(payload.username, payload.password))) {
+          attempt.failures += 1;
+          if (attempt.failures >= AUTH_MAX_FAILURES) attempt.blockedUntil = now + AUTH_LOCKOUT_MS;
+          loginAttempts.set(ip, attempt);
           writeJson(response, 401, { ok: false, error: "INVALID_CREDENTIALS" });
           return;
         }
+        loginAttempts.delete(ip);
         const created = auth.createSession(payload.username);
         logger.info(`[web-auth] login username=${payload.username} session=${hashSessionToken(created.token)}`);
         writeJson(response, 200, { ok: true, username: created.username }, { "Set-Cookie": sessionCookie(created.token, secureCookies) });

@@ -9,11 +9,12 @@ export async function requestJson<T>(input: RequestInfo | URL, init?: RequestIni
 function jsonRequest(body: unknown): RequestInit { return { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }; }
 export const webAuth = {
   status: () => requestJson<{ initialized: boolean; authenticated: boolean; username?: string }>("/api/auth/status"),
+  challenge: () => requestJson<{ challengeId: string; expiresAt: number; captchaRequired: boolean; captchaImage?: string }>("/api/auth/challenge"),
   bootstrap: async (username: string, password: string, setupToken: string) => {
     await requestJson("/api/auth/bootstrap", { ...jsonRequest({ username, password }), headers: { "Content-Type": "application/json", "X-Cyrene-Setup-Token": setupToken } });
   },
-  login: async (username: string, password: string) => {
-    const result = await requestJson<{ username: string }>("/api/auth/login", jsonRequest({ username, password }));
+  login: async (username: string, password: string, challenge?: { challengeId?: string; captcha?: string }) => {
+    const result = await requestJson<{ username: string }>("/api/auth/login", jsonRequest({ username, password, ...challenge }));
     await resumeCoreConnection(); return result.username;
   },
   logout: async () => { stopCoreConnection(); await requestJson("/api/auth/logout", { method: "POST" }); },
