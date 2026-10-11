@@ -33,6 +33,8 @@ export interface VendorConfig {
    * 用户在 settings UI 显式选择的协议。"auto" 仅作为旧配置兼容输入，运行时不按 URL 推断。
    */
   explicitTransport?: Transport | "auto";
+  /** Native OpenAI Responses cache hints and encrypted reasoning; undefined = model/endpoint default. */
+  responsesNative?: boolean;
   /**
    * 用户保存的推理偏好。adapter buildRequest 必须透传此字段；
    * 不传时 applyReasoningPreference 缺省按 auto 处理。

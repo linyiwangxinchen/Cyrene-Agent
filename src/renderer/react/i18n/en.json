@@ -1217,6 +1217,8 @@
       "resetBaseUrl": "Restore provider default URL",
       "endpointPreview": "Request URL preview",
       "transport": "API protocol",
+      "responsesNative": "Native OpenAI Responses compatibility",
+      "responsesNativeHint": "Enabled by default for GPT models: preserve cache routing hints and encrypted reasoning replay. Disable for relays that reject native Responses parameters. Cache hits depend on provider-reported usage.",
       "transportOpenAI": "chat/completions",
       "transportAnthropic": "anthropic",
       "model": "Model ID",

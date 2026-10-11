@@ -26,6 +26,16 @@ function normalizeProfile(profile: Record<string, unknown>) {
 }
 
 describe("normalize 六步契约（档案模型清单）", () => {
+  it("原生 Responses 开关在保存和会话模型解析时保留，缺省保持自动", () => {
+    for (const responsesNative of [undefined, true, false]) {
+      const settings = normalizeModelSettings({ ...GLM_BASE, modelProfiles: [{
+        id: "relay", provider: "自定义端点", baseUrl: "https://relay.test/v1", apiKey: "test-key",
+        model: "gpt-6.1-sol", explicitTransport: "responses", responsesNative,
+      }] } as never);
+      expect(settings.modelProfiles?.[0].responsesNative).toBe(responsesNative);
+      expect(resolveSessionModelSettings(settings, { modelProfileId: "relay" }).responsesNative).toBe(responsesNative);
+    }
+  });
   it("#1 trim + 稳定去重（保持首现顺序）+ 不 lower-case", () => {
     const profile = normalizeProfile({
       id: "p1", provider: GLM_BASE.provider, baseUrl: GLM_BASE.baseUrl, apiKey: "k",

@@ -100,6 +100,7 @@ export async function callSummarizeModel(
     model: settings.model,
     apiKey: settings.apiKey,
     explicitTransport: settings.explicitTransport,
+    responsesNative: settings.responsesNative,
     reasoning: settings.reasoning,
     manualReasoning: settings.manualReasoning,
   };

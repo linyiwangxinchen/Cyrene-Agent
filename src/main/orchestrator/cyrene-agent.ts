@@ -88,6 +88,7 @@ export interface AgentLoopSettings {
   model: string;
   apiKey: string;
   explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
+  responsesNative?: boolean;
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
   manualReasoning?: import("../../shared/manual-reasoning").ManualReasoningConfig;
   imageGeneration?: { enabled: boolean; model: string };

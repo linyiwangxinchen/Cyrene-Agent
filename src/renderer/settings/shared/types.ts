@@ -38,6 +38,7 @@ export interface ProviderProfile {
    * 用户在 settings 显式选择的协议。旧配置中的 auto 会由 main 进程迁移为具体值。
    */
   explicitTransport?: ApiTransport;
+  responsesNative?: boolean;
   reasoning?: ReasoningPreference;
 }
 
@@ -54,6 +55,7 @@ export interface ModelSettings {
    * UI 改动 transport-select 时，saveConfig 把这个值带给 main 进程折叠回 perProvider。
    */
   explicitTransport?: ApiTransport;
+  responsesNative?: boolean;
   /** 当前厂商 reasoning 偏好的顶层镜像。 */
   reasoning?: ReasoningPreference;
   // 按厂商缓存：切回该厂商时，从这里恢复 baseUrl / model / apiKey
@@ -260,9 +262,9 @@ export interface SettingsApi {
   close: () => void;
   getConfig: () => Promise<ModelSettings>;
   saveConfig: (config: Partial<ModelSettings>) => Promise<ModelSettings>;
-  listModelProfiles?: () => Promise<{ profiles: Array<{ id: string; provider: string; displayName?: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference; contextWindowTokens?: number; multimodal?: boolean;
+  listModelProfiles?: () => Promise<{ profiles: Array<{ id: string; provider: string; displayName?: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; responsesNative?: boolean; reasoning?: ReasoningPreference; contextWindowTokens?: number; multimodal?: boolean;
     imageGeneration?: { enabled: boolean; model: string }; modelOptions?: Record<string, { contextWindowTokens?: number; multimodal?: boolean }>; models?: string[] }>; defaultModelProfileId?: string }>;
-  saveModelProfile?: (profile: { id?: string; provider: string; displayName?: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference; contextWindowTokens?: number; multimodal?: boolean;
+  saveModelProfile?: (profile: { id?: string; provider: string; displayName?: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; responsesNative?: boolean; reasoning?: ReasoningPreference; contextWindowTokens?: number; multimodal?: boolean;
     imageGeneration?: { enabled: boolean; model: string }; modelOptions?: Record<string, { contextWindowTokens?: number; multimodal?: boolean }>; models?: string[] }) => Promise<{ added: boolean; profiles: unknown[]; defaultModelProfileId?: string }>;
   deleteModelProfile?: (id: string) => Promise<unknown>;
   setDefaultModelProfile?: (id: string) => Promise<unknown>;
@@ -336,8 +338,8 @@ export interface SettingsApi {
   onPlanStateChanged?: (
     callback: (payload: { conversationId: string; state: string }) => void,
   ) => (() => void) | void;
-  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference; manualReasoning?: import("../../../shared/manual-reasoning").ManualReasoningConfig }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
-  previewReasoning?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference; manualReasoning?: import("../../../shared/manual-reasoning").ManualReasoningConfig }) => Promise<Record<string, unknown>>;
+  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; responsesNative?: boolean; reasoning?: ReasoningPreference; manualReasoning?: import("../../../shared/manual-reasoning").ManualReasoningConfig }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
+  previewReasoning?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; responsesNative?: boolean; reasoning?: ReasoningPreference; manualReasoning?: import("../../../shared/manual-reasoning").ManualReasoningConfig }) => Promise<Record<string, unknown>>;
   testVision?: (config: { baseUrl: string; apiKey: string; model: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
   onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;

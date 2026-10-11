@@ -95,6 +95,7 @@ interface SettingsWindowApi {
     model: string;
     apiKey: string;
     explicitTransport?: import("../shared/api-endpoint").ApiTransport;
+    responsesNative?: boolean;
     reasoning?: import("../shared/reasoning").ReasoningPreference;
     imageGeneration?: { enabled: boolean; model: string };
     contextWindowTokens?: number;
@@ -111,6 +112,7 @@ interface SettingsWindowApi {
     model: string;
     apiKey: string;
     explicitTransport?: import("../shared/api-endpoint").ApiTransport;
+    responsesNative?: boolean;
     reasoning?: import("../shared/reasoning").ReasoningPreference;
     imageGeneration?: { enabled: boolean; model: string };
     contextWindowTokens?: number;
@@ -134,6 +136,7 @@ interface SettingsWindowApi {
     model: string;
     apiKey: string;
     explicitTransport?: import("../shared/api-endpoint").ApiTransport;
+    responsesNative?: boolean;
     reasoning?: import("../shared/reasoning").ReasoningPreference;
     manualReasoning?: import("../shared/manual-reasoning").ManualReasoningConfig;
   }) => Promise<{ ok: boolean; latency?: number; sample?: string; error?: string }>;
@@ -143,6 +146,7 @@ interface SettingsWindowApi {
     model: string;
     apiKey: string;
     explicitTransport?: import("../shared/api-endpoint").ApiTransport;
+    responsesNative?: boolean;
     reasoning?: import("../shared/reasoning").ReasoningPreference;
     manualReasoning?: import("../shared/manual-reasoning").ManualReasoningConfig;
   }) => Promise<Record<string, unknown>>;

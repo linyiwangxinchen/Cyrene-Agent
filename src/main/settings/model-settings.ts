@@ -55,6 +55,7 @@ export interface ProviderProfile {
    * "responses" = OpenAI Responses API（第三协议，2026-08 施工）。
    */
   explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
+  responsesNative?: boolean;
   /**
    * 用户保存的推理偏好（source of truth）。顶层 ModelSettings.reasoning 是当前厂商镜像。
    * 当前模型不支持某个 effort 时仍保留 user preference，
@@ -137,6 +138,7 @@ export interface ModelSettings {
    * 详见 ProviderProfile.explicitTransport。
    */
   explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
+  responsesNative?: boolean;
   /**
    * 当前厂商 reasoning 偏好的顶层镜像（与 explicitTransport 同思路）。
    * 真值在 perProvider[currentProvider].reasoning；顶层字段是 view。
@@ -307,6 +309,7 @@ function normalizeProviderProfile(
     apiKey: typeof input?.apiKey === "string" ? input.apiKey.trim() : "",
     displayName: typeof input?.displayName === "string" && input?.displayName.trim() ? input.displayName.trim() : undefined,
     explicitTransport,
+    ...(typeof input?.responsesNative === "boolean" ? { responsesNative: input.responsesNative } : {}),
     reasoning: normalizeReasoningPreference((input as { reasoning?: unknown })?.reasoning),
     // 非法值 → undefined（回退全局）；下限 4096，与 UI 输入框 min 一致
     contextWindowTokens: typeof rawContextWindow === "number" && Number.isFinite(rawContextWindow) && rawContextWindow >= 4096
@@ -362,6 +365,7 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
       model: typeof input?.model === "string" ? input.model : "",
       apiKey: typeof input?.apiKey === "string" ? input.apiKey : "",
       explicitTransport: input?.explicitTransport,
+      responsesNative: input?.responsesNative,
     });
     perProvider[provider] = normalizeProviderProfile(legacyProfile, provider);
     // 如果迁移后这一份完全是空的（用户从来没配过），再给个默认 baseUrl/model（便于 UI 第一次显示）
@@ -432,6 +436,7 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
     model: profile.model,
     apiKey: profile.apiKey,
     explicitTransport: profile.explicitTransport,
+    responsesNative: profile.responsesNative,
     reasoning: profile.reasoning,  // 顶层镜像：与 explicitTransport 同源（perProvider[currentProvider].reasoning）
     perProvider,
     modelProfiles,
@@ -504,6 +509,7 @@ export function resolveModelSettingsProfile(settings: ModelSettings, id?: string
     model: profile.model,
     apiKey: profile.apiKey,
     explicitTransport: profile.explicitTransport,
+    responsesNative: profile.responsesNative,
     reasoning: profile.reasoning,
     imageGeneration: profile.imageGeneration,
     manualReasoning: modelOption?.manualReasoning,
@@ -657,6 +663,7 @@ export function saveModelSettings(settings: Partial<ModelSettings>): ModelSettin
       ? settings.displayName.trim()
       : incomingProfile.displayName,
     explicitTransport: incomingExplicitTransport,
+    responsesNative: typeof settings.responsesNative === "boolean" ? settings.responsesNative : incomingProfile.responsesNative,
     reasoning: foldedReasoning,
   };
 

@@ -27,6 +27,7 @@ export function modelConfig(input: Record<string, unknown>): VendorConfig {
   const url = new URL(baseUrl);
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("模型服务地址必须是 HTTP 或 HTTPS URL");
   return { provider, baseUrl, model, apiKey: String(input.apiKey ?? ""), explicitTransport,
+    ...(typeof input.responsesNative === "boolean" ? { responsesNative: input.responsesNative } : {}),
     reasoning: normalizeReasoningPreference(input.reasoning), manualReasoning: normalizeManualReasoningConfig(input.manualReasoning) };
 }
 

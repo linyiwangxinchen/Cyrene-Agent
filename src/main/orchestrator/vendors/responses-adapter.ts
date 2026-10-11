@@ -6,7 +6,7 @@
 //   2. tool_choice 少一层嵌套：named 直接 {type:'function', name}
 //   3. 此适配器服务辅助调用；主会话的有来源重放由 model-runtime 负责
 //   4. store:false 恒定发送（无状态，不留服务端会话）
-//   5. 加密 reasoning 回放：仅 OpenAI 官方端点 include reasoning.encrypted_content，第三方不发
+//   5. 原生 GPT（含中转）请求加密 reasoning；部分兼容端可通过档案关闭
 //   6. maxTokens → max_output_tokens；reasoning_effort → reasoning:{effort}
 //   7. system 消息聚合为顶层 instructions，不进 input
 //
@@ -27,6 +27,7 @@ import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./too
 import { getVendorRuntimeSettings } from "./runtime-settings";
 import { resolveApiEndpoint } from "../../../shared/api-endpoint";
 import { buildStablePromptCacheKey } from "../prompt-layers";
+import { usesNativeOpenAIResponses } from "../../../shared/openai-responses";
 
 // ── wire 形状（仅声明 adapter 实际读写的字段，与 SDK 类型保持手工对齐） ──
 
@@ -77,9 +78,9 @@ export function isOfficialOpenAIEndpoint(baseUrl: string): boolean {
   }
 }
 
-/** 该档案是否启用 encrypted reasoning 回放：capability 标记 + 官方端点双条件。 */
+/** 原生 Responses 支持无状态加密推理回放；不能仅按官方域名判断。 */
 export function shouldIncludeEncryptedReasoning(cfg: VendorConfig, cap: ProviderCapability): boolean {
-  return cap.responsesEncryptedReasoning === true && isOfficialOpenAIEndpoint(cfg.baseUrl);
+  return usesNativeOpenAIResponses(cfg, cap.responsesEncryptedReasoning === true);
 }
 
 // ── input items 构建 ──
@@ -416,12 +417,12 @@ export class ResponsesAdapter implements ChatVendorAdapter {
   }
 
   /**
-   * GPT 的默认 Responses 路径也需要稳定的 prompt_cache_key 才能让 OpenAI
-   * 把相同的稳定提示词前缀分到同一缓存桶。代理端点不强行注入该字段，
-   * 避免把 OpenAI 专属参数发给未知兼容实现。
+   * 稳定的 prompt_cache_key 可辅助早期 GPT 的缓存路由；GPT-5.6+
+   * 自动路由，键只用于划分缓存统计。该字段不保证命中。
+   * 原生 GPT 中转同样保留提示；部分兼容端可显式关闭。
    */
   applyCacheHints(req: ChatRequest, cfg: VendorConfig): ChatRequest {
-    if (this.capability.cacheStrategy !== "auto" || this.id !== "chatgpt" || !isOfficialOpenAIEndpoint(cfg.baseUrl)) return req;
+    if (!usesNativeOpenAIResponses(cfg, this.capability.responsesEncryptedReasoning === true)) return req;
     const layers = req.promptLayers;
     const promptCacheKey = layers
       ? buildStablePromptCacheKey({

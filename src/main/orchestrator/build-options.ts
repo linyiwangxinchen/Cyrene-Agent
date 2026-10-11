@@ -244,6 +244,7 @@ export interface ModelSettingsLite {
   model: string;
   apiKey: string;
   explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
+  responsesNative?: boolean;
   imageGeneration?: { enabled: boolean; model: string };
   /** 顶层 reasoning 镜像（来自 perProvider[currentProvider].reasoning）。adapter 直接读。 */
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
@@ -1044,6 +1045,7 @@ export async function buildAgentRunOptions(
         model: settings.model,
         apiKey: settings.apiKey,
         explicitTransport: settings.explicitTransport,
+        responsesNative: settings.responsesNative,
         imageGeneration: settings.imageGeneration,
         reasoning: settings.reasoning,
         manualReasoning: settings.manualReasoning,

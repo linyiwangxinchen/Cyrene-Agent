@@ -50,6 +50,7 @@ import { normalizeManualReasoningConfig, type ManualReasoningConfig, type Manual
 import type { TimeoutSettings } from "../../../../shared/timeout-types";
 import { DEFAULT_TIMEOUT_SETTINGS } from "../../../../shared/timeout-types";
 import { CUSTOM_ENDPOINT_PROVIDERS, getCustomEndpointMode, type CustomEndpointMode } from "../../../settings/custom-endpoint-state";
+import { usesNativeOpenAIResponses } from "../../../../shared/openai-responses";
 import { MODEL_PRESETS, presetTransportUrl } from "../../../settings/api/presets";
 import type { ModelPreset } from "../../../settings/shared/types";
 import { useTranslation } from "../../i18n";
@@ -71,6 +72,7 @@ interface ModelProfile {
   model: string;
   apiKey: string;
   explicitTransport?: ApiTransport;
+  responsesNative?: boolean;
   reasoning?: ReasoningPreference;
   imageGeneration?: { enabled: boolean; model: string };
   contextWindowTokens?: number;
@@ -178,6 +180,7 @@ interface ModelProfileDraft {
   models: string[];
   apiKey: string;
   transport: ApiTransport;
+  responsesNative?: boolean;
   reasoning?: ReasoningPreference;
   imageGeneration: { enabled: boolean; model: string };
   modelOptions: Record<string, ModelOptionDraft>;
@@ -248,6 +251,7 @@ export function ModelSettingsPanel() {
   const [apiKey, setApiKey] = useState("");
   const [transport, setTransport] = useState<ApiTransport>(MODEL_PRESETS[0].transport);
   const [reasoning, setReasoning] = useState<ReasoningPreference>();
+  const [responsesNative, setResponsesNative] = useState<boolean | undefined>();
   const [imageGenerationEnabled, setImageGenerationEnabled] = useState(false);
   const [imageGenerationModel, setImageGenerationModel] = useState("");
   const [vision, setVision] = useState<VisionValues>({ baseUrl: "", apiKey: "", model: "" });
@@ -273,6 +277,7 @@ export function ModelSettingsPanel() {
     models,
     apiKey,
     transport,
+    responsesNative,
     reasoning,
     imageGeneration: { enabled: imageGenerationEnabled, model: imageGenerationModel.trim() },
     modelOptions,
@@ -350,6 +355,7 @@ export function ModelSettingsPanel() {
     setApiKey(nextApiKey);
     setTransport(nextTransport);
     setReasoning(profile.reasoning);
+    setResponsesNative(profile.responsesNative);
     setImageGenerationEnabled(profile.imageGeneration?.enabled ?? false);
     setImageGenerationModel(profile.imageGeneration?.model ?? "");
     setSavedDraftSignature(modelProfileDraftSignature({
@@ -360,6 +366,7 @@ export function ModelSettingsPanel() {
       models: nextModels,
       apiKey: nextApiKey,
       transport: nextTransport,
+      responsesNative: profile.responsesNative,
       reasoning: profile.reasoning,
       imageGeneration: profile.imageGeneration ?? { enabled: false, model: "" },
       modelOptions: nextModelOptions,
@@ -380,6 +387,7 @@ export function ModelSettingsPanel() {
     setModel(nextPreset.mainModels[0] ?? "");
     setApiKey("");
     setTransport(nextPreset.transport);
+    setResponsesNative(undefined);
     setReasoning(undefined);
     setImageGenerationEnabled(false);
     setImageGenerationModel("");
@@ -398,6 +406,7 @@ export function ModelSettingsPanel() {
     setModel(nextPreset.mainModels[0] ?? "");
     setApiKey("");
     setTransport(nextPreset.transport);
+    setResponsesNative(undefined);
     setImageGenerationEnabled(false);
     setImageGenerationModel("");
     setNewModel("");
@@ -490,7 +499,7 @@ export function ModelSettingsPanel() {
     try {
       if (!window.settings) throw new Error("Settings API unavailable");
       const config = currentManualConfig();
-      const request = { provider, baseUrl: baseUrl.trim(), model: modelOptionModelId.trim(), apiKey: currentApiKey(), explicitTransport: transport, reasoning: draftReasoningPreference(), manualReasoning: config };
+      const request = { provider, baseUrl: baseUrl.trim(), model: modelOptionModelId.trim(), apiKey: currentApiKey(), explicitTransport: transport, responsesNative, reasoning: draftReasoningPreference(), manualReasoning: config };
       if (checkConnection) {
         setManualChecking(true);
         const result = await window.settings.testConnection?.(request);
@@ -613,6 +622,7 @@ export function ModelSettingsPanel() {
         models: models.map((item) => item.trim()).filter(Boolean),
         apiKey: currentApiKey(),
         explicitTransport: transport,
+        responsesNative,
         reasoning,
         imageGeneration: { enabled: imageGenerationEnabled, model: imageGenerationModel.trim() },
         // 新字段按模型保存；兼容字段镜像默认模型值，确保旧版读取时保持合理行为。
@@ -665,6 +675,7 @@ export function ModelSettingsPanel() {
         model: model.trim(),
         apiKey: currentApiKey(),
         explicitTransport: transport,
+        responsesNative,
         reasoning,
         manualReasoning: modelOptions[model.trim()]?.manualReasoning,
       });
@@ -923,6 +934,12 @@ export function ModelSettingsPanel() {
                     <Radio.Button value="responses"><span className="cy-model-transport-option"><OpenAI size={16} aria-hidden="true" /><code>responses</code></span></Radio.Button>
                   </Radio.Group>
                 </div>
+                {transport === "responses" && <div className="cy-model-field">
+                  <div className="cy-settings-row">
+                    <div><strong>{t("settingsPage.modelSettings.responsesNative")}</strong><small>{t("settingsPage.modelSettings.responsesNativeHint")}</small></div>
+                    <SettingsSwitch ariaLabel={t("settingsPage.modelSettings.responsesNative")} checked={usesNativeOpenAIResponses({ baseUrl, model, responsesNative }, /chatgpt|openai/i.test(provider))} onChange={setResponsesNative} />
+                  </div>
+                </div>}
                 <div className="cy-model-field">
                   <span>{t("settingsPage.modelSettings.modelList")}</span>
                   <div className="cy-model-list-editor">

@@ -155,22 +155,27 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     model: options.settings.model,
     apiKey: options.settings.apiKey,
     explicitTransport: options.settings.explicitTransport,
+    responsesNative: options.settings.responsesNative,
     reasoning: options.settings.reasoning,
     manualReasoning: options.settings.manualReasoning,
     imageGeneration: options.settings.imageGeneration,
   };
 
-  const buildRequest = (reqMessages: ChatMessage[], stream: boolean): ChatRequest => ({
-    model: options.settings.model,
-    ...composePromptLayers({
+  const buildRequest = (reqMessages: ChatMessage[], stream: boolean): ChatRequest => {
+    const composed = composePromptLayers({
       stablePrefix: options.soulSystemBaseContent,
       runtimeContext: options.runtimeContext,
       mode: options.mode,
-    }, reqMessages),
-    stream,
-    ...(options.settings.imageGeneration?.enabled ? { imageGeneration: options.settings.imageGeneration } : {}),
-    ...(options.soulSampling ?? {}),
-  });
+    }, reqMessages);
+    return {
+      model: options.settings.model,
+      messages: composed.messages,
+      promptLayers: composed.metadata,
+      stream,
+      ...(options.settings.imageGeneration?.enabled ? { imageGeneration: options.settings.imageGeneration } : {}),
+      ...(options.soulSampling ?? {}),
+    };
+  };
 
   const invokeNonStreaming = async (messages: ChatMessage[], signal: AbortSignal): Promise<ChatResponse> => {
     const request: ChatRequest = {

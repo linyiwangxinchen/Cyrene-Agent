@@ -1217,6 +1217,8 @@
       "resetBaseUrl": "恢复服务商默认地址",
       "endpointPreview": "请求地址预览",
       "transport": "接口协议",
+      "responsesNative": "原生 OpenAI Responses 兼容",
+      "responsesNativeHint": "GPT 模型默认启用：保留缓存路由提示和加密推理回放。中转需支持原生 Responses；若拒绝这些参数，可关闭。缓存是否命中以服务商返回的数据为准。",
       "transportOpenAI": "chat/completions",
       "transportAnthropic": "anthropic",
       "model": "模型 ID",

@@ -168,6 +168,7 @@ function resolveTaskModel(parentVendorConfig: VendorConfig): {
       model,
       apiKey: expanded.apiKey,
       explicitTransport: expanded.explicitTransport,
+      responsesNative: expanded.responsesNative,
       reasoning: expanded.reasoning,
       manualReasoning: modelOption?.manualReasoning,
     },

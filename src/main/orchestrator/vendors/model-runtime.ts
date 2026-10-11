@@ -12,6 +12,7 @@ import { ResponsesOutputTracker } from "./sdk-stream/responses-output";
 import type { StreamDiagnostic, UnifiedStreamDelta } from "./sdk-stream/types";
 import { collectGeneratedImages, sanitizeGeneratedImageRaw, stripGeneratedImageReplay } from "./generated-image-output";
 import type { GeneratedImageOutput } from "../../../shared/generated-image";
+import { normalizeToolSpecsForCache } from "../prompt-layers";
 
 export interface ModelRunInput {
   adapter: ChatVendorAdapter;
@@ -65,7 +66,11 @@ async function runModel(input: ModelRunInput, streaming: boolean): Promise<ChatR
   };
   try {
     if (controller.signal.aborted) throw controller.signal.reason;
-    const prepared = prepareModelCall({ ...input, stream: streaming, onRequest: id => { traceId = id; },
+    // 所有入口统一稳定工具顺序并应用缓存提示；Web 直调和辅助调用也走这里。
+    const normalizedRequest = { ...input.request,
+      ...(input.request.tools ? { tools: normalizeToolSpecsForCache(input.request.tools) } : {}) };
+    const effectiveRequest = input.adapter.applyCacheHints?.(normalizedRequest, input.config) ?? normalizedRequest;
+    const prepared = prepareModelCall({ ...input, request: effectiveRequest, stream: streaming, onRequest: id => { traceId = id; },
       onRefusal: reason => commit({ type: "refusal", reason }),
       onHistoryDiagnostic: diagnostic => {
         input.onHistoryDiagnostic?.(diagnostic);

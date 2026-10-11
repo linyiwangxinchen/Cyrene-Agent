@@ -143,6 +143,19 @@ afterEach(async () => {
 });
 
 describe("模型清单编辑组件", () => {
+  it("GPT 中转默认启用原生兼容，关闭后保存并重新加载保持关闭", async () => {
+    const profile = { ...LEGACY_PROFILE, model: "gpt-6.1-sol", explicitTransport: "responses" };
+    const settings = installSettings([profile], profile.id);
+    const host = await renderPanel();
+    const toggle = host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="原生 OpenAI Responses 兼容"]');
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
+    await act(async () => { toggle!.click(); });
+    const payload = await saveAndGetPayload(settings);
+    expect(payload.responsesNative).toBe(false);
+    installSettings([{ ...profile, responsesNative: false }], profile.id);
+    const reloaded = await renderPanel();
+    expect(reloaded.querySelector('[role="switch"][aria-label="原生 OpenAI Responses 兼容"]')?.getAttribute("aria-checked")).toBe("false");
+  });
   it("在运行设置中默认显示并保存 5 次模型请求重试", async () => {
     const settings = installSettings([], undefined);
     await renderPanel();

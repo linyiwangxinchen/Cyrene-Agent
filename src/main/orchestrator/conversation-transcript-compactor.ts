@@ -54,6 +54,7 @@ export interface TranscriptCompactionModelSettings {
   model: string;
   apiKey: string;
   explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
+  responsesNative?: boolean;
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
   manualReasoning?: import("../../shared/manual-reasoning").ManualReasoningConfig;
   contextWindowTokens?: number;
@@ -87,6 +88,7 @@ export function createModelBackedConversationTranscriptCompactor(input: {
           model: settings.model,
           apiKey: settings.apiKey,
           explicitTransport: settings.explicitTransport,
+          responsesNative: settings.responsesNative,
           reasoning: settings.reasoning,
           manualReasoning: settings.manualReasoning,
         }),

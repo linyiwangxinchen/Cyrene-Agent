@@ -259,6 +259,7 @@ describe("runChatLoop", () => {
     });
 
     expect(adapter.requests[0].messages[0]).toEqual({ role: "system", content: "SOUL_SYSTEM" });
+    expect(adapter.requests[0].promptLayers).toEqual({ stablePrefix: "SOUL_SYSTEM", promptVersion: "v1" });
     expect(adapter.requests[0].messages.at(-1)).toEqual({
       role: "user",
       content: "<runtime_context>\n[RUNTIME] 当前时间与附件\n</runtime_context>",

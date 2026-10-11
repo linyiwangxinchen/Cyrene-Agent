@@ -90,6 +90,7 @@ describe("headless model service", () => {
     setTimeout(() => controller.abort(), 50); await expect(request).rejects.toThrow(/取消|超时/);
   });
   it("aligns known MiniMax bases while preserving custom gateways and explicit protocols", () => {
+    expect(modelConfig({ model: "gpt-6.1-sol", baseUrl: "https://relay.test/v1", explicitTransport: "responses", responsesNative: false }).responsesNative).toBe(false);
     expect(modelConfig({ provider: "MiniMax（稀宇科技）", model: "MiniMax-M3", baseUrl: "https://api.minimaxi.com/v1", explicitTransport: "anthropic" }).baseUrl).toBe("https://api.minimaxi.com/anthropic");
     expect(modelConfig({ model: "custom", baseUrl: "https://example.com/custom/v1", explicitTransport: "anthropic" }).baseUrl).toBe("https://example.com/custom/v1");
   });

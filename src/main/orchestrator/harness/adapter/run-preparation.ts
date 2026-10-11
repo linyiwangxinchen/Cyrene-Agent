@@ -75,6 +75,7 @@ export async function prepareHarnessRun(
     model: options.settings.model,
     apiKey: options.settings.apiKey,
     explicitTransport: options.settings.explicitTransport,
+    responsesNative: options.settings.responsesNative,
     reasoning: options.settings.reasoning,
     manualReasoning: options.settings.manualReasoning,
     imageGeneration: options.settings.imageGeneration,

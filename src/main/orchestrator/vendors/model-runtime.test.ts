@@ -38,6 +38,73 @@ afterEach(async () => {
   roots.splice(0).forEach(root => fs.rmSync(root, { recursive: true, force: true }));
 });
 
+describe("模型运行入口缓存提示", () => {
+  it.each([false, true])("GPT 中转原生多轮请求保留历史前缀与推理（stream=%s）", async streaming => {
+    const config: VendorConfig = { provider: "自定义端点", model: "gpt-6.1-sol", baseUrl: "https://relay.test/v1",
+      apiKey: "test-key", explicitTransport: "responses" };
+    const adapter = getAdapterForConfig(config);
+    const sent: Array<Record<string, any>> = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      sent.push(JSON.parse(init.body as string));
+      return streaming ? sseResponse(streamEvents("responses", { reasoning: true }))
+        : jsonResponse(responseBody("responses", { reasoning: true }));
+    }));
+    const run = streaming ? streamChatWithAiSdk : generateChatWithAiSdk;
+    const messages: ChatMessage[] = [{ role: "system", content: "固定人设" }, { role: "user", content: "第一轮" }];
+    const anotherTool = { name: "another_tool", description: "test", parameters: { type: "object" } };
+    const request = { model: config.model, messages, tools: [weatherTool, anotherTool],
+      promptLayers: { stablePrefix: "固定人设", mode: "chat", promptVersion: "v1" } };
+    const first = await run({ adapter, config, request, timeoutMs: 2000 });
+    // Simulate persistence before the next run, as the Web transcript does.
+    const saved = JSON.parse(JSON.stringify(first.assistantMessage)) as ChatMessage;
+    await run({ adapter, config, request: { ...request, tools: [anotherTool, weatherTool], messages: [...messages, saved, { role: "user", content: "第二轮" }] }, timeoutMs: 2000 });
+    expect(sent).toHaveLength(2);
+    expect(sent[0].include).toContain("reasoning.encrypted_content");
+    expect(sent[0].store).toBe(false);
+    expect(sent[1].input.slice(0, sent[0].input.length)).toEqual(sent[0].input);
+    expect(sent[1].tools).toEqual(sent[0].tools);
+    expect(sent[1].prompt_cache_key).toBe(sent[0].prompt_cache_key);
+    expect(sent[0].prompt_cache_key).toMatch(/^cyrene:/);
+    expect(JSON.stringify(sent[1].input)).toContain("encrypted_private");
+    expect(first.usage?.cachedInput).toBe(1);
+  });
+
+  it.each(["openai", "responses"] as const)("Web 等直连 %s 调用发送缓存键并保留缓存读数", async (transport) => {
+    const runtimeConfig: VendorConfig = {
+      provider: PROVIDER_CAPABILITIES.find(cap => cap.id === "chatgpt")!.displayName,
+      model: "gpt-5.6",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "test-key",
+      explicitTransport: transport,
+    };
+    const adapter = getAdapterForConfig(runtimeConfig);
+    const request = {
+      model: runtimeConfig.model,
+      messages: [{ role: "system" as const, content: "稳定的人设规则" }, { role: "user" as const, content: "你好" }],
+      promptLayers: { stablePrefix: "稳定的人设规则", promptVersion: "v1", mode: "chat" },
+    };
+    let sent: Record<string, unknown> | undefined;
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      sent = JSON.parse(init.body as string) as Record<string, unknown>;
+      const body = responseBody(transport);
+      body.usage = transport === "responses"
+        ? { input_tokens: 18_653, output_tokens: 38, input_tokens_details: { cached_tokens: 16_384 } }
+        : { prompt_tokens: 18_653, completion_tokens: 38, prompt_tokens_details: { cached_tokens: 16_384 } };
+      return jsonResponse(body);
+    }));
+
+    const response = await generateChatWithAiSdk({
+      adapter,
+      config: runtimeConfig,
+      request,
+      timeoutMs: 2_000,
+    });
+
+    expect(sent?.prompt_cache_key).toMatch(/^cyrene:chatgpt:[a-f0-9]{16}$/);
+    expect(response.usage).toMatchObject({ input: 18_653, output: 38, cachedInput: 16_384 });
+  });
+});
+
 describe("#167 模型执行历史互通", () => {
   const configs: VendorConfig[] = [
     { ...config, provider: PROVIDER_CAPABILITIES.find(cap => cap.id === "chatgpt")!.displayName, explicitTransport: "openai", model: "gpt-5.6", baseUrl: "https://compatible.test/v1" },

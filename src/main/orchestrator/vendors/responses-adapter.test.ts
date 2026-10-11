@@ -72,14 +72,16 @@ describe("ResponsesAdapter — URL 与基础字段", () => {
     expect(second.extraBody?.prompt_cache_key).toBe(first.extraBody?.prompt_cache_key);
   });
 
-  test("GPT 代理端点不注入 OpenAI 专属 prompt_cache_key", () => {
+  test("GPT 代理端点保留缓存键，部分兼容端允许显式关闭", () => {
     const chatgpt: ProviderCapability = { ...capability, id: "chatgpt", transport: "responses", cacheStrategy: "auto" };
     const adapter = makeAdapter(chatgpt);
     const request = adapter.applyCacheHints!({
       model: "gpt-5.6", messages: [{ role: "user", content: "hi" }],
       promptLayers: { stablePrefix: "stable", promptVersion: "v1" },
     }, { ...cfg, provider: "ChatGPT", model: "gpt-5.6" });
-    expect(request.extraBody).toBeUndefined();
+    expect(request.extraBody?.prompt_cache_key).toMatch(/^cyrene:chatgpt:/);
+    const disabled = adapter.applyCacheHints!({ model: "gpt-5.6", messages: [] }, { ...cfg, model: "gpt-5.6", responsesNative: false });
+    expect(disabled.extraBody).toBeUndefined();
   });
 
   test("baseUrl 追加 /responses 后缀", () => {
@@ -255,6 +257,18 @@ describe("ResponsesAdapter — include 端点级判定", () => {
       { baseUrl: "https://api.deepseek.com", provider: "p", model: "m", apiKey: "k" },
       chatgptCap,
     )).toBe(false);
+  });
+});
+
+describe("Responses 原生 GPT 中转", () => {
+  test("gpt-6.1-sol 在自定义档案也请求加密推理，关闭时不发送", () => {
+    const config = { baseUrl: "https://proxy.example.com/v1", model: "gpt-6.1-sol" };
+    expect(makeBody([], { config }).body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(makeBody([], { config: { ...config, responsesNative: false } }).body).not.toHaveProperty("include");
+  });
+  test("未知模型可显式开启原生兼容，非 GPT 默认不注入", () => {
+    expect(makeBody([], { config: { responsesNative: true } }).body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(makeBody([]).body).not.toHaveProperty("include");
   });
 });
 
