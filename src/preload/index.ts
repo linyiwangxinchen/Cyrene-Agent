@@ -366,6 +366,7 @@ const settingsApi = {
   // renderer → main：请求打开设置页并定位到指定标签（如头像菜单跳"常规"）
   openSection: (section?: string) => ipcRenderer.invoke(IPC.SETTINGS_REQUEST_SWITCH_SECTION, section),
   getGeneral: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
+  getProactiveStatus: () => ipcRenderer.invoke(IPC.SETTINGS_GET_PROACTIVE_STATUS),
   saveGeneral: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_GENERAL, config),
   getTimeoutSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_TIMEOUT_SETTINGS),
   saveTimeoutSettings: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_TIMEOUT_SETTINGS, config),

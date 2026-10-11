@@ -104,6 +104,23 @@ function normalizeWorkspaceBinding(value: unknown): ScheduledTask["workspaceBind
   };
 }
 
+function normalizeDelivery(value: unknown): ScheduledTask["delivery"] {
+  if (!value || typeof value !== "object") return undefined;
+  const delivery = value as Partial<NonNullable<ScheduledTask["delivery"]>>;
+  const channel = delivery.channel;
+  const targetId = typeof delivery.targetId === "string" ? delivery.targetId.trim() : "";
+  const sessionId = typeof delivery.sessionId === "string" ? delivery.sessionId.trim() : "";
+  if (channel !== "wechat" && channel !== "feishu" && channel !== "qq" && channel !== "qqbot") return undefined;
+  if (!targetId || !sessionId) return undefined;
+  return {
+    channel,
+    targetId,
+    sessionId,
+    ...(delivery.chatType === "private" || delivery.chatType === "group" ? { chatType: delivery.chatType } : {}),
+    ...(typeof delivery.threadId === "string" && delivery.threadId.trim() ? { threadId: delivery.threadId.trim() } : {}),
+  };
+}
+
 function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
   if (!raw || typeof raw !== "object") return null;
   const task = raw as Partial<ScheduledTask>;
@@ -115,6 +132,8 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
     ? task.ownerPluginId
     : undefined;
   const workspaceBinding = normalizeWorkspaceBinding(task.workspaceBinding);
+  const delivery = normalizeDelivery(task.delivery);
+  const kind = delivery ? "reminder" : "agent";
   return {
     id: task.id,
     title: task.title.trim(),
@@ -122,9 +141,9 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
     // 插件任务的磁盘 enabled 永远归一化为 false：旧版宿主可能把它当普通任务
     // 手动启用过，升级后必须回到停用，等用户重新确认授权。
     // 旧版用户任务未保存工作区。安全起见先停用，避免被动继承当前聊天目录后执行。
-    enabled: ownerPluginId ? false : (workspaceBinding ? task.enabled !== false : false),
+    enabled: ownerPluginId ? false : (workspaceBinding || delivery ? task.enabled !== false : false),
     schedule: task.schedule,
-    nextFireAt: ownerPluginId || workspaceBinding
+    nextFireAt: ownerPluginId || workspaceBinding || delivery
       ? (typeof task.nextFireAt === "string" ? task.nextFireAt : null)
       : null,
     lastFiredAt: typeof task.lastFiredAt === "string" ? task.lastFiredAt : undefined,
@@ -132,6 +151,7 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
     ...(Number.isInteger(task.maxRuns) && (task.maxRuns ?? 0) > 0 ? { maxRuns: task.maxRuns } : {}),
     ...(typeof task.endAt === "string" && Number.isFinite(Date.parse(task.endAt)) ? { endAt: task.endAt } : {}),
     ...(workspaceBinding ? { workspaceBinding } : {}),
+    ...(delivery ? { kind, delivery } : {}),
     toolMode: ownerPluginId ? "allow-list" : normalizeToolMode(task.toolMode),
     allowedToolIds: uniq(Array.isArray(task.allowedToolIds) ? task.allowedToolIds : []),
     createdAt: typeof task.createdAt === "string" ? task.createdAt : new Date(0).toISOString(),
@@ -141,7 +161,7 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
       pluginUserEnabled: task.pluginUserEnabled === true,
       mode: normalizeMode(task.mode),
       approvalFingerprint: typeof task.approvalFingerprint === "string" ? task.approvalFingerprint : "",
-    } : {}),
+    } : delivery ? { mode: "chat" as const } : {}),
   };
 }
 
@@ -197,9 +217,11 @@ export function createSchedulerStore(deps: StoreDeps) {
       ? input.ownerPluginId
       : undefined;
     const workspaceBinding = normalizeWorkspaceBinding(input.workspaceBinding);
-    if (!ownerPluginId && !workspaceBinding) throw new Error("用户定时任务必须绑定工作区");
+    const delivery = normalizeDelivery(input.delivery);
+    const kind = delivery ? "reminder" : "agent";
+    if (!ownerPluginId && !workspaceBinding && !delivery) throw new Error("用户定时任务必须绑定工作区或投递目标");
     if (input.mode !== undefined && normalizeMode(input.mode) === undefined) throw new Error("会话模式无效");
-    if (!ownerPluginId && input.mode !== undefined && input.mode !== "work" && input.mode !== "code") {
+    if (!ownerPluginId && input.mode !== undefined && input.mode !== "work" && input.mode !== "code" && !(delivery && input.mode === "chat")) {
       throw new Error("用户定时任务模式仅支持 work 或 code");
     }
     const now = deps.now();
@@ -221,6 +243,7 @@ export function createSchedulerStore(deps: StoreDeps) {
       ...(maxRuns !== undefined ? { maxRuns } : {}),
       ...(endAt ? { endAt: endAt.toISOString() } : {}),
       ...(workspaceBinding ? { workspaceBinding } : {}),
+      ...(delivery ? { kind, delivery } : {}),
       toolMode: ownerPluginId ? "allow-list" : normalizeToolMode(input.toolMode),
       allowedToolIds: uniq(input.allowedToolIds ?? []),
       createdAt: now.toISOString(),
@@ -231,7 +254,7 @@ export function createSchedulerStore(deps: StoreDeps) {
         mode: normalizeMode(input.mode),
         approvalFingerprint: typeof input.approvalFingerprint === "string" ? input.approvalFingerprint : "",
       } : {}),
-      ...(!ownerPluginId ? { mode: input.mode === "code" ? "code" : "work" } : {}),
+      ...(!ownerPluginId ? { mode: delivery ? "chat" as const : (input.mode === "code" ? "code" as const : "work" as const) } : {}),
     };
     tasks = [...tasks, task];
     persistTasks();
@@ -247,10 +270,12 @@ export function createSchedulerStore(deps: StoreDeps) {
     const workspaceBinding = patch.workspaceBinding === undefined
       ? current.workspaceBinding
       : normalizeWorkspaceBinding(patch.workspaceBinding);
-    if (!isPluginTask && patch.enabled === true && !workspaceBinding) {
-      throw new Error("启用用户定时任务前必须绑定工作区");
+    const delivery = patch.delivery === undefined ? current.delivery : normalizeDelivery(patch.delivery);
+    const kind = delivery ? "reminder" : (workspaceBinding ? "agent" : current.kind);
+    if (!isPluginTask && patch.enabled === true && !workspaceBinding && !delivery) {
+      throw new Error("启用用户定时任务前必须绑定工作区或投递目标");
     }
-    if (!isPluginTask && patch.mode !== undefined && patch.mode !== "work" && patch.mode !== "code") {
+    if (!isPluginTask && patch.mode !== undefined && patch.mode !== "work" && patch.mode !== "code" && !(delivery && patch.mode === "chat")) {
       throw new Error("用户定时任务模式仅支持 work 或 code");
     }
     const now = deps.now();
@@ -304,6 +329,7 @@ export function createSchedulerStore(deps: StoreDeps) {
       ...current,
       ...patch,
       ...(workspaceBinding ? { workspaceBinding } : { workspaceBinding: undefined }),
+      ...(delivery ? { kind, delivery } : { delivery: undefined, kind: workspaceBinding ? "agent" : current.kind }),
       title,
       prompt,
       schedule,

@@ -77,10 +77,12 @@ export interface GeneralSettings {
   segmentedOutputMode: SegmentedOutputMode;
   /** 手机渠道文本消息分段发送偏好。 */
   mobileMessageSegmentation: MobileMessageSegmentationMode;
-  /** 主动聊天功能开关占位；当前不接实际逻辑。 */
+  /** 昔涟主动聊天总开关。 */
   proactiveChatMode: ProactiveChatMode;
   /** 主动消息最终投递到本地、微信或飞书。 */
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
+  /** 主动聊天候选进入模型评估前的最低评分（0-100）。 */
+  proactiveTargetScore: number;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo" | "mossland";
   ttsAutoRead: boolean;

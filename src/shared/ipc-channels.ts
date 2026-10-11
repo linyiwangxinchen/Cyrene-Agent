@@ -137,6 +137,7 @@ export const IPC = {
   SETTINGS_PREVIEW_REASONING: "settings:preview-reasoning",
   SETTINGS_TEST_VISION: "settings:test-vision",
   SETTINGS_GET_GENERAL: "settings:get-general",
+  SETTINGS_GET_PROACTIVE_STATUS: "settings:get-proactive-status",
   SETTINGS_SAVE_GENERAL: "settings:save-general",
   SETTINGS_GET_TIMEOUT_SETTINGS: "settings:get-timeout-settings",
   SETTINGS_SAVE_TIMEOUT_SETTINGS: "settings:save-timeout-settings",

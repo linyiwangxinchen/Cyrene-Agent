@@ -26,7 +26,8 @@ import { canCommitProactiveMessage } from "./proactive-policy";
 import { loadProactiveState, saveProactiveState } from "./proactive-state-store";
 import { createProactiveTrigger, getZonedDateParts, type ProactiveTriggerController } from "./proactive-trigger";
 import { runProactiveModel } from "./proactive-model";
-import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive-types";
+import { DEFAULT_PROACTIVE_TARGET_SCORE } from "../../shared/preferences";
+import type { ProactiveCandidate, ProactiveEvaluationStatus, ProactiveRuntimeSnapshot } from "./proactive-types";
 
 export interface ProactiveLifecycleOptions {
   loadGeneralSettings: () => GeneralSettings;
@@ -38,6 +39,7 @@ export interface ProactiveLifecycle {
   initializeProactiveTrigger: () => void;
   stopProactiveTrigger: () => void;
   getProactiveChatService: () => ProactiveChatService | null;
+  getProactiveStatus: () => ProactiveEvaluationStatus;
   proactiveConversationLifecycle: {
     onUserMessage: () => void;
     onConversationStarted: () => void;
@@ -52,6 +54,13 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   const conversationJournal = options.conversationJournal;
   let normalConversationBusyCount = 0;
   let proactiveScreenLocked = false;
+  let proactiveStatus: ProactiveEvaluationStatus = {
+    candidateScore: null,
+    targetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
+    sceneId: null,
+    evaluatedAt: null,
+    state: "no_candidate",
+  };
 
   function buildProactivePersonaPrompt(): string {
     const parts: string[] = [];
@@ -79,12 +88,16 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   }
 
   async function getProactiveHistories(): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[] }> {
-    const ordinaryMeta = (await chatsStore.listSessions()).find((session) => session.purpose !== "proactive-chat");
+    // Read the session index once so both projections come from the same
+    // snapshot. listSessions is sorted by recent activity, so the first
+    // ordinary session is the current conversation and the proactive session
+    // remains the singleton dedicated history.
+    const sessions = await chatsStore.listSessions();
+    const ordinaryMeta = sessions.find((session) => session.purpose !== "proactive-chat");
+    const proactiveMeta = sessions.find((session) => session.purpose === "proactive-chat");
     const [ordinaryProjection, proactiveProjection] = await Promise.all([
       ordinaryMeta ? conversationJournal.readProjection(ordinaryMeta.id) : Promise.resolve(null),
-      ((await chatsStore.listSessions()).find((session) => session.purpose === "proactive-chat")
-        ? conversationJournal.readProjection((await chatsStore.listSessions()).find((session) => session.purpose === "proactive-chat")!.id)
-        : Promise.resolve(null)),
+      proactiveMeta ? conversationJournal.readProjection(proactiveMeta.id) : Promise.resolve(null),
     ]);
     return {
       ordinary: toProactiveHistory(ordinaryProjection?.messages ?? []),
@@ -217,7 +230,6 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const result = await routeProactiveDelivery(target, {
       commitLocal: () => commitLocalProactiveMessage(input),
       commitChannel: async (channel) => {
-        // External channel delivery remains the legacy direct path until Task 11.
         const channelResult = await sendProactiveChannelMessage({
           channel,
           text: input.text,
@@ -263,7 +275,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           timeoutMs: 45_000,
         });
       },
-      // Opener 的 preset fallback 已移除：model 失败时由 proactive-service 自身走 cancel 路径。
+      // Model failure is fail-closed: the proactive service cancels this
+      // attempt instead of sending a generic canned message.
       getFallback: async () => null,
       canStartDelivery: () => {
         const target = options.loadGeneralSettings().proactiveDeliveryTarget;
@@ -301,6 +314,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       getRuntimeSnapshot: getProactiveRuntimeSnapshot,
       getProactiveState: loadProactiveState,
       getTimezone: () => resolveChatContextTimezone(loadUserProfile().timezone),
+      getTargetScore: () => options.loadGeneralSettings().proactiveTargetScore ?? DEFAULT_PROACTIVE_TARGET_SCORE,
+      onEvaluation: (status: ProactiveEvaluationStatus) => { proactiveStatus = status; },
       // getWeatherContext 第一版不传：未来天气缓存接入后填，函数体无需改
       getLastEvaluatedAtByScene: () => new Map(proactiveBackoffMap),
       setLastEvaluatedAtByScene: (next) => {
@@ -321,6 +336,10 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     initializeProactiveTrigger,
     stopProactiveTrigger,
     getProactiveChatService: () => proactiveChatService,
+    getProactiveStatus: () => ({
+      ...proactiveStatus,
+      targetScore: options.loadGeneralSettings().proactiveTargetScore ?? DEFAULT_PROACTIVE_TARGET_SCORE,
+    }),
     proactiveConversationLifecycle,
   };
 }

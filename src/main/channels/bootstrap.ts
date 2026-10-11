@@ -164,6 +164,13 @@ export function createChannelsSubsystem(
       } : {}),
     });
     if (channelInput.transcriptSink) options.transcriptSink = channelInput.transcriptSink;
+    options.channelContext = {
+      channel: msg.channel,
+      targetId: msg.chatId,
+      ...(msg.chatType ? { chatType: msg.chatType } : {}),
+      ...(msg.threadId ? { threadId: msg.threadId } : {}),
+      sessionId: channelInput.sessionId,
+    };
     // 运行标识贯通：sink 写入、runStore 会话与生命周期事件使用同一 runId，
     // 崩溃孤儿工具才能按 assistant 条目上的 runId 查回运行状态。
     options.runId = channelInput.runId;

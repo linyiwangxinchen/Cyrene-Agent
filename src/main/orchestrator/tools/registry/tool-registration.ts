@@ -20,6 +20,7 @@ import { registerZCodeFileTools } from "../zcode-file-tools";
 import type { LspManager } from "../../../lsp/manager";
 import { registerLspTool } from "../lsp-tool";
 import "../built-in-tools";
+import { registerReminderTool } from "../reminder-tool";
 
 export function syncBuiltInToolToggles(settings: GeneralSettings): void {
   toolRegistry.setEnabled("weather", settings.weatherEnabled);
@@ -50,6 +51,7 @@ export function registerAllTools(deps: { lspManager: LspManager; gmailService?: 
     grep: toolRegistry.getById("search_text")!,
   });
   registerMomentsTools();
+  registerReminderTool(toolRegistry);
 
   registerTravelTools();
   registerEmailTools();

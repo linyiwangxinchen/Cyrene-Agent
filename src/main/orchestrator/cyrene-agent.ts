@@ -77,6 +77,7 @@ import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { requestUserClarification } from "../user-choice";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { CyreneRunTerminalResult } from "../../shared/run-terminal";
+import type { ChannelChatType, ChannelId } from "../channels/types";
 import { executeToolDefinition } from "./tools/registry/tool-executor";
 
 const executionLedgers = new ExecutionLedgerStore();
@@ -118,6 +119,14 @@ export interface CyreneRunOptions {
   /** 原始消息（不含 system）。system 由 chat-loop / harness-adapter 按 promptLayers 组装，不随消息持久化。 */
   messages: ChatMessage[];
   conversationId?: string;
+  /** 当前外部渠道消息的可信回信目标，供提醒等渠道工具绑定原会话。 */
+  channelContext?: {
+    channel: ChannelId;
+    targetId: string;
+    chatType?: ChannelChatType;
+    threadId?: string;
+    sessionId: string;
+  };
   /** CITA 保留的用户原始 Query；旧调用方未传时从最后一条 user 消息读取。 */
   originalQuery?: string;
   /** CITA 生成的上下文化理解，供模型上下文拼装显式使用。 */
@@ -511,6 +520,7 @@ export class CyreneAgent extends AbstractAgent {
               resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
               mode: options.conversationMode,
               allowedSkillIds: options.capabilities?.skillIds,
+              channelContext: options.channelContext,
             });
             const conversationId = options.conversationId ?? "default";
             // Work / Learn / Code 统一通过 CyreneHarness。

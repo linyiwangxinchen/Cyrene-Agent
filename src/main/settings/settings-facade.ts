@@ -11,11 +11,13 @@ import { MAX_PARALLEL_TOOL_CALLS } from "../../shared/task-session";
 import { normalizeUiIcon } from "../../shared/ui-icon";
 import { normalizeUiLanguage } from "../../shared/ui-language";
 import {
+  DEFAULT_PROACTIVE_TARGET_SCORE,
   normalizeChatSocialContextEnabled,
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
   normalizeProactiveDeliveryTarget,
+  normalizeProactiveTargetScore,
   normalizeSegmentedOutputMode,
 } from "../../shared/preferences";
 import { normalizeCitaSettings } from "../cita/settings";
@@ -62,6 +64,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   mobileMessageSegmentation: "off",
   proactiveChatMode: "off",
   proactiveDeliveryTarget: "local",
+  proactiveTargetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -251,6 +254,7 @@ export function normalizeGeneralSettings(
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
+    proactiveTargetScore: normalizeProactiveTargetScore(input?.proactiveTargetScore),
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo", "mossland"].includes(input?.ttsEngine as string)
       ? input?.ttsEngine
       : "off") as GeneralSettings["ttsEngine"],

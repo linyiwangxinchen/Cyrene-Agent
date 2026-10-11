@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
-import { Alert, Button, Modal, Radio, Spin } from "antd";
+import { Alert, Button, InputNumber, Modal, Radio, Spin } from "antd";
 import { FileText, SlidersHorizontal } from "lucide-react";
 import {
   normalizeChatSocialContextEnabled,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
   normalizeProactiveDeliveryTarget,
+  normalizeProactiveTargetScore,
+  DEFAULT_PROACTIVE_TARGET_SCORE,
   type MobileMessageSegmentationMode,
   type ProactiveChatMode,
   type ProactiveDeliveryTarget,
@@ -29,6 +31,7 @@ interface PreferencesValues {
   customStyle: CustomStyleConfig;
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
+  proactiveTargetScore: number;
   momentsEnabled: boolean;
   cyreneMomentsPostingEnabled: boolean;
   cyreneMomentsReactionsEnabled: boolean;
@@ -40,11 +43,20 @@ interface PreferencesValues {
 
 type ChannelStatus = Record<string, { phase?: string }>;
 
+type ProactiveEvaluationStatus = {
+  candidateScore: number | null;
+  targetScore: number;
+  sceneId: string | null;
+  evaluatedAt: number | null;
+  state: "candidate" | "no_candidate" | "suppressed" | "backoff";
+};
+
 const defaults: PreferencesValues = {
   mobileMessageSegmentation: "off",
   customStyle: DEFAULT_CUSTOM_STYLE,
   proactiveChatMode: "off",
   proactiveDeliveryTarget: "local",
+  proactiveTargetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
   momentsEnabled: true,
   cyreneMomentsPostingEnabled: false,
   cyreneMomentsReactionsEnabled: true,
@@ -66,6 +78,7 @@ function readPreferences(value: unknown): PreferencesValues {
     customStyle: normalizeCustomStyleConfig(input.customStyle),
     proactiveChatMode: normalizeProactiveChatMode(input.proactiveChatMode),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input.proactiveDeliveryTarget),
+    proactiveTargetScore: normalizeProactiveTargetScore(input.proactiveTargetScore),
     momentsEnabled: typeof input.momentsEnabled === "boolean" ? input.momentsEnabled : defaults.momentsEnabled,
     cyreneMomentsPostingEnabled: typeof input.cyreneMomentsPostingEnabled === "boolean" ? input.cyreneMomentsPostingEnabled : defaults.cyreneMomentsPostingEnabled,
     cyreneMomentsReactionsEnabled: typeof input.cyreneMomentsReactionsEnabled === "boolean" ? input.cyreneMomentsReactionsEnabled : defaults.cyreneMomentsReactionsEnabled,
@@ -92,6 +105,13 @@ export function PreferencesSettingsPanel() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [channels, setChannels] = useState<ChannelStatus>({});
+  const [proactiveStatus, setProactiveStatus] = useState<ProactiveEvaluationStatus>({
+    candidateScore: null,
+    targetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
+    sceneId: null,
+    evaluatedAt: null,
+    state: "no_candidate",
+  });
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
   const [styleOpen, setStyleOpen] = useState(false);
@@ -121,6 +141,22 @@ export function PreferencesSettingsPanel() {
     return () => { disposed = true; };
   }, []);
 
+  useEffect(() => {
+    const api = window.settings;
+    if (!api?.getProactiveStatus) return;
+    let disposed = false;
+    const refresh = () => {
+      void api.getProactiveStatus?.().then((next) => {
+        if (!disposed && next && typeof next === "object") {
+          setProactiveStatus(next as ProactiveEvaluationStatus);
+        }
+      }).catch(() => {});
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => { disposed = true; window.clearInterval(timer); };
+  }, []);
+
   function update<K extends keyof PreferencesValues>(key: K, value: PreferencesValues[K]) {
     setValues((current) => ({ ...current, [key]: value }));
     setStatus(t("settingsPage.preferences.unsaved"));
@@ -142,6 +178,7 @@ export function PreferencesSettingsPanel() {
         mobileMessageSegmentation,
         proactiveChatMode,
         proactiveDeliveryTarget,
+        proactiveTargetScore,
       } = values;
       await window.settings.saveGeneral({
         citaEnabled,
@@ -154,6 +191,7 @@ export function PreferencesSettingsPanel() {
         mobileMessageSegmentation,
         proactiveChatMode,
         proactiveDeliveryTarget,
+        proactiveTargetScore,
       });
       setStatus(t("settingsPage.preferences.saved"));
     } catch {
@@ -239,6 +277,29 @@ export function PreferencesSettingsPanel() {
                   onChange={(value) => update("proactiveDeliveryTarget", value as ProactiveDeliveryTarget)}
                 />
               </div>}
+              {values.proactiveChatMode === "on" && <>
+                <div className="cy-settings-row">
+                  <div className="cy-settings-row__copy">
+                    <strong>{t("settingsPage.preferences.proactiveScoreStatus")}</strong>
+                    <span>{proactiveStatus.candidateScore === null
+                      ? t("settingsPage.preferences.proactiveScoreNoCandidate")
+                      : `${proactiveStatus.candidateScore} / ${proactiveStatus.targetScore}`}
+                      {proactiveStatus.sceneId ? ` · ${proactiveStatus.sceneId}` : ""}
+                      {proactiveStatus.evaluatedAt ? ` · ${new Date(proactiveStatus.evaluatedAt).toLocaleString()}` : ""}</span>
+                  </div>
+                </div>
+                <div className="cy-settings-row">
+                  <div className="cy-settings-row__copy"><strong>{t("settingsPage.preferences.proactiveTargetScore")}</strong><span>{t("settingsPage.preferences.proactiveTargetScoreDescription")}</span></div>
+                  <InputNumber
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={values.proactiveTargetScore}
+                    addonAfter={t("settingsPage.preferences.scoreUnit")}
+                    onChange={(value) => update("proactiveTargetScore", normalizeProactiveTargetScore(value ?? DEFAULT_PROACTIVE_TARGET_SCORE))}
+                  />
+                </div>
+              </>}
             </Card>
           </section>
 

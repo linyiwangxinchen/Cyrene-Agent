@@ -352,7 +352,12 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       // 会话模式取任务冻结字段（旧任务默认 work）：skill 过滤、模式提示词
       // 和插件提示词上下文都跟随该模式。
       const mode = task.mode ?? "work";
-      const messages = [{ role: "user" as const, content: task.prompt }];
+      const messages = [{
+        role: "user" as const,
+        content: task.delivery
+          ? `这是用户之前约定的延时任务，现在已经到触发时间了。请结合你的昔涟人格，自然地完成或回应这件事；不要解释调度器、后台任务或内部实现。任务意图：${task.prompt}`
+          : task.prompt,
+      }];
       // 定时任务按任务模式过滤 skill，并尊重 skill-模式覆盖层；
       // 与聊天路径同约定：chat 模式不暴露 skill。
       const scheduledSkills = mode === "chat"

@@ -148,6 +148,7 @@ export interface GeneralSettings {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
+  proactiveTargetScore: number;
   screenshotHotkey?: string;
 }
 
@@ -266,6 +267,13 @@ export interface SettingsApi {
   deleteModelProfile?: (id: string) => Promise<unknown>;
   setDefaultModelProfile?: (id: string) => Promise<unknown>;
   getGeneral: () => Promise<GeneralSettings>;
+  getProactiveStatus?: () => Promise<{
+    candidateScore: number | null;
+    targetScore: number;
+    sceneId: string | null;
+    evaluatedAt: number | null;
+    state: "candidate" | "no_candidate" | "suppressed" | "backoff";
+  }>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
   openCustomStylePrompt?: () => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   getTimeoutSettings: () => Promise<TimeoutSettings>;

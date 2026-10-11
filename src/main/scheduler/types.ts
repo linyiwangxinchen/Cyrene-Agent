@@ -1,5 +1,6 @@
 import type { PluginPromptMode } from "../../plugins/api";
 import type { ConversationWorkspaceBinding } from "../../shared/chat-types";
+import type { ChannelChatType, ChannelId } from "../channels/types";
 
 export type ScheduleKind = "once" | "daily" | "weekdays" | "weekly" | "monthly" | "yearly" | "interval";
 
@@ -13,6 +14,16 @@ export type ScheduleConfig =
   | { kind: "interval"; every: number; unit: "minutes" | "hours" };
 
 export type SchedulerToolMode = "all-enabled" | "allow-list";
+
+/** 定时任务的可选外部渠道投递目标。凭证和协议上下文仍由渠道适配器持有。 */
+export interface ScheduledDeliveryTarget {
+  channel: ChannelId;
+  targetId: string;
+  chatType?: ChannelChatType;
+  threadId?: string;
+  /** 用于把发送结果写回对应的渠道会话历史。 */
+  sessionId: string;
+}
 
 export interface ScheduledTask {
   id: string;
@@ -39,6 +50,9 @@ export interface ScheduledTask {
   mode?: PluginPromptMode;
   /** 用户确认执行规格时写入的 SHA-256 授权指纹；执行前必须重新计算并匹配。 */
   approvalFingerprint?: string;
+  /** reminder 任务不需要工作区，由调度器触发一次渠道侧人格回复。 */
+  kind?: "agent" | "reminder";
+  delivery?: ScheduledDeliveryTarget;
 }
 
 export interface NewScheduledTaskInput {
@@ -55,11 +69,13 @@ export interface NewScheduledTaskInput {
   pluginUserEnabled?: boolean;
   mode?: PluginPromptMode;
   approvalFingerprint?: string;
+  kind?: "agent" | "reminder";
+  delivery?: ScheduledDeliveryTarget;
 }
 
 export type ScheduledTaskPatch = Partial<Pick<
   ScheduledTask,
-  "title" | "prompt" | "enabled" | "schedule" | "nextFireAt" | "lastFiredAt" | "toolMode" | "allowedToolIds" | "pluginUserEnabled" | "approvalFingerprint" | "mode" | "workspaceBinding" | "maxRuns" | "endAt"
+  "title" | "prompt" | "enabled" | "schedule" | "nextFireAt" | "lastFiredAt" | "toolMode" | "allowedToolIds" | "pluginUserEnabled" | "approvalFingerprint" | "mode" | "workspaceBinding" | "maxRuns" | "endAt" | "kind" | "delivery"
 >> & { maxRuns?: number | null; endAt?: string | null };
 
 export interface ScheduledTaskHistoryEntry {

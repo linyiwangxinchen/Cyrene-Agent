@@ -207,6 +207,35 @@ describe("candidate selection and evaluation", () => {
     expect(ctx.evaluateCandidate.mock.calls[1][0].sceneId).toBe("back_from_away");
   });
 
+  it("目标评分为 0 时允许低于默认 60 分的候选，并报告真实评分", async () => {
+    const evaluations: Array<{ candidateScore: number | null; targetScore: number; state: string }> = [];
+    const ctx = setup({
+      getTargetScore: () => 0,
+      onEvaluation: (status) => evaluations.push(status),
+    });
+    // 18:10 Asia/Shanghai，evening 窗口边缘的评分低于默认 60 分。
+    const eveningEdge = Date.UTC(2026, 6, 21, 10, 10, 0);
+    ctx.setSnapshot({ now: eveningEdge, idleSec: 0 });
+    await ctx.trigger.evaluateNow("target-zero");
+
+    expect(ctx.evaluateCandidate).toHaveBeenCalledTimes(1);
+    expect(ctx.evaluateCandidate.mock.calls[0][0].score).toBeLessThan(60);
+    expect(evaluations.at(-1)).toMatchObject({ targetScore: 0, state: "candidate" });
+    expect(evaluations.at(-1)?.candidateScore).toBe(ctx.evaluateCandidate.mock.calls[0][0].score);
+  });
+
+  it("候选低于目标评分时仍报告本轮评分，便于解释为何未发送", async () => {
+    const evaluations: Array<{ candidateScore: number | null; targetScore: number; state: string }> = [];
+    const ctx = setup({ onEvaluation: (status) => evaluations.push(status) });
+    const eveningEdge = Date.UTC(2026, 6, 21, 10, 10, 0);
+    ctx.setSnapshot({ now: eveningEdge, idleSec: 0 });
+    await ctx.trigger.evaluateNow("below-target");
+
+    expect(ctx.evaluateCandidate).not.toHaveBeenCalled();
+    expect(evaluations.at(-1)).toMatchObject({ targetScore: 60, state: "no_candidate" });
+    expect(evaluations.at(-1)?.candidateScore).toBeLessThan(60);
+  });
+
   it("同场景 30min evaluation backoff 内不重复调用", async () => {
     const ctx = setup();
     // 2026-07-21 12:00 UTC = 20:00 Asia/Shanghai（evening 中段）
@@ -222,6 +251,43 @@ describe("candidate selection and evaluation", () => {
     ctx.setSnapshot({ now: eveningNow + 31 * 60 * 1000, idleSec: 0 });
     await ctx.trigger.evaluateNow("third");
     expect(ctx.evaluateCandidate).toHaveBeenCalledTimes(2);
+  });
+
+  it("跳过扫描期间仍更新空闲边沿，避免忙碌后误判离开归来", async () => {
+    const ctx = setup();
+    const eveningNow = Date.UTC(2026, 6, 21, 12, 0, 0);
+    ctx.setSnapshot({ now: eveningNow, idleSec: 30 * 60 });
+    await ctx.trigger.evaluateNow("before-busy");
+    expect(ctx.evaluateCandidate).toHaveBeenCalledTimes(1);
+
+    // 用户正在聊天时快速过滤生效；此时服务端记录到的是活跃状态。
+    ctx.setSnapshot({ now: eveningNow + 60_000, idleSec: 10, conversationBusy: true });
+    await ctx.trigger.evaluateNow("busy");
+
+    // 清除场景退避后再次扫描，只应产生普通 evening 候选，不能伪造 back_from_away。
+    ctx.setSnapshot({ now: eveningNow + 120_000, idleSec: 10, conversationBusy: false });
+    ctx.backoffMap.clear();
+    await ctx.trigger.evaluateNow("after-busy");
+    expect(ctx.evaluateCandidate).toHaveBeenCalledTimes(2);
+    expect(ctx.evaluateCandidate.mock.calls[1][0].sceneId).toBe("evening_checkin");
+  });
+
+  it("一次未回复后，真正的离开归来场景可以达到严格追问阈值", async () => {
+    const ctx = setup();
+    const eveningNow = Date.UTC(2026, 6, 21, 12, 0, 0);
+    ctx.setState({
+      unansweredCount: 1,
+      lastProactiveAt: eveningNow - 7 * 60 * 60 * 1000,
+      lastProactiveScene: "morning_greeting",
+    });
+    ctx.setSnapshot({ now: eveningNow, idleSec: 30 * 60 });
+    await ctx.trigger.evaluateNow("away");
+    expect(ctx.evaluateCandidate).not.toHaveBeenCalled();
+
+    ctx.setSnapshot({ now: eveningNow + 60_000, idleSec: 10 });
+    await ctx.trigger.evaluateNow("returned");
+    expect(ctx.evaluateCandidate).toHaveBeenCalledTimes(1);
+    expect(ctx.evaluateCandidate.mock.calls[0][0].sceneId).toBe("back_from_away");
   });
 });
 

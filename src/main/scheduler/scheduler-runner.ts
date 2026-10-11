@@ -9,6 +9,12 @@ import type { ConversationJournalService } from "../orchestrator/conversation-jo
 import type { ActiveConversationSelection } from "../chats/active-conversation-registry";
 import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import { toastEvents } from "../toast/toast-events";
+import { channelManager } from "../channels/manager";
+import { createChannelDeliveryService } from "../channels/delivery-service";
+import { appendHistory as appendChannelHistory } from "../channels/history-log";
+import { appendLog as appendChannelLog } from "../channels/message-log";
+import type { OutgoingMessage } from "../channels/types";
+import { buildChannelSystem } from "../orchestrator/expression-context-core";
 import { filterToolsForTask } from "./tool-filter";
 import type { ScheduledRunResult, ScheduledTask, ScheduledTaskHistoryEntry } from "./types";
 
@@ -71,6 +77,111 @@ export function createSchedulerRunner(deps: RunnerDeps) {
   async function runScheduledTask(task: ScheduledTask, _scheduledFireAt: Date, manual: boolean): Promise<ScheduledRunResult> {
     const historyId = deps.id();
     const startedAt = deps.now();
+
+    // 渠道提醒不创建本地工作区会话，但到点仍启动一次昔涟 Chat 生成；
+    // 用户的提醒内容只是意图，最终发送内容由模型结合渠道人格自然生成。
+    if (task.delivery) {
+      const effectiveToolIds: string[] = [];
+      deps.recordHistory({
+        id: historyId,
+        taskId: task.id,
+        taskTitle: task.title,
+        firedAt: startedAt.toISOString(),
+        status: "running",
+        reason: manual ? "manual fireNow" : undefined,
+        effectiveToolIds,
+      });
+      let reply = "";
+      try {
+        const legacyOptions = await deps.buildOptions(task);
+        const sysIdx = legacyOptions.messages.findIndex((m) => m.role === "system");
+        const baseSoul = sysIdx >= 0 && typeof legacyOptions.messages[sysIdx].content === "string"
+          ? legacyOptions.messages[sysIdx].content
+          : "";
+        const messages = legacyOptions.messages.filter((_, index) => index !== sysIdx);
+        const options = applyScheduledExecutionPolicy({
+          ...legacyOptions,
+          messages,
+          executionMode: "chat",
+          conversationMode: "chat",
+          tools: [],
+          toolSystemContent: "",
+          soulSystemBaseContent: `${baseSoul}\n\n${buildChannelSystem(task.delivery.channel)}`,
+          permissionMode: "normal",
+          runId: historyId,
+          channelContext: task.delivery,
+        }, "chat");
+        const agent = new CyreneAgent({ threadId: `channel-reminder-${task.id}`, description: `Channel reminder: ${task.title}` });
+        await new Promise<void>((resolve, reject) => {
+          const sub = agent.runWithEvents(options).subscribe({
+            error: (error) => { sub.unsubscribe(); reject(error instanceof Error ? error : new Error(String(error))); },
+            complete: () => { sub.unsubscribe(); resolve(); },
+          });
+        });
+        reply = (agent.lastResult?.reply ?? "").trim();
+        if (!reply) throw new Error("模型未生成可发送的提醒内容");
+      } catch (error) {
+        const finishedAt = deps.now();
+        const message = error instanceof Error ? error.message : String(error);
+        deps.recordHistory({
+          id: historyId,
+          taskId: task.id,
+          taskTitle: task.title,
+          firedAt: startedAt.toISOString(),
+          finishedAt: finishedAt.toISOString(),
+          durationMs: finishedAt.getTime() - startedAt.getTime(),
+          status: "failed",
+          errorMessage: message,
+          effectiveToolIds,
+        });
+        return { ok: false, historyId, error: message, effectiveToolIds };
+      }
+      const delivery = createChannelDeliveryService(channelManager);
+      const message: OutgoingMessage = {
+        channel: task.delivery.channel,
+        targetId: task.delivery.targetId,
+        ...(task.delivery.threadId ? { threadId: task.delivery.threadId } : {}),
+        parts: [{ kind: "text", text: reply }],
+      };
+      const result = await delivery.send(message);
+      const finishedAt = deps.now();
+      if (!result.ok) {
+        deps.recordHistory({
+          id: historyId,
+          taskId: task.id,
+          taskTitle: task.title,
+          firedAt: startedAt.toISOString(),
+          finishedAt: finishedAt.toISOString(),
+          durationMs: finishedAt.getTime() - startedAt.getTime(),
+          status: "failed",
+          errorMessage: result.error ?? "渠道提醒发送失败",
+          effectiveToolIds,
+        });
+        return { ok: false, historyId, error: result.error ?? "渠道提醒发送失败", effectiveToolIds };
+      }
+      appendChannelHistory(task.delivery.sessionId, "assistant", reply);
+      appendChannelLog({
+        dir: "outgoing",
+        channel: task.delivery.channel,
+        senderId: task.delivery.targetId,
+        chatId: task.delivery.targetId,
+        text: reply,
+        hasAttachments: false,
+      });
+      deps.recordHistory({
+        id: historyId,
+        taskId: task.id,
+        taskTitle: task.title,
+        firedAt: startedAt.toISOString(),
+        finishedAt: finishedAt.toISOString(),
+        durationMs: finishedAt.getTime() - startedAt.getTime(),
+        status: "success",
+        outputPreview: reply.slice(0, 160),
+        effectiveToolIds,
+      });
+      return { ok: true, historyId, reply, effectiveToolIds };
+    }
+
     const allTools = toolRegistry.getAllTools();
     const effectiveTools = filterToolsForTask(task, allTools);
     const effectiveToolIds = effectiveTools.map(t => t.id);

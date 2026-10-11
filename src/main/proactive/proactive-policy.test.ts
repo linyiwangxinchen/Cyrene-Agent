@@ -86,9 +86,9 @@ describe("proactive hard policy", () => {
     expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_cooldown");
     state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
     expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_same_scene");
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "rainy_day", score: 84 })).reason)
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "rainy_day", score: 79 })).reason)
       .toBe("followup_score_too_low");
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "rainy_day", score: 85 })).allowed)
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "rainy_day", score: 80 })).allowed)
       .toBe(true);
   });
 

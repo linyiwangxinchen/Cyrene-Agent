@@ -31,7 +31,10 @@ export interface SettingsIpcDependencies {
   getModelSettings: () => ModelSettings;
   saveModelSettings: (settings: Partial<ModelSettings>) => ModelSettings;
   runtimeStateService: RuntimeStateService;
-  proactiveLifecycle: { getProactiveChatService: () => { invalidate: () => void } | null };
+  proactiveLifecycle: {
+    getProactiveChatService: () => { invalidate: () => void } | null;
+    getProactiveStatus?: () => unknown;
+  };
   reconcileUserMemoryIndex: () => Promise<void>;
   switchMemoryMode?: (mode: MemoryMode) => Promise<void>;
   syncVolcanoSearchMcp: typeof syncVolcanoSearchMcp;
@@ -116,6 +119,14 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
 
   ipc.handle(IPC.SETTINGS_GET_GENERAL, () => getGeneralSettings());
 
+  ipc.handle(IPC.SETTINGS_GET_PROACTIVE_STATUS, () => deps.proactiveLifecycle.getProactiveStatus?.() ?? ({
+    candidateScore: null,
+    targetScore: getGeneralSettings().proactiveTargetScore ?? 60,
+    sceneId: null,
+    evaluatedAt: null,
+    state: "no_candidate",
+  }));
+
   ipc.handle(IPC.SETTINGS_GET_TIMEOUT_SETTINGS, () => getTimeoutSettings());
 
   ipc.handle(IPC.SETTINGS_SAVE_TIMEOUT_SETTINGS, (_event, settings: Partial<TimeoutSettings>) =>
@@ -150,7 +161,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     }
 
     // 主动聊天总开关变化时使现有评估失效（频率档位由 ProactiveChat 内部判定，无需重启）。
-    if ("proactiveChatMode" in tts || "proactiveDeliveryTarget" in tts) {
+    if ("proactiveChatMode" in tts || "proactiveDeliveryTarget" in tts || "proactiveTargetScore" in tts) {
       proactiveLifecycle.getProactiveChatService()?.invalidate();
     }
 

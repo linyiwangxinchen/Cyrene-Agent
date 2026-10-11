@@ -9,7 +9,10 @@ export const NORMAL_QUIET_MS = 30 * 60 * 1000;
 export const GLOBAL_PROACTIVE_INTERVAL_MS = 2 * 60 * 60 * 1000;
 export const FOLLOWUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const NIGHT_ACTIVE_IDLE_LIMIT_SEC = 60;
-export const FOLLOWUP_MIN_SCORE = 85;
+// With the built-in scene scores, a valid back-from-away event tops out at
+// 82 after the one-unanswered penalty. Keep the follow-up gate strict while
+// leaving that deliberately rare path reachable.
+export const FOLLOWUP_MIN_SCORE = 80;
 
 const allow = (): ProactiveCommitDecision => ({ allowed: true, reason: "allowed" });
 const block = (reason: ProactiveCommitDecision["reason"]): ProactiveCommitDecision => ({ allowed: false, reason });

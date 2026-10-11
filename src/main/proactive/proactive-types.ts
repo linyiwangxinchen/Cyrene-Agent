@@ -14,6 +14,17 @@ export interface ProactiveCandidate {
   sceneCooldownMs: number;
 }
 
+export type ProactiveEvaluationState = "candidate" | "no_candidate" | "suppressed" | "backoff";
+
+/** Runtime snapshot shown in preferences; it is intentionally not persisted. */
+export interface ProactiveEvaluationStatus {
+  candidateScore: number | null;
+  targetScore: number;
+  sceneId: string | null;
+  evaluatedAt: number | null;
+  state: ProactiveEvaluationState;
+}
+
 /** Durable intent captured before delivery; retries must replay this exact payload. */
 export interface ProactiveCommitIntent {
   intentId: string;

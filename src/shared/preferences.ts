@@ -3,6 +3,7 @@ export type SegmentedOutputMode = "all" | "chat" | "off";
 export type MobileMessageSegmentationMode = "on" | "off";
 export type ProactiveChatMode = "on" | "off";
 export type ProactiveDeliveryTarget = "local" | "wechat" | "feishu";
+export const DEFAULT_PROACTIVE_TARGET_SCORE = 60;
 
 export type { CustomStyleConfig, StyleId } from "./style-sampling";
 
@@ -32,4 +33,10 @@ export function normalizeProactiveChatMode(value: unknown): ProactiveChatMode {
 
 export function normalizeProactiveDeliveryTarget(value: unknown): ProactiveDeliveryTarget {
   return value === "wechat" || value === "feishu" ? value : "local";
+}
+
+export function normalizeProactiveTargetScore(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_PROACTIVE_TARGET_SCORE;
+  return Math.max(0, Math.min(100, Math.round(numeric)));
 }

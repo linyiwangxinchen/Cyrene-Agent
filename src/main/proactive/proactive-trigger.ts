@@ -20,6 +20,7 @@ import type {
   ProactiveCandidate,
   ProactiveRuntimeSnapshot,
   ProactiveState,
+  ProactiveEvaluationStatus,
 } from "./proactive-types";
 
 /** 天气上下文。当前实现为占位；未来缓存模块接入时由该模块定义实际字段。 */
@@ -71,6 +72,8 @@ export interface ProactiveTriggerDependencies {
   /** 触发器内部 backoff Map（由控制器持有），用于测试断言状态。 */
   getLastEvaluatedAtByScene: () => Map<string, number>;
   setLastEvaluatedAtByScene: (next: Map<string, number>) => void;
+  getTargetScore?: () => number;
+  onEvaluation?: (status: ProactiveEvaluationStatus) => void;
 }
 
 export interface ProactiveTriggerController {
@@ -86,6 +89,7 @@ const INITIAL_DELAY_MS = 90_000;
 const INTERVAL_JITTER_MS = 10_000;
 
 const EVALUATION_RETRY_MS = 30 * 60 * 1000;
+/** 保持旧行为的默认目标分；运行时可由偏好设置调整为 0-100。 */
 const MIN_EVALUATION_SCORE = 60;
 
 const AWAY_THRESHOLD_SEC = 30 * 60;
@@ -191,8 +195,9 @@ function timeWindowFit(
 function eventUrgency(sceneId: string, ctx: ProactiveTriggerContext): number {
   switch (sceneId) {
     case "back_from_away":
-      // 离开越久分越高，但封顶 20
-      return clamp(Math.round(ctx.snapshot.idleSec / 60), 0, 20);
+      // Use the idle duration observed before the return edge. The current
+      // snapshot is active (<60s), so reading it here would always produce 0.
+      return clamp(Math.round((ctx.previousIdleSec ?? ctx.snapshot.idleSec) / 60), 0, 20);
     case "work_break":
       // 活跃 90min 起，每多 30min 加 4，封顶 20
       const activeMs = ctx.activeSessionStartedAt !== null ? ctx.now - ctx.activeSessionStartedAt : 0;
@@ -327,7 +332,6 @@ function generateTimeOpportunities(ctx: ProactiveTriggerContext): ProactiveOppor
     const { applicable, fit, urgency } = scene.compute(ctx);
     if (!applicable) continue;
     const score = scoreOpportunity(scene.baseScore, fit, urgency, scene.sceneId, ctx);
-    if (score < MIN_EVALUATION_SCORE) continue;
     out.push({
       sceneId: scene.sceneId,
       score,
@@ -407,6 +411,20 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
     console.log(`${LOG_PREFIX} ${event}`, detail ?? "");
   };
 
+  function targetScore(): number {
+    const value = deps.getTargetScore?.() ?? MIN_EVALUATION_SCORE;
+    return clamp(Math.round(Number.isFinite(value) ? value : MIN_EVALUATION_SCORE), 0, 100);
+  }
+
+  function reportEvaluation(
+    snapshot: ProactiveRuntimeSnapshot,
+    state: ProactiveEvaluationStatus["state"],
+    candidateScore: number | null = null,
+    sceneId: string | null = null,
+  ): void {
+    deps.onEvaluation?.({ candidateScore, targetScore: targetScore(), sceneId, evaluatedAt: snapshot.now, state });
+  }
+
   function jitter(): number {
     return Math.floor(Math.random() * INTERVAL_JITTER_MS);
   }
@@ -419,20 +437,27 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
 
   async function evaluateNow(reason: string): Promise<void> {
     const snapshot = deps.getRuntimeSnapshot();
-    if (shouldSkipFast(snapshot)) return;
+    const priorIdleSec = previousIdleSec;
+
+    // Keep the idle edge detector in sync even while a scan is suppressed.
+    // Otherwise a busy/locked/disabled interval can leave an old "away" value
+    // behind and the first scan afterwards may fabricate back_from_away.
+    previousIdleSec = snapshot.idleSec;
+    if (snapshot.idleSec >= ACTIVE_THRESHOLD_SEC) {
+      activeSessionStartedAt = null;
+    } else if (activeSessionStartedAt === null) {
+      activeSessionStartedAt = snapshot.now;
+    }
+    if (shouldSkipFast(snapshot)) {
+      reportEvaluation(snapshot, "suppressed");
+      return;
+    }
 
     const state = deps.getProactiveState();
     const timezone = deps.getTimezone();
     const localDate = formatLocalDate(new Date(snapshot.now), timezone);
     const localParts = getZonedDateParts(new Date(snapshot.now), timezone);
     const weather = deps.getWeatherContext?.() ?? null;
-
-    // 更新 activeSessionStartedAt：用户当前空闲时重置
-    if (snapshot.idleSec >= ACTIVE_THRESHOLD_SEC) {
-      activeSessionStartedAt = null;
-    } else if (activeSessionStartedAt === null) {
-      activeSessionStartedAt = snapshot.now;
-    }
 
     const ctx: ProactiveTriggerContext = {
       now: snapshot.now,
@@ -442,17 +467,19 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
       localMinute: localParts.minute,
       snapshot,
       state,
-      previousIdleSec,
+      previousIdleSec: priorIdleSec,
       activeSessionStartedAt,
       weather,
     };
 
     const allOpps = generateProactiveCandidates(ctx);
-    const filtered = allOpps.filter((o) => o.score >= MIN_EVALUATION_SCORE);
-    const sorted = sortCandidates(filtered);
+    const allSorted = sortCandidates(allOpps);
+    const filtered = allSorted.filter((o) => o.score >= targetScore());
+    const sorted = filtered;
 
     if (sorted.length === 0) {
-      // log("skipped reason=no_candidate_above_threshold", { reason });
+      const nearest = allSorted[0];
+      reportEvaluation(snapshot, "no_candidate", nearest?.score ?? null, nearest?.sceneId ?? null);
       previousIdleSec = snapshot.idleSec;
       return;
     }
@@ -469,11 +496,14 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
     });
 
     if (candidates.length === 0) {
+      const nearest = sorted[0];
+      reportEvaluation(snapshot, "backoff", nearest?.score ?? null, nearest?.sceneId ?? null);
       previousIdleSec = snapshot.idleSec;
       return;
     }
 
     const selected = candidates[0];
+    reportEvaluation(snapshot, "candidate", selected.score, selected.sceneId);
     log("selected", { sceneId: selected.sceneId, score: selected.score, reason });
 
     // 记录评估时间（无论结果：committed / blocked / silent / fallback_unavailable）

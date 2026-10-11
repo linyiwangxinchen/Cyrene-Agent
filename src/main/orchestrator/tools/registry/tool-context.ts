@@ -6,6 +6,7 @@ import type { ChatMessage } from "../../vendors";
 import { ContextRefRegistry } from "../../context-ref-registry";
 import type { ConversationMode } from "../../../../shared/chat-types";
 import type { ShellOutputUpdate } from "../../../../shared/shell-output";
+import type { ChannelChatType, ChannelId } from "../../../channels/types";
 
 export const contextRefRegistry = new ContextRefRegistry();
 
@@ -17,6 +18,14 @@ export interface ToolContext {
   userQuery: string;
   /** 当前聊天会话 ID；需要跨轮隔离状态的工具必须使用该字段。 */
   conversationId?: string;
+  /** 外部渠道入站消息的可信投递目标。 */
+  channelContext?: {
+    channel: ChannelId;
+    targetId: string;
+    chatType?: ChannelChatType;
+    threadId?: string;
+    sessionId: string;
+  };
   /** One Agent execution; resolved-only candidates must not cross this boundary. */
   runId?: string;
   /** Tool Runtime-owned opaque reference registry. */
