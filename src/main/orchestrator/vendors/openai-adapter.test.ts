@@ -17,6 +17,34 @@ const capability: ProviderCapability = {
 };
 
 describe("OpenAICompatAdapter", () => {
+  test("GPT 官方 Chat Completions 使用不含用户消息的稳定 prompt_cache_key", () => {
+    const adapter = new OpenAICompatAdapter("chatgpt", {
+      ...capability,
+      cacheStrategy: "auto",
+      baseUrl: "https://api.openai.com/v1",
+    });
+    const base = {
+      model: "gpt-5.6",
+      messages: [{ role: "user" as const, content: "first" }],
+      tools: [{ name: "read_file", description: "read", parameters: { type: "object" } }],
+      promptLayers: { stablePrefix: "stable rules", mode: "chat", promptVersion: "v1" },
+    };
+    const first = adapter.applyCacheHints!(base, { provider: "ChatGPT", baseUrl: "https://api.openai.com/v1", model: base.model, apiKey: "k" });
+    const second = adapter.applyCacheHints!({ ...base, messages: [{ role: "user", content: "different" }] }, { provider: "ChatGPT", baseUrl: "https://api.openai.com/v1", model: base.model, apiKey: "k" });
+
+    expect(first.extraBody?.prompt_cache_key).toMatch(/^cyrene:chatgpt:[a-f0-9]{16}$/);
+    expect(second.extraBody?.prompt_cache_key).toBe(first.extraBody?.prompt_cache_key);
+  });
+
+  test("GPT 代理端点不强行发送 OpenAI 专属缓存参数", () => {
+    const adapter = new OpenAICompatAdapter("chatgpt", { ...capability, cacheStrategy: "auto" });
+    const request = adapter.applyCacheHints!({
+      model: "gpt-5.6", messages: [{ role: "user", content: "hi" }],
+      promptLayers: { stablePrefix: "stable", promptVersion: "v1" },
+    }, { provider: "ChatGPT", baseUrl: "https://proxy.example/v1", model: "gpt-5.6", apiKey: "k" });
+    expect(request.extraBody).toBeUndefined();
+  });
+
   test("derives Kimi prompt_cache_key from stable prompt and tool identity only", () => {
     const adapter = new OpenAICompatAdapter("kimi", { ...capability, cacheStrategy: "prompt_cache_key" });
     const base = {

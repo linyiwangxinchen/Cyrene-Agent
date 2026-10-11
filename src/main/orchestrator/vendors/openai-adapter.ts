@@ -12,7 +12,7 @@ import { DEFAULT_TIMEOUT_SETTINGS } from "../../../shared/timeout-types";
 import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./tool-choice-policy";
 import { getVendorRuntimeSettings } from "./runtime-settings";
 import { resolveApiEndpoint } from "../../../shared/api-endpoint";
-import { buildStableCacheFingerprint } from "../prompt-layers";
+import { buildStablePromptCacheKey } from "../prompt-layers";
 import { contentText, legacyDeepSeekReasoning, modelMessageOrigin, readAssistantReplay, recoverPortableMessage } from "./model-history";
 
 /** 把统一消息翻译成 OpenAI wire messages。 */
@@ -56,6 +56,15 @@ function toWireTools(tools?: ChatRequest["tools"]): unknown[] | undefined {
     type: "function",
     function: { name: t.name, description: t.description, parameters: t.parameters },
   }));
+}
+
+/** OpenAI 官方端点支持 prompt_cache_key；代理端点的兼容性不能假定。 */
+function isOpenAIOfficialEndpoint(baseUrl: string): boolean {
+  try {
+    return new URL(baseUrl.trim()).hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return false;
+  }
 }
 
 export class OpenAICompatAdapter implements ChatVendorAdapter {
@@ -271,10 +280,12 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
 
   // Kimi：cache key 只反映可缓存前缀和工具定义，绝不包含用户输入、Todo 或 runId。
   applyCacheHints(req: ChatRequest, _cfg: VendorConfig): ChatRequest {
-    if (this.capability.cacheStrategy !== "prompt_cache_key") return req;
+    const supportsPromptCacheKey = this.capability.cacheStrategy === "prompt_cache_key"
+      || this.capability.cacheStrategy === "auto" && isOpenAIOfficialEndpoint(_cfg.baseUrl) && this.id === "chatgpt";
+    if (!supportsPromptCacheKey) return req;
     const layers = req.promptLayers;
-    const fingerprint = layers
-      ? buildStableCacheFingerprint({
+    const promptCacheKey = layers
+      ? buildStablePromptCacheKey({
           provider: this.id,
           model: req.model,
           mode: layers.mode,
@@ -283,8 +294,8 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
           sessionPrefix: layers.sessionPrefix,
           tools: req.tools ?? [],
         })
-      : "legacy";
-    const extraBody = { ...(req.extraBody ?? {}), prompt_cache_key: `cyrene:${this.id}:${fingerprint}` };
+      : `cyrene:${this.id}:legacy`;
+    const extraBody = { ...(req.extraBody ?? {}), prompt_cache_key: promptCacheKey };
     return { ...req, extraBody };
   }
 

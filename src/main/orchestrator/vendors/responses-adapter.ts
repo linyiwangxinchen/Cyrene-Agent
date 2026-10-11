@@ -26,6 +26,7 @@ import { DEFAULT_TIMEOUT_SETTINGS } from "../../../shared/timeout-types";
 import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./tool-choice-policy";
 import { getVendorRuntimeSettings } from "./runtime-settings";
 import { resolveApiEndpoint } from "../../../shared/api-endpoint";
+import { buildStablePromptCacheKey } from "../prompt-layers";
 
 // ── wire 形状（仅声明 adapter 实际读写的字段，与 SDK 类型保持手工对齐） ──
 
@@ -412,6 +413,31 @@ export class ResponsesAdapter implements ChatVendorAdapter {
       });
     }
     return next;
+  }
+
+  /**
+   * GPT 的默认 Responses 路径也需要稳定的 prompt_cache_key 才能让 OpenAI
+   * 把相同的稳定提示词前缀分到同一缓存桶。代理端点不强行注入该字段，
+   * 避免把 OpenAI 专属参数发给未知兼容实现。
+   */
+  applyCacheHints(req: ChatRequest, cfg: VendorConfig): ChatRequest {
+    if (this.capability.cacheStrategy !== "auto" || this.id !== "chatgpt" || !isOfficialOpenAIEndpoint(cfg.baseUrl)) return req;
+    const layers = req.promptLayers;
+    const promptCacheKey = layers
+      ? buildStablePromptCacheKey({
+          provider: this.id,
+          model: req.model,
+          mode: layers.mode,
+          promptVersion: layers.promptVersion,
+          stablePrefix: layers.stablePrefix,
+          sessionPrefix: layers.sessionPrefix,
+          tools: req.tools ?? [],
+        })
+      : `cyrene:${this.id}:legacy`;
+    return {
+      ...req,
+      extraBody: { ...(req.extraBody ?? {}), prompt_cache_key: promptCacheKey },
+    };
   }
 
   async testConnection(cfg: VendorConfig): Promise<TestConnectionResult> {

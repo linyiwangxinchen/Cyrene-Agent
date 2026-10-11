@@ -50,6 +50,38 @@ function makeBody(
 }
 
 describe("ResponsesAdapter — URL 与基础字段", () => {
+  test("GPT 官方 Responses 使用稳定 prompt_cache_key，用户消息变化不改变路由键", () => {
+    const chatgpt: ProviderCapability = {
+      ...capability,
+      id: "chatgpt",
+      transport: "responses",
+      cacheStrategy: "auto",
+      baseUrl: "https://api.openai.com/v1",
+    };
+    const adapter = makeAdapter(chatgpt);
+    const config: VendorConfig = { ...cfg, provider: "ChatGPT", baseUrl: chatgpt.baseUrl, model: "gpt-5.6" };
+    const base: ChatRequest = {
+      model: config.model,
+      messages: [{ role: "user", content: "first" }],
+      tools: [{ name: "read_file", description: "read", parameters: { type: "object" } }],
+      promptLayers: { stablePrefix: "stable rules", mode: "chat", promptVersion: "v1" },
+    };
+    const first = adapter.applyCacheHints!(base, config);
+    const second = adapter.applyCacheHints!({ ...base, messages: [{ role: "user", content: "different" }] }, config);
+    expect(first.extraBody?.prompt_cache_key).toMatch(/^cyrene:chatgpt:[a-f0-9]{16}$/);
+    expect(second.extraBody?.prompt_cache_key).toBe(first.extraBody?.prompt_cache_key);
+  });
+
+  test("GPT 代理端点不注入 OpenAI 专属 prompt_cache_key", () => {
+    const chatgpt: ProviderCapability = { ...capability, id: "chatgpt", transport: "responses", cacheStrategy: "auto" };
+    const adapter = makeAdapter(chatgpt);
+    const request = adapter.applyCacheHints!({
+      model: "gpt-5.6", messages: [{ role: "user", content: "hi" }],
+      promptLayers: { stablePrefix: "stable", promptVersion: "v1" },
+    }, { ...cfg, provider: "ChatGPT", model: "gpt-5.6" });
+    expect(request.extraBody).toBeUndefined();
+  });
+
   test("baseUrl 追加 /responses 后缀", () => {
     const { url } = makeBody([{ role: "user", content: "hi" }]);
     expect(url).toBe("https://example.test/v1/responses");

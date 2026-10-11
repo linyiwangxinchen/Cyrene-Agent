@@ -90,6 +90,22 @@ export function buildStableCacheFingerprint(input: {
   return createHash("sha256").update(payload).digest("hex").slice(0, 16);
 }
 
+/**
+ * OpenAI/Kimi 等供应商使用的稳定缓存路由键。
+ * 只由可复用提示词层和工具定义构成，禁止混入用户消息、工具输出、runId 或时间。
+ */
+export function buildStablePromptCacheKey(input: {
+  provider: string;
+  model: string;
+  mode?: string;
+  promptVersion: string;
+  stablePrefix: string;
+  sessionPrefix?: string;
+  tools: readonly ToolSpec[];
+}): string {
+  return `cyrene:${input.provider}:${buildStableCacheFingerprint(input)}`;
+}
+
 /** 不含 stream、请求 ID 与厂商私有字段的稳定请求投影，供缓存不变量测试和诊断使用。 */
 export interface CacheRelevantRequest {
   stableSystem: string;
