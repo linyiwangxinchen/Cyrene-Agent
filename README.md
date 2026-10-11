@@ -533,17 +533,17 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/lll69">
-                    <img src="https://avatars.githubusercontent.com/u/60803753?v=4" width="48;" alt="lll69"/>
-                    <br />
-                    <sub><b>lll69</b></sub>
-                </a>
-            </td>
-            <td align="center">
                 <a href="https://github.com/linyiwangxinchen">
                     <img src="https://avatars.githubusercontent.com/u/54473991?v=4" width="48;" alt="linyiwangxinchen"/>
                     <br />
                     <sub><b>linyiwangxinchen</b></sub>
+                </a>
+            </td>
+            <td align="center">
+                <a href="https://github.com/lll69">
+                    <img src="https://avatars.githubusercontent.com/u/60803753?v=4" width="48;" alt="lll69"/>
+                    <br />
+                    <sub><b>lll69</b></sub>
                 </a>
             </td>
             <td align="center">
