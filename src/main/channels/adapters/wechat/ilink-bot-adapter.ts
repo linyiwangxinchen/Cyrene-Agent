@@ -54,6 +54,7 @@ import type {
 import type { ChannelAdapter } from "../base";
 import { logger, LogTag } from "../../../logger";
 import { loadChannelsSettings } from "../../settings-store";
+import { WechatReplyContextStore } from "./reply-context-store";
 
 const LOG_PREFIX = "[WechatBot]";
 const USER_PROFILE_FILE = "user-profile.json";
@@ -102,6 +103,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   /** 当前 credentials（动态加载） */
   currentCredentials: Credentials | null = null;
   private replyContextByTarget = new Map<string, string>();
+  private readonly replyContextStore = new WechatReplyContextStore(path.join(app.getPath("userData"), "weixin", "reply-context.json"));
   private pendingSaveIntentByTarget = new Map<string, number>();
   private pendingUnsupportedMediaByTarget = new Map<string, PendingInboundMedia>();
   private uploadMedia = uploadWechatMediaFile;
@@ -141,8 +143,9 @@ export class ILinkBotAdapter implements ChannelAdapter {
       return;
     }
 
-    if (this.currentCredentials?.ilinkBotId !== creds.ilinkBotId) this.clearRecipientState();
+    if (this.currentCredentials && (this.currentCredentials.ilinkBotId !== creds.ilinkBotId || this.currentCredentials.botToken !== creds.botToken)) this.clearRecipientState();
     this.currentCredentials = creds;
+    for (const entry of this.replyContextStore.load(creds)) this.replyContextByTarget.set(entry.targetId, entry.token);
     this.client = new ILinkClient(creds);
     this.isLoggedIn = true;
 
@@ -356,8 +359,16 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
   private clearRecipientState(): void {
     this.replyContextByTarget.clear();
+    try { this.replyContextStore.clear(); } catch { console.warn(LOG_PREFIX, "Unable to clear stored reply context"); }
     this.pendingSaveIntentByTarget.clear();
     this.pendingUnsupportedMediaByTarget.clear();
+  }
+
+  getProactiveAvailability(targetId: string): { available: boolean; reason?: string } {
+    if (!this.status.enabled || this.status.phase !== "running" || !this.client) return { available: false, reason: "channel_offline" };
+    return this.replyContextByTarget.has(targetId)
+      ? { available: true }
+      : { available: false, reason: "wechat_context_missing" };
   }
 
   // ── Internal: poll loop ──────────────────────────────────────────────────
@@ -429,7 +440,13 @@ export class ILinkBotAdapter implements ChannelAdapter {
       return;
     }
     console.log(LOG_PREFIX, `inbound received: items=${msg.items.length}, textLength=${msg.content?.length ?? 0}`);
-    if (msg.contextToken) this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
+    if (msg.contextToken) {
+      this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
+      if (this.currentCredentials) {
+        try { this.replyContextStore.remember(this.currentCredentials, msg.fromUserId, msg.contextToken); }
+        catch { console.warn(LOG_PREFIX, "Unable to persist reply context; current reply remains available"); }
+      }
+    }
 
     const media = describeInboundWechatMedia(msg.items);
     const voiceText = await this.#maybeTranscribeInboundVoice(msg, media);

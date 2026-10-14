@@ -49,6 +49,11 @@ type ProactiveEvaluationStatus = {
   sceneId: string | null;
   evaluatedAt: number | null;
   state: "candidate" | "no_candidate" | "suppressed" | "backoff";
+  reason?: string;
+  lastOutcome?: { state: "blocked" | "silent" | "failed" | "sent"; reason?: string; at: number };
+  delivery?: { target: string; ready: boolean; reason?: string };
+  unansweredCount?: number;
+  lastProactiveAt?: number | null;
 };
 
 const defaults: PreferencesValues = {
@@ -101,6 +106,7 @@ function readChannelStatus(value: unknown): ChannelStatus {
 
 export function PreferencesSettingsPanel() {
   const { t } = useTranslation();
+  const proactiveReason = (reason: string) => t(`settingsPage.preferences.proactiveReasons.${reason}`, { defaultValue: reason.slice(0, 120) });
   const [values, setValues] = useState(defaults);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
@@ -146,9 +152,10 @@ export function PreferencesSettingsPanel() {
     if (!api?.getProactiveStatus) return;
     let disposed = false;
     const refresh = () => {
-      void api.getProactiveStatus?.().then((next) => {
+      void Promise.all([api.getProactiveStatus!(), api.channelsGetStatus().catch(() => null)]).then(([next, channelStatus]) => {
         if (!disposed && next && typeof next === "object") {
           setProactiveStatus(next as ProactiveEvaluationStatus);
+          if (channelStatus) setChannels(readChannelStatus(channelStatus));
         }
       }).catch(() => {});
     };
@@ -286,6 +293,11 @@ export function PreferencesSettingsPanel() {
                       : `${proactiveStatus.candidateScore} / ${proactiveStatus.targetScore}`}
                       {proactiveStatus.sceneId ? ` · ${proactiveStatus.sceneId}` : ""}
                       {proactiveStatus.evaluatedAt ? ` · ${new Date(proactiveStatus.evaluatedAt).toLocaleString()}` : ""}</span>
+                    <span>{proactiveReason(proactiveStatus.reason ?? proactiveStatus.state)}</span>
+                    {proactiveStatus.delivery && <span>{t("settingsPage.preferences.proactiveDeliveryStatus")}: {proactiveReason(proactiveStatus.delivery.ready ? "ready" : proactiveStatus.delivery.reason ?? "delivery_unavailable")}</span>}
+                    {proactiveStatus.lastOutcome && <span>{t("settingsPage.preferences.proactiveLastOutcome")}: {proactiveReason(proactiveStatus.lastOutcome.state)}{proactiveStatus.lastOutcome.reason ? ` · ${proactiveReason(proactiveStatus.lastOutcome.reason)}` : ""} · {new Date(proactiveStatus.lastOutcome.at).toLocaleString()}</span>}
+                    {typeof proactiveStatus.unansweredCount === "number" && <span>{t("settingsPage.preferences.proactiveUnanswered", { count: proactiveStatus.unansweredCount })}</span>}
+                    {proactiveStatus.lastProactiveAt && <span>{t("settingsPage.preferences.proactiveLastSent")}: {new Date(proactiveStatus.lastProactiveAt).toLocaleString()}</span>}
                   </div>
                 </div>
                 <div className="cy-settings-row">

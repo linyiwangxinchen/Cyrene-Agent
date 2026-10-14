@@ -5,6 +5,7 @@ import {
   type VendorConfig,
 } from "../orchestrator/vendors";
 import { parseProactiveDecision, type ProactiveModelDecision } from "./proactive-prompt";
+import { resolveConfiguredReasoningCapability } from "../../shared/manual-reasoning";
 
 export type ProactiveModelResult =
   | ProactiveModelDecision
@@ -31,11 +32,14 @@ export async function runProactiveModel(input: RunProactiveModelInput): Promise<
   }
 
   const adapter = getAdapterForConfig(input.settings);
+  const reasoning = resolveConfiguredReasoningCapability(adapter.capability.id, input.settings.model, input.settings.manualReasoning);
   const request = adapter.buildRequest({
     model: input.settings.model,
     messages: input.messages,
     stream: false,
-    maxTokens: 600,
+    // Reasoning providers count hidden thinking toward the output limit. A
+    // 600-token total can terminate before the short decision JSON is emitted.
+    maxTokens: reasoning.control !== "none" && input.settings.reasoning?.mode !== "off" ? 4096 : 600,
   }, input.settings);
 
   const controller = new AbortController();
@@ -60,6 +64,7 @@ export async function runProactiveModel(input: RunProactiveModelInput): Promise<
     if (parsedResponse.usage) {
       recordUsage(parsedResponse.usage.input, parsedResponse.usage.output, 1, parsedResponse.usage.cachedInput, input.settings.model, parsedResponse.usage.cacheCreation);
     }
+    if (parsedResponse.finishReason === "length") return { kind: "invalid", reason: "output_token_limit" };
     return parseProactiveDecision(parsedResponse.text ?? "");
   } catch (error) {
     const name = error instanceof Error ? error.name : "";

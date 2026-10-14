@@ -275,6 +275,11 @@ export interface SettingsApi {
     sceneId: string | null;
     evaluatedAt: number | null;
     state: "candidate" | "no_candidate" | "suppressed" | "backoff";
+    reason?: string;
+    lastOutcome?: { state: "blocked" | "silent" | "failed" | "sent"; reason?: string; at: number; sceneId: string | null };
+    delivery?: { target: "local" | "wechat" | "feishu"; ready: boolean; reason?: string };
+    unansweredCount?: number;
+    lastProactiveAt?: number | null;
   }>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
   openCustomStylePrompt?: () => Promise<{ ok: boolean; filePath?: string; error?: string }>;

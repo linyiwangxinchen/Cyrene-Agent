@@ -3,11 +3,10 @@
 // 设计目标：
 // - 60s 周期扫描，调用 `proactiveChatService.evaluateCandidate({sceneId, score, sceneCooldownMs})`
 // - 候选生成使用用户时区（避免被机器系统时区干扰）
-// - 场景清单：第一版只实现 morning_greeting / evening_checkin / back_from_away / work_break
+// - 场景：早晚问候、离开归来、工作休息，以及不依赖桌面活动的聊天跟进
 // - 天气场景仅保留 sceneId 占位 + 可选 getWeatherContext 注入；未实现天气候选生成
 //
 // 边界：
-// - 不修改 proactive-service.ts / proactive-policy.ts / proactive-state-store.ts / ProactiveCandidate
 // - 不实现 fallback / Function Calling / MCP / 主动刷新外部信息
 // - 不新增 desire-engine / 概率门
 // - 不实现天气缓存、TTL、expiresAt、跨日期判断
@@ -49,6 +48,7 @@ export interface ProactiveTriggerContext {
   activeSessionStartedAt: number | null;
 
   weather: WeatherContext | null;
+  conversationLastActivity: number | null;
 }
 
 /** 内部候选类型（额外带 reason 用于日志）。 */
@@ -74,6 +74,8 @@ export interface ProactiveTriggerDependencies {
   setLastEvaluatedAtByScene: (next: Map<string, number>) => void;
   getTargetScore?: () => number;
   onEvaluation?: (status: ProactiveEvaluationStatus) => void;
+  getConversationLastActivity?: () => Promise<number | null>;
+  getCandidateBlockReason?: (candidate: ProactiveCandidate) => string | undefined;
 }
 
 export interface ProactiveTriggerController {
@@ -98,6 +100,7 @@ const WORK_BREAK_MIN_MS = 90 * 60 * 1000;
 
 const HALF_HOUR_MS = 30 * 60 * 1000;
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+const CONTEXT_FOLLOWUP_MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
 const LOG_PREFIX = "[ProactiveTrigger]";
 
@@ -277,6 +280,21 @@ type WeatherSceneId = (typeof WEATHER_SCENE_IDS)[number];
 
 const SCENES: readonly SceneDefinition[] = [
   {
+    sceneId: "conversation_followup",
+    baseScore: 68,
+    sceneCooldownMs: 24 * 60 * 60 * 1000,
+    priority: 3,
+    compute(ctx) {
+      // Mobile users need a genuine conversation-based opportunity even with
+      // no desktop/browser activity. The model still decides whether to speak.
+      const elapsed = ctx.conversationLastActivity === null ? -1 : ctx.now - ctx.conversationLastActivity;
+      const applicable = ctx.localHour >= 8 && ctx.localHour < 22
+        && elapsed >= TWO_HOURS_MS && elapsed <= CONTEXT_FOLLOWUP_MAX_AGE_MS;
+      const urgency = applicable ? clamp(Math.floor((elapsed - TWO_HOURS_MS) / TWO_HOURS_MS) * 5, 0, 20) : 0;
+      return { applicable, fit: 0, urgency };
+    },
+  },
+  {
     sceneId: "morning_greeting",
     baseScore: 52,
     sceneCooldownMs: 23 * 60 * 60 * 1000,
@@ -421,8 +439,9 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
     state: ProactiveEvaluationStatus["state"],
     candidateScore: number | null = null,
     sceneId: string | null = null,
+    reason?: string,
   ): void {
-    deps.onEvaluation?.({ candidateScore, targetScore: targetScore(), sceneId, evaluatedAt: snapshot.now, state });
+    deps.onEvaluation?.({ candidateScore, targetScore: targetScore(), sceneId, evaluatedAt: snapshot.now, state, ...(reason ? { reason } : {}) });
   }
 
   function jitter(): number {
@@ -449,7 +468,8 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
       activeSessionStartedAt = snapshot.now;
     }
     if (shouldSkipFast(snapshot)) {
-      reportEvaluation(snapshot, "suppressed");
+      const reason = !snapshot.enabled ? "disabled" : snapshot.screenLocked ? "screen_locked" : snapshot.conversationBusy ? "conversation_busy" : "generation_busy";
+      reportEvaluation(snapshot, "suppressed", null, null, reason);
       return;
     }
 
@@ -470,6 +490,7 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
       previousIdleSec: priorIdleSec,
       activeSessionStartedAt,
       weather,
+      conversationLastActivity: await deps.getConversationLastActivity?.() ?? null,
     };
 
     const allOpps = generateProactiveCandidates(ctx);
@@ -479,14 +500,22 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
 
     if (sorted.length === 0) {
       const nearest = allSorted[0];
-      reportEvaluation(snapshot, "no_candidate", nearest?.score ?? null, nearest?.sceneId ?? null);
+      reportEvaluation(snapshot, "no_candidate", nearest?.score ?? null, nearest?.sceneId ?? null, nearest ? "score_too_low" : "no_scene");
       previousIdleSec = snapshot.idleSec;
       return;
     }
 
+    // Policy/offline blocks are not model attempts and must not consume the
+    // 30-minute retry budget (especially after a channel reconnects).
+    const eligible = sorted.filter(candidate => !deps.getCandidateBlockReason?.(candidate));
+    if (eligible.length === 0) {
+      const nearest = sorted[0];
+      reportEvaluation(snapshot, "suppressed", nearest.score, nearest.sceneId, deps.getCandidateBlockReason?.(nearest));
+      return;
+    }
     // Backoff 检查：跳过最近 30 分钟内已评估过的场景
     const backoffMap = deps.getLastEvaluatedAtByScene();
-    const candidates = sorted.filter((o) => {
+    const candidates = eligible.filter((o) => {
       const last = backoffMap.get(o.sceneId);
       if (typeof last === "number" && snapshot.now - last < EVALUATION_RETRY_MS) {
         log("skipped scene=" + o.sceneId + " reason=evaluation_backoff", { reason });
@@ -496,8 +525,8 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
     });
 
     if (candidates.length === 0) {
-      const nearest = sorted[0];
-      reportEvaluation(snapshot, "backoff", nearest?.score ?? null, nearest?.sceneId ?? null);
+      const nearest = eligible[0];
+      reportEvaluation(snapshot, "backoff", nearest?.score ?? null, nearest?.sceneId ?? null, "evaluation_backoff");
       previousIdleSec = snapshot.idleSec;
       return;
     }

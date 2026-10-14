@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ getUpdates: vi.fn(), pollQrStatus: vi.fn(), writeFile: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getUpdates: vi.fn(), pollQrStatus: vi.fn(), writeFile: vi.fn(), loadContexts: vi.fn(() => [] as Array<{ targetId: string; token: string; at: number }>), rememberContext: vi.fn(), clearContexts: vi.fn() }));
+vi.mock("./reply-context-store", () => ({ WechatReplyContextStore: class { load = mocks.loadContexts; remember = mocks.rememberContext; clear = mocks.clearContexts; } }));
 vi.mock("electron", () => ({ app: { getPath: () => "C:/tmp/cyrene-test-user-data" } }));
 vi.mock("node:fs", async original => {
   const fs = await original<typeof import("node:fs")>();
@@ -13,10 +14,20 @@ import { promises as fs } from "node:fs";
 
 let adapter: ILinkBotAdapter;
 function pendingPoll(_buf: string, signal: AbortSignal) { return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })); }
-beforeEach(() => { vi.clearAllMocks(); mocks.getUpdates.mockImplementation(pendingPoll); adapter = new ILinkBotAdapter(); });
+beforeEach(() => { vi.clearAllMocks(); mocks.loadContexts.mockReturnValue([]); mocks.getUpdates.mockImplementation(pendingPoll); adapter = new ILinkBotAdapter(); });
 afterEach(async () => { await adapter.stop(); vi.useRealTimers(); });
 
 describe("WeChat receive lifecycle", () => {
+  it("restores reply context before polling without clearing it on first startup", async () => {
+    mocks.loadContexts.mockReturnValue([{ targetId: "user", token: "restored-context", at: Date.now() }]);
+    mocks.getUpdates.mockResolvedValueOnce({ messages: [], buf: "next" });
+    await adapter.start(); await vi.waitFor(() => expect(adapter.getStatus().phase).toBe("running"));
+    expect((adapter as any).replyContextByTarget.get("user")).toBe("restored-context");
+    expect(mocks.clearContexts).not.toHaveBeenCalled();
+    expect(adapter.getProactiveAvailability("user")).toEqual({ available: true });
+    expect(adapter.getProactiveAvailability("unknown")).toMatchObject({ available: false, reason: "wechat_context_missing" });
+    await adapter.stop(); expect(mocks.clearContexts).not.toHaveBeenCalled();
+  });
   it("does not resurrect polling when credentials finish loading after stop", async () => {
     let complete!: (value: string) => void;
     vi.mocked(fs.readFile).mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }) as any);
@@ -35,6 +46,7 @@ describe("WeChat receive lifecycle", () => {
     expect((adapter as any).replyContextByTarget.size).toBe(0);
     expect((adapter as any).pendingSaveIntentByTarget.size).toBe(0);
     expect((adapter as any).pendingUnsupportedMediaByTarget.size).toBe(0);
+    expect(mocks.clearContexts).toHaveBeenCalled();
   });
   it("aborts a pending attachment download when the channel is disabled", async () => {
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true })));
@@ -70,6 +82,7 @@ describe("WeChat receive lifecycle", () => {
     expect(onMessage.mock.calls[0][0]).toMatchObject({ channel: "wechat", messageId: "18446744073709551614", text: "hello" });
     expect(adapter.getStatus()).toMatchObject({ phase: "running", detail: { receivedMessages: 1 } });
     expect(mocks.getUpdates).toHaveBeenLastCalledWith("next", expect.any(AbortSignal));
+    expect(mocks.rememberContext).toHaveBeenCalledWith(expect.objectContaining({ ilinkBotId: "bot" }), "user", "ctx");
   });
   it("exposes receive failures and recovers after a retry", async () => {
     vi.useFakeTimers(); mocks.getUpdates.mockRejectedValueOnce(new Error("DNS failure")).mockResolvedValueOnce({ messages: [], buf: "ok" });

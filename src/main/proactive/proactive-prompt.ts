@@ -41,7 +41,7 @@ const PROACTIVE_SYSTEM = `[proactive_system]
 不要声称自己调用了工具、读取了屏幕或执行了任何外部动作。`;
 
 const NIGHT_SYSTEM = `[night_system]
-当前处于深夜，用户仍在使用电脑。
+当前处于深夜，用户近期仍有交互活动。
 生成内容时可以更倾向于温柔关心用户的休息状态，适度提醒不要熬得太晚，但不要说教、催促或制造压力。
 不要每次都提睡觉；如果上下文中有更自然、更重要的话题，可以先回应那个话题，再轻轻带到休息。
 不要透露你检测到了用户的键盘、鼠标、屏幕或系统状态。
@@ -130,7 +130,7 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   if (input.unansweredCount === 1) systemParts.push(FOLLOWUP_SYSTEM);
 
   const trigger = `[本次主动聊天候选]
-电脑本地时间：${formatLocalTime(input.localNow, input.timezone)}
+电脑本地时间：${formatLocalTime(input.localNow, input.timezone)}（按用户设置的时区）
 候选场景：${input.sceneId}
 连续未回复次数：${input.unansweredCount}
 

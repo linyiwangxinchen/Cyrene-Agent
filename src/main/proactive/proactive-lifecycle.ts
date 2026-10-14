@@ -1,12 +1,14 @@
 import { powerMonitor } from "electron";
+import { randomUUID } from "node:crypto";
 import * as chatsStore from "../chats/chats-store";
 import { broadcastChatsChanged } from "../chats/chats-ipc";
 import type { ConversationJournalService } from "../orchestrator/conversation-journal-service";
 import { setChannelsConversationLifecycle } from "../channels/init";
 import { channelManager } from "../channels/manager";
 import {
-  canStartProactiveChannelDelivery,
+  getProactiveChannelAvailability,
   sendProactiveChannelMessage,
+  type RecentProactiveChannelRecipient,
 } from "../channels/proactive-delivery";
 import { resolveChatContextTimezone } from "../chat-time-context";
 import { buildAlwaysOnContext, buildMemoryInjection } from "../orchestrator";
@@ -22,7 +24,7 @@ import type {
 } from "./proactive-service";
 import { routeProactiveDelivery } from "./proactive-delivery-routing";
 import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive-prompt";
-import { canCommitProactiveMessage } from "./proactive-policy";
+import { canCommitProactiveMessage, canStartProactiveGeneration } from "./proactive-policy";
 import { loadProactiveState, saveProactiveState } from "./proactive-state-store";
 import { createProactiveTrigger, getZonedDateParts, type ProactiveTriggerController } from "./proactive-trigger";
 import { runProactiveModel } from "./proactive-model";
@@ -54,6 +56,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   const conversationJournal = options.conversationJournal;
   let normalConversationBusyCount = 0;
   let proactiveScreenLocked = false;
+  let lastMessageActivityAt: number | null = null;
+  let generationRecipient: RecentProactiveChannelRecipient | undefined;
+  let lastOutcome: ProactiveEvaluationStatus["lastOutcome"];
   let proactiveStatus: ProactiveEvaluationStatus = {
     candidateScore: null,
     targetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
@@ -87,7 +92,11 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       .map((message) => ({ role: message.role, content: message.content, at: message.at }));
   }
 
-  async function getProactiveHistories(): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[] }> {
+  async function getProactiveHistories(recipient?: RecentProactiveChannelRecipient): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[] }> {
+    if (recipient) {
+      const projection = await conversationJournal.readProjection(recipient.conversationId ?? recipient.sessionId);
+      return { ordinary: toProactiveHistory(projection.messages), proactive: [] };
+    }
     // Read the session index once so both projections come from the same
     // snapshot. listSessions is sorted by recent activity, so the first
     // ordinary session is the current conversation and the proactive session
@@ -109,6 +118,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const now = Date.now();
     let idleSec = Number.POSITIVE_INFINITY;
     try { idleSec = powerMonitor.getSystemIdleTime(); } catch { /* app 尚未 ready */ }
+    if (lastMessageActivityAt !== null) idleSec = Math.min(idleSec, Math.max(0, Math.floor((now - lastMessageActivityAt) / 1000)));
     return {
       now,
       // The server's system timezone can differ from the user's timezone.
@@ -123,7 +133,11 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   }
 
   async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
-    const histories = await getProactiveHistories();
+    const target = options.loadGeneralSettings().proactiveDeliveryTarget;
+    const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
+    if (route && !route.available) throw new Error(route.reason);
+    generationRecipient = route?.available ? { ...route.recipient } : undefined;
+    const histories = await getProactiveHistories(generationRecipient);
     const recentTopic = histories.ordinary.slice(-4).map((turn) => turn.content).join("\n");
     const retrievalQuery = `${candidate.sceneId}\n${recentTopic}`.trim();
     const [profileContext, memoryContext] = await Promise.all([
@@ -164,7 +178,10 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   }
 
   const proactiveConversationLifecycle = {
-    onUserMessage: () => bestEffortConversationStateUpdate("user_message", () => proactiveChatService?.invalidateForUserMessage()),
+    onUserMessage: () => {
+      lastMessageActivityAt = Date.now();
+      bestEffortConversationStateUpdate("user_message", () => proactiveChatService?.invalidateForUserMessage());
+    },
     onConversationStarted: () => {
       updateNormalConversationBusy(1);
       bestEffortConversationStateUpdate("conversation_started", () => proactiveChatService?.normalConversationStarted());
@@ -230,13 +247,32 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const result = await routeProactiveDelivery(target, {
       commitLocal: () => commitLocalProactiveMessage(input),
       commitChannel: async (channel) => {
+        const recipient = generationRecipient;
+        if (!recipient) return { kind: "cancelled", reason: "recipient_unavailable" };
         const channelResult = await sendProactiveChannelMessage({
           channel,
           text: input.text,
           mobileMessageSegmentation: settings.mobileMessageSegmentation,
           manager: channelManager,
+          recipient,
+          recordDelivery: async (deliveredRecipient, text) => {
+            const conversationId = deliveredRecipient.conversationId ?? deliveredRecipient.sessionId;
+            const runId = `proactive-channel-${randomUUID()}`;
+            const assistantTurnId = runId;
+            const sink = conversationJournal.createRunSink({ conversationId, runId, assistantTurnId });
+            const messageId = await sink.appendAssistant({ message: { role: "assistant", content: text }, roundId: "proactive" });
+            await conversationJournal.appendPresentationNext(conversationId, messageId, `${runId}:presentation`, {
+              content: text,
+              channelSource: { channel, chatType: "private" },
+              runSnapshot: { runId, status: "terminal", updatedAt: Date.now() },
+            });
+            await conversationJournal.appendDeliveryReceipt(conversationId, { assistantTurnId, channel, status: "delivered", runId });
+            broadcastChatsChanged();
+          },
           canContinue: () => {
             if (options.loadGeneralSettings().proactiveDeliveryTarget !== channel) return false;
+            const latest = getProactiveChannelAvailability(channel, channelManager);
+            if (!latest.available || latest.recipient.targetId !== recipient.targetId || latest.recipient.conversationId !== recipient.conversationId) return false;
             return getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed;
           },
         });
@@ -280,12 +316,20 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       getFallback: async () => null,
       canStartDelivery: () => {
         const target = options.loadGeneralSettings().proactiveDeliveryTarget;
-        return target === "local" || canStartProactiveChannelDelivery(target, channelManager);
+        return target === "local" || getProactiveChannelAvailability(target, channelManager).available;
       },
       requiresDurableIntent: () => options.loadGeneralSettings().proactiveDeliveryTarget === "local",
       getDeliveryTarget: () => options.loadGeneralSettings().proactiveDeliveryTarget,
       commitMessage: commitSelectedProactiveMessage,
-      log: (event, detail) => console.log(`[Proactive] ${event}`, detail ?? ""),
+      log: (event, detail) => {
+        const info = detail as { reason?: string; scene?: string } | undefined;
+        const state = event === "message_committed" ? "sent"
+          : event === "model_silent" ? "silent"
+          : event === "fallback_unavailable" || event === "evaluation_failed" ? "failed"
+          : event.endsWith("blocked") || event === "commit_cancelled" || event === "generation_discarded" ? "blocked" : null;
+        if (state) lastOutcome = { state, ...(info?.reason ? { reason: info.reason } : {}), at: Date.now(), sceneId: info?.scene ?? null };
+        console.log(`[Proactive] ${event}`, detail ?? "");
+      },
     });
 
     setChannelsConversationLifecycle(proactiveConversationLifecycle);
@@ -315,6 +359,21 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       getProactiveState: loadProactiveState,
       getTimezone: () => resolveChatContextTimezone(loadUserProfile().timezone),
       getTargetScore: () => options.loadGeneralSettings().proactiveTargetScore ?? DEFAULT_PROACTIVE_TARGET_SCORE,
+      getCandidateBlockReason: (candidate) => {
+        const decision = canStartProactiveGeneration(getProactiveRuntimeSnapshot(), loadProactiveState(), candidate);
+        if (!decision.allowed) return decision.reason;
+        const target = options.loadGeneralSettings().proactiveDeliveryTarget;
+        const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
+        return route && !route.available ? route.reason : undefined;
+      },
+      getConversationLastActivity: async () => {
+        const target = options.loadGeneralSettings().proactiveDeliveryTarget;
+        const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
+        if (route && !route.available) return null;
+        const histories = await getProactiveHistories(route?.available ? route.recipient : undefined);
+        if (!histories.ordinary.some(turn => turn.role === "user")) return null;
+        return histories.ordinary.at(-1)?.at ?? null;
+      },
       onEvaluation: (status: ProactiveEvaluationStatus) => { proactiveStatus = status; },
       // getWeatherContext 第一版不传：未来天气缓存接入后填，函数体无需改
       getLastEvaluatedAtByScene: () => new Map(proactiveBackoffMap),
@@ -336,10 +395,19 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     initializeProactiveTrigger,
     stopProactiveTrigger,
     getProactiveChatService: () => proactiveChatService,
-    getProactiveStatus: () => ({
-      ...proactiveStatus,
-      targetScore: options.loadGeneralSettings().proactiveTargetScore ?? DEFAULT_PROACTIVE_TARGET_SCORE,
-    }),
+    getProactiveStatus: () => {
+      const settings = options.loadGeneralSettings();
+      const route = settings.proactiveDeliveryTarget === "local" ? null : getProactiveChannelAvailability(settings.proactiveDeliveryTarget, channelManager);
+      const state = loadProactiveState();
+      return {
+        ...proactiveStatus,
+        targetScore: settings.proactiveTargetScore ?? DEFAULT_PROACTIVE_TARGET_SCORE,
+        lastOutcome,
+        delivery: { target: settings.proactiveDeliveryTarget, ready: route === null || route.available, ...(route && !route.available ? { reason: route.reason } : {}) },
+        unansweredCount: state.unansweredCount,
+        lastProactiveAt: state.lastProactiveAt,
+      };
+    },
     proactiveConversationLifecycle,
   };
 }

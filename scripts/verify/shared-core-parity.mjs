@@ -138,6 +138,17 @@ try {
   const capabilityResponse = await http('/api/core/capabilities', 'POST', {}, { 'X-Cyrene-Client': clientToken });
   assert.equal(capabilityResponse.response.status, 200);
   const runtimeCapabilities = capabilityResponse.value;
+  await check('Proactive settings round-trip and expose actual WeChat delivery readiness', async () => {
+    const original = await invoke('settings:get-general');
+    try {
+      await invoke('settings:save-general', { proactiveChatMode: 'on', proactiveDeliveryTarget: 'wechat', proactiveTargetScore: 57 });
+      const saved = await invoke('settings:get-general');
+      assert.equal(saved.proactiveChatMode, 'on'); assert.equal(saved.proactiveDeliveryTarget, 'wechat'); assert.equal(saved.proactiveTargetScore, 57);
+      const status = await invoke('settings:get-proactive-status');
+      assert.equal(status.targetScore, 57); assert.deepEqual(status.delivery, { target: 'wechat', ready: false, reason: 'channel_offline' });
+      assert.equal(typeof status.unansweredCount, 'number');
+    } finally { await invoke('settings:save-general', original); }
+  });
   await check('Upstream version and issue mail protocol reach the authenticated Web core', async () => {
     assert.equal(runtimeCapabilities.version, JSON.parse(await readFile('package.json', 'utf8')).version);
     const url = 'mailto:test@example.invalid?subject=fixture';

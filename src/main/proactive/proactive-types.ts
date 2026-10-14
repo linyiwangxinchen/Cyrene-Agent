@@ -23,6 +23,11 @@ export interface ProactiveEvaluationStatus {
   sceneId: string | null;
   evaluatedAt: number | null;
   state: ProactiveEvaluationState;
+  reason?: string;
+  lastOutcome?: { state: "blocked" | "silent" | "failed" | "sent"; reason?: string; at: number; sceneId: string | null };
+  delivery?: { target: "local" | "wechat" | "feishu"; ready: boolean; reason?: string };
+  unansweredCount?: number;
+  lastProactiveAt?: number | null;
 }
 
 /** Durable intent captured before delivery; retries must replay this exact payload. */

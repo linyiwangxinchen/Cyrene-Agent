@@ -238,7 +238,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           // 技术失败或无效输出才允许寻找旧预设；Epoch 失效已在上方提前拦截。
           const fallback = await deps.getFallback(candidate);
           if (!fallback?.text.trim()) {
-            deps.log?.("fallback_unavailable", { scene: candidate.sceneId, result: result.kind });
+            deps.log?.("fallback_unavailable", { scene: candidate.sceneId, result: result.kind, reason: result.reason });
             return;
           }
           text = fallback.text.trim();
@@ -290,6 +290,9 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         // Persist the exact business intent before crossing into any delivery adapter.
         persistPendingIntent(commitStateBeforeIntent, intent);
         await deliverIntent(intent, "local");
+      } catch (error) {
+        deps.log?.("evaluation_failed", { scene: candidate.sceneId, reason: "generation_error" });
+        throw error;
       } finally {
         generating = false;
       }

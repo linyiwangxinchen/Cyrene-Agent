@@ -416,3 +416,48 @@ describe("getZonedDateParts", () => {
     expect(typeof p.hour).toBe("number");
   });
 });
+
+describe("conversation follow-ups without desktop activity", () => {
+  it("can follow up on a recent bound conversation in the afternoon with the browser closed", async () => {
+    const now = Date.UTC(2026, 9, 14, 6); // 14:00 Shanghai, outside greeting windows
+    const ctx = setup({ getConversationLastActivity: async () => now - 3 * 60 * 60 * 1000 });
+    ctx.setSnapshot({ now, localHour: 14, idleSec: 72 * 60 * 60 });
+    ctx.setState({ lastNormalConversationEndedAt: now - 3 * 60 * 60 * 1000 });
+    await ctx.trigger.evaluateNow();
+    expect(ctx.evaluateCandidate).toHaveBeenCalledWith(expect.objectContaining({ sceneId: "conversation_followup", score: 80 }));
+  });
+  it("does not manufacture a follow-up for empty, recent, expired or nighttime conversations", async () => {
+    const now = Date.UTC(2026, 9, 14, 6);
+    for (const age of [null, 60 * 60 * 1000, 49 * 60 * 60 * 1000]) {
+      const ctx = setup({ getConversationLastActivity: async () => age === null ? null : now - age });
+      ctx.setSnapshot({ now, localHour: 14, idleSec: 10000 });
+      await ctx.trigger.evaluateNow(); expect(ctx.evaluateCandidate).not.toHaveBeenCalled();
+    }
+    const night = setup({ getConversationLastActivity: async () => now - 3 * 60 * 60 * 1000 });
+    night.setSnapshot({ now: Date.UTC(2026, 9, 14, 15), localHour: 23, idleSec: 10000 });
+    await night.trigger.evaluateNow(); expect(night.evaluateCandidate).not.toHaveBeenCalled();
+  });
+  it("keeps the final follow-up reachable without a desktop return and preserves hard policy", async () => {
+    const now = Date.UTC(2026, 9, 14, 6);
+    const ctx = setup({ getConversationLastActivity: async () => now - 12 * 60 * 60 * 1000 });
+    ctx.setSnapshot({ now, localHour: 14, idleSec: 100000 });
+    ctx.setState({ unansweredCount: 1, lastProactiveAt: now - 7 * 60 * 60 * 1000, lastProactiveScene: "morning_greeting" });
+    await ctx.trigger.evaluateNow();
+    const candidate = ctx.evaluateCandidate.mock.calls[0][0];
+    expect(candidate.score).toBe(82);
+    const { canStartProactiveGeneration } = await import("./proactive-policy");
+    expect(canStartProactiveGeneration(ctx.snapshot, ctx.state, candidate).allowed).toBe(true);
+    ctx.state.unansweredCount = 2;
+    expect(canStartProactiveGeneration(ctx.snapshot, ctx.state, candidate).reason).toBe("unanswered_limit");
+  });
+  it("does not consume model backoff while the channel is unavailable", async () => {
+    let blocked: string | undefined = "wechat_context_missing";
+    const onEvaluation = vi.fn();
+    const ctx = setup({ getCandidateBlockReason: () => blocked, onEvaluation });
+    await ctx.trigger.evaluateNow();
+    expect(ctx.evaluateCandidate).not.toHaveBeenCalled(); expect(ctx.backoffMap.size).toBe(0);
+    expect(onEvaluation).toHaveBeenLastCalledWith(expect.objectContaining({ state: "suppressed", reason: "wechat_context_missing" }));
+    blocked = undefined;
+    await ctx.trigger.evaluateNow(); expect(ctx.evaluateCandidate).toHaveBeenCalledOnce();
+  });
+});

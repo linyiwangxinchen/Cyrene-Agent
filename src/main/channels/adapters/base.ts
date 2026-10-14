@@ -35,6 +35,9 @@ export interface ChannelAdapter {
 
   /** UI 展示用状态。轮询调用，adapter 内部缓存即可。 */
   getStatus(): ChannelStatus;
+
+  /** Optional protocol-specific preflight; never performs a send. */
+  getProactiveAvailability?(targetId: string): { available: boolean; reason?: string };
 }
 
 /** 工具类型：adapter 的可选 onMessage setter。 */

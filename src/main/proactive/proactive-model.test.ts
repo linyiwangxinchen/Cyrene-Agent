@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../orchestrator/vendors", () => ({
   getAdapterForConfig: () => ({
+    capability: { id: "openai" },
     buildRequest: mocks.buildRequest,
     parseResponse: mocks.parseResponse,
   }),
@@ -95,5 +96,16 @@ describe("runProactiveModel", () => {
     });
     expect(result).toEqual({ kind: "error", reason: "tool_content_forbidden" });
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("reserves room for GPT reasoning and reports output exhaustion instead of hiding it as silence", async () => {
+    mocks.parseResponse.mockReturnValue({ text: "", finishReason: "length" });
+    const result = await runProactiveModel({
+      settings: { provider: "OpenAI", baseUrl: "https://example.test", model: "gpt-6.1-sol", apiKey: "key", reasoning: { mode: "on", effort: "high" } },
+      messages: [{ role: "system", content: "system" }], timeoutMs: 1000,
+      fetchFn: vi.fn(async () => new Response("{}", { status: 200 })),
+    });
+    expect(mocks.buildRequest.mock.calls[0][0].maxTokens).toBe(4096);
+    expect(result).toEqual({ kind: "invalid", reason: "output_token_limit" });
   });
 });

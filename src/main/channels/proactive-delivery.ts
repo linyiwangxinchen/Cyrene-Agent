@@ -8,18 +8,19 @@ import {
 import { appendHistory as appendChannelHistory } from "./history-log";
 import { appendLog as appendChannelLog, type LogEntry } from "./message-log";
 import type { ChannelId, IncomingMessage, OutgoingMessage } from "./types";
+import { getChannelConversationBindingStore, type ChannelConversationBindingSnapshot } from "./conversation-binding-store";
 
 export type ProactiveMobileChannel = Extract<ChannelId, "wechat" | "feishu">;
 
-// Channel recipients are intentionally process-local. A restart must observe a
-// fresh inbound message before unsolicited delivery is allowed, so a stale
-// recipient is never reused across service lifetimes.
+// Unbound recipients remain process-local. A persisted explicit private binding
+// can survive a restart when the adapter also has usable reply context.
 
 export interface RecentProactiveChannelRecipient {
   targetId: string;
   threadId?: string;
   sessionId: string;
   updatedAt: number;
+  conversationId?: string;
 }
 
 export interface ProactiveChannelRecipientRegistry {
@@ -32,6 +33,7 @@ export function createProactiveChannelRecipientRegistry(): ProactiveChannelRecip
   return {
     remember(message, sessionId): void {
       if (message.channel !== "wechat" && message.channel !== "feishu") return;
+      if (message.chatType === "group") return;
       const targetId = message.chatId.trim();
       if (!targetId || !sessionId) return;
       recipients.set(message.channel, {
@@ -53,13 +55,38 @@ export function rememberProactiveChannelRecipient(message: IncomingMessage, sess
   defaultRecipientRegistry.remember(message, sessionId);
 }
 
+export type ProactiveChannelAvailability =
+  | { available: true; recipient: RecentProactiveChannelRecipient }
+  | { available: false; reason: string };
+
+/** Explicit private bindings take precedence over an incidental recent sender. */
+export function getProactiveChannelAvailability(
+  channel: ProactiveMobileChannel,
+  manager: Pick<ChannelManager, "getAdapter">,
+  recipientRegistry: ProactiveChannelRecipientRegistry = defaultRecipientRegistry,
+  bindings: ChannelConversationBindingSnapshot = getChannelConversationBindingStore().list(),
+): ProactiveChannelAvailability {
+  const adapter = manager.getAdapter(channel);
+  if (!adapter?.getStatus().enabled || adapter.getStatus().phase !== "running") return { available: false, reason: "channel_offline" };
+  const candidates = bindings.bindings.flatMap(binding => {
+    const chat = bindings.externalChats.find(item => item.sessionId === binding.sessionId && item.channel === channel && item.chatType === "private");
+    return chat ? [{ targetId: chat.chatId, sessionId: chat.sessionId, conversationId: binding.conversationId, updatedAt: chat.lastAt }] : [];
+  });
+  if (candidates.length > 1) return { available: false, reason: "recipient_ambiguous" };
+  const recent = recipientRegistry.get(channel);
+  const recipient = candidates[0] ?? (recent ? { ...recent, conversationId: recent.sessionId } : null);
+  if (!recipient) return { available: false, reason: "recipient_unavailable" };
+  const protocol = adapter.getProactiveAvailability?.(recipient.targetId);
+  if (protocol && !protocol.available) return { available: false, reason: protocol.reason || "delivery_unavailable" };
+  return { available: true, recipient };
+}
+
 export function canStartProactiveChannelDelivery(
   channel: ProactiveMobileChannel,
   manager: Pick<ChannelManager, "getAdapter">,
   recipientRegistry: ProactiveChannelRecipientRegistry = defaultRecipientRegistry,
 ): boolean {
-  const adapter = manager.getAdapter(channel);
-  return adapter?.getStatus().phase === "running" && recipientRegistry.get(channel) !== null;
+  return getProactiveChannelAvailability(channel, manager, recipientRegistry).available;
 }
 
 export type ProactiveChannelDeliveryResult =
@@ -76,17 +103,20 @@ interface ProactiveChannelDeliveryInput {
   appendHistory?: typeof appendChannelHistory;
   appendLog?: (entry: Omit<LogEntry, "at">) => void;
   canContinue?: () => boolean;
+  /** A target frozen with the model context; never resolve another recipient mid-turn. */
+  recipient?: RecentProactiveChannelRecipient;
+  recordDelivery?: (recipient: RecentProactiveChannelRecipient, text: string) => Promise<void>;
 }
 
 export async function sendProactiveChannelMessage(
   input: ProactiveChannelDeliveryInput,
 ): Promise<ProactiveChannelDeliveryResult> {
   const adapter = input.manager.getAdapter(input.channel);
-  if (!adapter || adapter.getStatus().phase !== "running") {
+  if (!adapter?.getStatus().enabled || adapter.getStatus().phase !== "running") {
     return { kind: "cancelled", reason: "channel_offline" };
   }
 
-  const recipient = (input.recipientRegistry ?? defaultRecipientRegistry).get(input.channel);
+  const recipient = input.recipient ?? (input.recipientRegistry ?? defaultRecipientRegistry).get(input.channel);
   if (!recipient) return { kind: "cancelled", reason: "recipient_unavailable" };
   const delivery = input.delivery ?? createChannelDeliveryService(input.manager);
 
@@ -95,6 +125,7 @@ export async function sendProactiveChannelMessage(
   if (texts.length === 0) return { kind: "cancelled", reason: "empty_text" };
 
   const deliveredTexts: string[] = [];
+  let failureReason = "send_failed";
   for (const text of texts) {
     if (input.canContinue && !input.canContinue()) break;
     if (adapter.getStatus().phase !== "running") break;
@@ -105,22 +136,28 @@ export async function sendProactiveChannelMessage(
       parts: [{ kind: "text", text }],
     };
     const result = await delivery.send(message);
-    if (!result.ok) break;
+    if (!result.ok) { failureReason = result.error; break; }
     deliveredTexts.push(text);
   }
 
-  if (deliveredTexts.length === 0) return { kind: "cancelled", reason: "send_failed" };
+  if (deliveredTexts.length === 0) return { kind: "cancelled", reason: failureReason };
 
   const deliveredText = deliveredTexts.join("");
-  (input.appendHistory ?? appendChannelHistory)(recipient.sessionId, "assistant", deliveredText);
-  (input.appendLog ?? appendChannelLog)({
-    dir: "outgoing",
-    channel: input.channel,
-    senderId: recipient.targetId,
-    chatId: recipient.targetId,
-    text: deliveredText,
-    hasAttachments: false,
-  });
+  // Delivery already happened: a derived history/log failure must not trigger a resend.
+  try {
+    if (input.recordDelivery) await input.recordDelivery(recipient, deliveredText);
+    else (input.appendHistory ?? appendChannelHistory)(recipient.sessionId, "assistant", deliveredText);
+  } catch { console.warn("[Proactive] delivered message history write failed"); }
+  try {
+    (input.appendLog ?? appendChannelLog)({
+      dir: "outgoing",
+      channel: input.channel,
+      senderId: recipient.targetId,
+      chatId: recipient.targetId,
+      text: deliveredText,
+      hasAttachments: false,
+    });
+  } catch { console.warn("[Proactive] delivered message audit write failed"); }
 
   return {
     kind: "committed",

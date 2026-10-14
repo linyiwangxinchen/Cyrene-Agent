@@ -3,6 +3,7 @@ import type { ChannelAdapter } from "./adapters/base";
 import {
   createProactiveChannelRecipientRegistry,
   sendProactiveChannelMessage,
+  getProactiveChannelAvailability,
 } from "./proactive-delivery";
 import type { ChannelCapability, IncomingMessage } from "./types";
 
@@ -146,7 +147,7 @@ describe("proactive channel delivery", () => {
       manager: { getAdapter: () => adapter },
       recipientRegistry: registry,
     });
-    expect(failed).toEqual({ kind: "cancelled", reason: "send_failed" });
+    expect(failed).toEqual({ kind: "cancelled", reason: "failed" });
 
     vi.mocked(adapter.send)
       .mockReset()
@@ -243,5 +244,40 @@ describe("proactive channel delivery", () => {
 
     expect(result).toEqual({ kind: "committed", deliveredParts: 1, totalParts: 3 });
     expect(adapter.send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("bound proactive recipient selection", () => {
+  const bound = {
+    externalChats: [{ sessionId: "wx-bound", channel: "wechat", chatId: "explicit-user", chatType: "private" as const, lastAt: 1 }],
+    bindings: [{ sessionId: "wx-bound", conversationId: "local-chat", updatedAt: 1 }],
+  };
+  it("restores a unique persisted private binding after restart and prioritizes it over recent traffic", () => {
+    const registry = createProactiveChannelRecipientRegistry();
+    const manager = { getAdapter: () => fakeAdapter() };
+    expect(getProactiveChannelAvailability("wechat", manager, registry, bound)).toMatchObject({ available: true, recipient: { targetId: "explicit-user", conversationId: "local-chat" } });
+    registry.remember(incoming("wechat", "incidental-user"), "other-session");
+    expect(getProactiveChannelAvailability("wechat", manager, registry, bound)).toMatchObject({ recipient: { targetId: "explicit-user" } });
+  });
+  it("refuses ambiguous private bindings and never remembers a group as a proactive target", () => {
+    const registry = createProactiveChannelRecipientRegistry();
+    registry.remember({ ...incoming("feishu", "member", "group"), chatType: "group" }, "group-session");
+    expect(registry.get("feishu")).toBeNull();
+    const bindings = { externalChats: [...bound.externalChats, { ...bound.externalChats[0], sessionId: "other", chatId: "other-user" }], bindings: [...bound.bindings, { sessionId: "other", conversationId: "other-chat", updatedAt: 2 }] };
+    expect(getProactiveChannelAvailability("wechat", { getAdapter: () => fakeAdapter() }, registry, bindings)).toEqual({ available: false, reason: "recipient_ambiguous" });
+  });
+  it("checks both the saved enabled state and protocol-specific reply context", () => {
+    const registry = createProactiveChannelRecipientRegistry(); const adapter = fakeAdapter();
+    adapter.getProactiveAvailability = () => ({ available: false, reason: "wechat_context_missing" });
+    expect(getProactiveChannelAvailability("wechat", { getAdapter: () => adapter }, registry, bound)).toEqual({ available: false, reason: "wechat_context_missing" });
+    adapter.getStatus = () => ({ phase: "running", enabled: false });
+    expect(getProactiveChannelAvailability("wechat", { getAdapter: () => adapter }, registry, bound)).toEqual({ available: false, reason: "channel_offline" });
+  });
+  it("journals actual delivered text and does not turn a post-send history failure into a resend", async () => {
+    const adapter = fakeAdapter(); const appendHistory = vi.fn(); const recordDelivery = vi.fn(async () => { throw new Error("disk full"); });
+    const result = await sendProactiveChannelMessage({ channel: "wechat", text: "考试准备得怎么样啦？", mobileMessageSegmentation: "off", manager: { getAdapter: () => adapter }, recipient: { targetId: "explicit-user", sessionId: "wx-bound", conversationId: "local-chat", updatedAt: 1 }, recordDelivery, appendHistory, appendLog: vi.fn() });
+    expect(result.kind).toBe("committed"); expect(adapter.send).toHaveBeenCalledOnce();
+    expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ conversationId: "local-chat" }), "考试准备得怎么样啦？");
+    expect(appendHistory).not.toHaveBeenCalled();
   });
 });
