@@ -26,6 +26,7 @@ const fixtureModel = createServer(async (req, res) => {
     const mode = userText.includes('case:write-code') ? 'code' : 'work';
     args = { ...(name === 'Write' ? { file_path: path.join(workspace, `proof-${mode}.txt`) } : { path: path.join(workspace, `proof-${mode}.txt`) }), content: `shared-core-${mode}` };
   } else if (tools.includes('parity-plugin_echo') && userText.includes('case:plugin') && !toolMessages.length) { name = 'parity-plugin_echo'; args = { value: 'plugin-executed' }; }
+  else if (tools.includes('channel_send_file') && userText.includes('case:channel-file') && !toolMessages.length) { name = 'channel_send_file'; args = { channel: 'wechat', filePath: path.join(workspace, 'proof-work.txt') }; }
   const toolResult = toolName => {
     const call = body.messages?.slice(caseIndex + 1).flatMap(message => message.tool_calls ?? []).find(call => call.function?.name === toolName);
     const message = toolMessages.find(message => message.tool_call_id === call?.id);
@@ -192,6 +193,14 @@ try {
     const result = await http(`/api/core/files?path=${encodeURIComponent(folder)}`); assert.equal(result.response.status, 200); assert.ok(result.value.entries.some(entry => entry.name === 'cyrene.sqlite' && !entry.directory));
   });
   for (const mode of ['work', 'code']) await check(`${mode} executes tool calls and persists file/review evidence`, async () => { const result = await run(sessions[mode], `case:write-${mode}`); assert.equal(await readFile(path.join(workspace, `proof-${mode}.txt`), 'utf8'), `shared-core-${mode}`); assert.ok(result.stream.some(event => event.type === 'TOOL_CALL_START')); assert.ok(await invoke('review:get', result.ack.runId)); const session = await invoke('chats:get', sessions[mode].id); assert.ok(session.messages.some(message => message.role === 'model')); });
+  await check('Web exposes and executes the channel attachment tool without guessing a recipient', async () => {
+    assert.ok((await invoke('tool:get-catalog')).some(tool => tool.id === 'channel_send_file'));
+    const start = requests.length;
+    const result = await run(sessions.work, 'case:channel-file 把报告微信发给我');
+    assert.ok(result.stream.some(event => event.type === 'TOOL_CALL_START' && event.toolCallName === 'channel_send_file'));
+    const toolMessage = requests.slice(start).flatMap(request => request.messages ?? []).find(message => message.role === 'tool' && String(message.content).includes('没有唯一的渠道收件目标'));
+    assert.ok(toolMessage, 'unbound Web send must return the real missing-target error to the model');
+  });
   await check('Learn routes through Harness and exposes exam tools', async () => { const start = requests.length; await run(sessions.learn, 'case:learn'); assert.ok(requests.slice(start).some(request => request.tools?.some(tool => tool.function?.name === 'learn_exam_create_plan'))); });
   await check('Learn exam is authored, answered with hidden solutions, submitted and graded', async () => {
     const prior = events.length; await run(sessions.learn, 'case:exam');

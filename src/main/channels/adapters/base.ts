@@ -13,6 +13,7 @@ import type {
   IncomingMessage,
   MessageHandler,
   OutgoingMessage,
+  ChannelSendOptions,
 } from "../types";
 
 export interface ChannelAdapter {
@@ -30,7 +31,7 @@ export interface ChannelAdapter {
   onMessage: MessageHandler | null;
 
   /** 出站：把统一 OutgoingMessage 翻译成平台协议发出去 */
-  send(msg: OutgoingMessage): Promise<{ ok: boolean; error?: string }>;
+  send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string }>;
 
   /** UI 展示用状态。轮询调用，adapter 内部缓存即可。 */
   getStatus(): ChannelStatus;

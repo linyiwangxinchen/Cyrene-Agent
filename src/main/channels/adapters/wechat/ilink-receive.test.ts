@@ -9,6 +9,7 @@ vi.mock("../../settings-store", () => ({ loadChannelsSettings: () => ({ wechat: 
 vi.mock("./ilink-protocol-client", async original => ({ ...await original<object>(), ILinkClient: class { getUpdates = mocks.getUpdates; }, pollQrStatus: mocks.pollQrStatus }));
 import { ILinkBotAdapter } from "./ilink-bot-adapter";
 import { SessionExpiredError } from "./ilink-protocol-client";
+import { promises as fs } from "node:fs";
 
 let adapter: ILinkBotAdapter;
 function pendingPoll(_buf: string, signal: AbortSignal) { return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })); }
@@ -16,6 +17,38 @@ beforeEach(() => { vi.clearAllMocks(); mocks.getUpdates.mockImplementation(pendi
 afterEach(async () => { await adapter.stop(); vi.useRealTimers(); });
 
 describe("WeChat receive lifecycle", () => {
+  it("does not resurrect polling when credentials finish loading after stop", async () => {
+    let complete!: (value: string) => void;
+    vi.mocked(fs.readFile).mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }) as any);
+    const starting = adapter.start();
+    await adapter.stop();
+    complete(JSON.stringify({ botToken: "token", ilinkBotId: "bot", baseUrl: "https://ilinkai.weixin.qq.com" }));
+    await starting;
+    expect(mocks.getUpdates).not.toHaveBeenCalled();
+    expect(adapter.getStatus().enabled).toBe(false);
+  });
+  it("clears recipient tokens and pending inbound media on logout", async () => {
+    (adapter as any).replyContextByTarget.set("user", "old-context");
+    (adapter as any).pendingSaveIntentByTarget.set("user", Date.now());
+    (adapter as any).pendingUnsupportedMediaByTarget.set("user", {});
+    await adapter.logout();
+    expect((adapter as any).replyContextByTarget.size).toBe(0);
+    expect((adapter as any).pendingSaveIntentByTarget.size).toBe(0);
+    expect((adapter as any).pendingUnsupportedMediaByTarget.size).toBe(0);
+  });
+  it("aborts a pending attachment download when the channel is disabled", async () => {
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason), { once: true })));
+    vi.stubGlobal("fetch", fetchMock);
+    const handler = vi.fn(async () => null); adapter.onMessage = handler;
+    mocks.getUpdates.mockResolvedValueOnce({ messages: [{ msgId: "file", fromUserId: "user", content: "看看附件", items: [{ type: 4, file_item: { file_name: "report.txt", media: { encrypt_query_param: "download", aes_key: "00112233445566778899aabbccddeeff" } } }], contextToken: "ctx" }], buf: "next" });
+    try {
+      await adapter.start();
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      await adapter.stop();
+      expect(fetchMock.mock.calls[0][1]?.signal?.aborted).toBe(true);
+      expect(handler).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
   it("aborts polling on disable and does not dispatch the late receive response", async () => {
     let resolve!: (value: unknown) => void;
     mocks.getUpdates.mockImplementationOnce(() => new Promise(done => { resolve = done; }));

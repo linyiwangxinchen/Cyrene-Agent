@@ -113,6 +113,9 @@ export interface OutgoingMessage {
   parts: OutgoingPart[];
 }
 
+/** Transient cancellation, never persisted as part of the message. */
+export interface ChannelSendOptions { signal?: AbortSignal }
+
 /** 渠道状态（UI 展示用） */
 export interface ChannelStatus {
   enabled: boolean;

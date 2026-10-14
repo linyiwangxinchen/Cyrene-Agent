@@ -205,8 +205,8 @@ export class ILinkClient {
   // ── Send ────────────────────────────────────────────────────────────────
 
   /** 发文本消息（最常用） */
-  async sendText(toUserId: string, text: string, contextToken: string): Promise<{ ok: boolean; error?: string }> {
-    return this.sendMessage(toUserId, [{ type: 1, text_item: { text } }], contextToken);
+  async sendText(toUserId: string, text: string, contextToken: string, options?: { signal?: AbortSignal }): Promise<{ ok: boolean; error?: string }> {
+    return this.sendMessage(toUserId, [{ type: 1, text_item: { text } }], contextToken, options);
   }
 
   /**
@@ -219,6 +219,7 @@ export class ILinkClient {
     toUserId: string,
     itemList: SendMessageItem[],
     contextToken: string,
+    options?: { signal?: AbortSignal },
   ): Promise<{ ok: boolean; error?: string }> {
     try {
       // iLink 真实协议（与 corespeed-io/wechatbot SDK 完全一致）：
@@ -239,7 +240,7 @@ export class ILinkClient {
           item_list: itemList,
         },
         base_info: { channel_version: "2.0.0" },
-      });
+      }, options);
       assertApiSuccess(resp as ApiResult, "sendmessage");
       return { ok: true };
     } catch (err) {
@@ -248,11 +249,11 @@ export class ILinkClient {
     }
   }
 
-  async getUploadUrl(req: GetUploadUrlRequest): Promise<GetUploadUrlResponse> {
+  async getUploadUrl(req: GetUploadUrlRequest, options?: { signal?: AbortSignal }): Promise<GetUploadUrlResponse> {
     const resp = await this.doJson<unknown>("POST", "/ilink/bot/getuploadurl", {
       ...req,
       base_info: { channel_version: "2.0.0" },
-    });
+    }, options);
     const data = resp as GetUploadUrlResponse & ApiResult;
     assertApiSuccess(data, "getuploadurl");
     return data;

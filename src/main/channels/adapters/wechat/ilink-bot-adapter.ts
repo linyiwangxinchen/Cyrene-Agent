@@ -46,6 +46,7 @@ import type {
   ChannelCapability,
   ChannelId,
   ChannelStatus,
+  ChannelSendOptions,
   IncomingMessage,
   MessageHandler,
   OutgoingMessage,
@@ -95,6 +96,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   private client: ILinkClient | null = null;
   private pollAbort: AbortController | null = null;
   private pollLoopPromise: Promise<void> | null = null;
+  private lifecycleVersion = 0;
   /** 账号是否已登录（凭证存在） */
   isLoggedIn = false;
   /** 当前 credentials（动态加载） */
@@ -116,6 +118,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
   async start(): Promise<void> {
     if (this.pollAbort) await this.stop();
+    const version = ++this.lifecycleVersion;
     const configured = loadChannelsSettings().wechat.enabled;
     if (!configured) {
       await this.stop();
@@ -127,6 +130,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
     // 1. 加载已存凭证
     const creds = await loadCredentials();
+    if (version !== this.lifecycleVersion || !loadChannelsSettings().wechat.enabled) return;
     if (!creds) {
       this.status = {
         enabled: true,
@@ -137,6 +141,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
       return;
     }
 
+    if (this.currentCredentials?.ilinkBotId !== creds.ilinkBotId) this.clearRecipientState();
     this.currentCredentials = creds;
     this.client = new ILinkClient(creds);
     this.isLoggedIn = true;
@@ -148,6 +153,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   }
 
   async stop(): Promise<void> {
+    ++this.lifecycleVersion;
     console.log(LOG_PREFIX, "Stopping...");
     this.status = { enabled: false, phase: "offline", message: "微信未启用" };
     this.onStatusChanged?.();
@@ -164,88 +170,114 @@ export class ILinkBotAdapter implements ChannelAdapter {
     this.status = { enabled: false, phase: "offline", message: "微信未启用" };
   }
 
-  async send(msg: OutgoingMessage): Promise<{ ok: boolean; error?: string }> {
+  async send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string }> {
     if (!this.client || !this.status.enabled) return { ok: false, error: "微信未连接" };
     const client = this.client;
+    const signals = [options?.signal, this.pollAbort?.signal].filter((s): s is AbortSignal => Boolean(s));
+    const signal = signals.length ? AbortSignal.any(signals) : undefined;
+    const transferOptions = signal ? { signal } : undefined;
     const contextToken = this.replyContextByTarget.get(msg.targetId);
     if (!contextToken) return { ok: false, error: "缺少微信 context_token，无法回复" };
     const sendMessage = (items: SendMessageItem[]) =>
       this.client === client && this.status.enabled
-        ? client.sendMessage(msg.targetId, items, contextToken)
+        ? client.sendMessage(msg.targetId, items, this.replyContextByTarget.get(msg.targetId) || contextToken, transferOptions)
         : Promise.resolve({ ok: false, error: "channel_disabled" });
 
     let anyOk = false;
     let lastErr: string | undefined;
+    let requiredError: string | undefined;
 
     for (const part of msg.parts) {
-      if (this.client !== client || !this.status.enabled) return { ok: false, error: "channel_disabled" };
-      if (part.kind === "text") {
-        const text = part.text.trim();
-        if (!text) continue;
-        const textResult = await this.client.sendText(msg.targetId, text, contextToken);
-        if (textResult.ok) {
-          anyOk = true;
-        } else {
-          lastErr = textResult.error ?? "微信文本发送失败";
-          console.warn(LOG_PREFIX, "text_item 发送失败:", lastErr);
-        }
-      } else if (part.kind === "image") {
-        if (!part.filePath) return { ok: false, error: "微信图片发送需要本地 filePath" };
-        const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.IMAGE);
-        const result = await sendMessage([buildImageItem(media)]);
-        if (result.ok) anyOk = true;
-        else {
-          lastErr = result.error ?? "微信图片发送失败";
-          console.warn(LOG_PREFIX, "image_item 发送失败:", lastErr);
-        }
-      } else if (part.kind === "sticker") {
-        const media = await this.uploadMedia(this.client, msg.targetId, part.imagePath, MediaType.IMAGE);
-        const result = await sendMessage([buildImageItem(media)]);
-        if (result.ok) anyOk = true;
-        else {
-          lastErr = result.error ?? "微信表情发送失败";
-          console.warn(LOG_PREFIX, "sticker image_item 发送失败:", lastErr);
-        }
-      } else if (part.kind === "audio") {
-        const voice = await this.buildVoiceItem(msg.targetId, part.filePath).catch((err) => {
-          console.warn(LOG_PREFIX, "voice_item 构造失败（跳过语音）:", err instanceof Error ? err.message : err);
-          return null;
-        });
-        if (voice) {
-          const result = await sendMessage([voice]);
+      try {
+        signal?.throwIfAborted();
+        if (this.client !== client || !this.status.enabled) return { ok: false, error: "channel_disabled" };
+        if (part.kind === "text") {
+          const text = part.text.trim();
+          if (!text) continue;
+          const textResult = await this.client.sendText(msg.targetId, text, this.replyContextByTarget.get(msg.targetId) || contextToken, transferOptions);
+          if (textResult.ok) {
+            anyOk = true;
+          } else {
+            lastErr = textResult.error ?? "微信文本发送失败";
+            requiredError = lastErr;
+            console.warn(LOG_PREFIX, "text_item 发送失败:", lastErr);
+          }
+        } else if (part.kind === "image") {
+          if (!part.filePath) return { ok: false, error: "微信图片发送需要本地 filePath" };
+          const media = await this.uploadMedia(client, msg.targetId, part.filePath, MediaType.IMAGE, transferOptions);
+          const result = await sendMessage([buildImageItem(media)]);
           if (result.ok) anyOk = true;
           else {
-            lastErr = result.error ?? "微信语音发送失败";
-            console.warn(LOG_PREFIX, "voice_item 发送失败:", lastErr);
+            lastErr = result.error ?? "微信图片发送失败";
+            requiredError = lastErr;
+            console.warn(LOG_PREFIX, "image_item 发送失败:", lastErr);
           }
+        } else if (part.kind === "sticker") {
+          const media = await this.uploadMedia(client, msg.targetId, part.imagePath, MediaType.IMAGE, transferOptions);
+          const result = await sendMessage([buildImageItem(media)]);
+          if (result.ok) anyOk = true;
+          else {
+            lastErr = result.error ?? "微信表情发送失败";
+            console.warn(LOG_PREFIX, "sticker image_item 发送失败:", lastErr);
+          }
+        } else if (part.kind === "audio") {
+          const voice = await this.buildVoiceItem(client, msg.targetId, part.filePath, signal).catch((err) => {
+            lastErr = err instanceof Error ? err.message : String(err);
+            console.warn(LOG_PREFIX, "voice_item 构造失败（跳过语音）:", err instanceof Error ? err.message : err);
+            return null;
+          });
+          if (voice) {
+            const result = await sendMessage([voice]);
+            if (result.ok) anyOk = true;
+            else {
+              lastErr = result.error ?? "微信语音发送失败";
+              console.warn(LOG_PREFIX, "voice_item 发送失败:", lastErr);
+            }
+          }
+        } else if (part.kind === "file") {
+          const media = await this.uploadMedia(client, msg.targetId, part.filePath, MediaType.FILE, transferOptions);
+          const result = await sendMessage([buildFileItem(media, path.basename(part.name ?? part.filePath))]);
+          if (result.ok) anyOk = true;
+          else {
+            lastErr = result.error ?? "微信文件发送失败";
+            requiredError = lastErr;
+            console.warn(LOG_PREFIX, "file_item 发送失败:", lastErr);
+          }
+        } else if (part.kind === "video") {
+          const media = await this.uploadMedia(client, msg.targetId, part.filePath, MediaType.VIDEO, transferOptions);
+          const result = await sendMessage([buildVideoItem(media)]);
+          if (result.ok) anyOk = true;
+          else {
+            lastErr = result.error ?? "微信视频发送失败";
+            requiredError = lastErr;
+            console.warn(LOG_PREFIX, "video_item 发送失败:", lastErr);
+          }
+        } else if (part.kind === "card") {
+          requiredError = "微信不支持卡片消息";
         }
-      } else if (part.kind === "file") {
-        const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.FILE);
-        const result = await sendMessage([buildFileItem(media, path.basename(part.name ?? part.filePath))]);
-        if (result.ok) anyOk = true;
-        else {
-          lastErr = result.error ?? "微信文件发送失败";
-          console.warn(LOG_PREFIX, "file_item 发送失败:", lastErr);
+      } catch (error) {
+        if (error instanceof SessionExpiredError) {
+          this.client = null;
+          this.isLoggedIn = false;
+          this.clearRecipientState();
+          this.pollAbort?.abort();
+          this.status = { enabled: true, phase: "error", message: "会话已过期，请重新扫码登录" };
+          this.onStatusChanged?.();
         }
-      } else if (part.kind === "video") {
-        const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.VIDEO);
-        const result = await sendMessage([buildVideoItem(media)]);
-        if (result.ok) anyOk = true;
-        else {
-          lastErr = result.error ?? "微信视频发送失败";
-          console.warn(LOG_PREFIX, "video_item 发送失败:", lastErr);
-        }
+        lastErr = error instanceof Error ? error.message : String(error);
+        if (part.kind !== "sticker" && part.kind !== "audio") requiredError = lastErr;
+        if (signal?.aborted) return { ok: false, error: lastErr };
       }
     }
+    if (requiredError) return { ok: false, error: requiredError };
     if (!anyOk && lastErr) return { ok: false, error: lastErr };
-    return { ok: true };
+    return anyOk ? { ok: true } : { ok: false, error: "没有可发送的微信消息" };
   }
 
-  private async buildVoiceItem(targetId: string, filePath: string): Promise<SendMessageItem> {
-    if (!this.client) throw new Error("微信未连接");
+  private async buildVoiceItem(client: ILinkClient, targetId: string, filePath: string, signal?: AbortSignal): Promise<SendMessageItem> {
     const source = await fs.readFile(filePath);
     const encoded = await this.encodeVoice(source, { format: "wav" });
-    const media = await this.uploadMediaData(this.client, targetId, encoded.data, MediaType.VOICE);
+    const media = await this.uploadMediaData(client, targetId, encoded.data, MediaType.VOICE, signal ? { signal } : undefined);
     return buildVoiceItem(media, encoded.durationMs, encoded.sampleRate, encoded.encodeType);
   }
 
@@ -315,10 +347,17 @@ export class ILinkBotAdapter implements ChannelAdapter {
   /** 注销（删除凭证文件） */
   async logout(): Promise<void> {
     await this.stop();
+    this.clearRecipientState();
     await deleteCredentials();
     this.currentCredentials = null;
     this.isLoggedIn = false;
     this.status = { enabled: false, phase: "offline", message: "已登出" };
+  }
+
+  private clearRecipientState(): void {
+    this.replyContextByTarget.clear();
+    this.pendingSaveIntentByTarget.clear();
+    this.pendingUnsupportedMediaByTarget.clear();
   }
 
   // ── Internal: poll loop ──────────────────────────────────────────────────
@@ -361,6 +400,8 @@ export class ILinkBotAdapter implements ChannelAdapter {
           console.warn(LOG_PREFIX, "Session expired — please re-login");
           sessionExpired = true;
           this.isLoggedIn = false;
+          this.client = null;
+          this.clearRecipientState();
           this.status = {
             enabled: true,
             phase: "error",
@@ -388,7 +429,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
       return;
     }
     console.log(LOG_PREFIX, `inbound received: items=${msg.items.length}, textLength=${msg.content?.length ?? 0}`);
-    this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
+    if (msg.contextToken) this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
 
     const media = describeInboundWechatMedia(msg.items);
     const voiceText = await this.#maybeTranscribeInboundVoice(msg, media);
@@ -465,11 +506,6 @@ export class ILinkBotAdapter implements ChannelAdapter {
       return { handled: true, text: buildWechatVideoPrompt(username) };
     }
 
-    const voice = media.find((item) => item.kind === "voice");
-    if (voice && !this.isAsrConfigured()) {
-      return { handled: true, text: buildWechatAsrMissingPrompt(username) };
-    }
-
     const unsupportedFile = media.find((item) => item.kind === "file" && !item.analyzable);
     if (unsupportedFile) {
       if (this.pendingSaveIntentByTarget.has(msg.fromUserId)) {
@@ -490,7 +526,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
     username: string,
   ): Promise<string> {
     try {
-      const filePath = await this.saveInboundMedia(media, messageId);
+      const filePath = await this.saveInboundMedia(media, messageId, this.pollAbort?.signal);
       return buildWechatSaveSuccessPrompt(username, filePath);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
@@ -502,6 +538,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   async #maybeTranscribeInboundVoice(msg: WeixinMessage, media: InboundMediaDescriptor[]): Promise<string | undefined | null> {
     const voice = media.find((item) => item.kind === "voice");
     if (!voice) return undefined;
+    if (voice.transcript) return voice.transcript;
 
     const username = loadWechatPreferredName();
     if (!this.isAsrConfigured()) {
@@ -510,7 +547,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
     }
 
     try {
-      const transcript = (await this.transcribeVoice(voice, msg.msgId || String(Date.now()))).trim();
+      const transcript = (await this.transcribeVoice(voice, msg.msgId || String(Date.now()), this.pollAbort?.signal)).trim();
       if (!transcript) {
         await this.#sendInterceptText(msg.fromUserId, msg.contextToken, buildWechatAsrFailedPrompt(username, "没有识别到文字"));
         return null;
@@ -533,7 +570,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
         return null;
       }
       try {
-        const downloaded = await this.downloadMedia(item, msg.msgId || String(Date.now()));
+        const downloaded = await this.downloadMedia(item, msg.msgId || String(Date.now()), this.pollAbort?.signal);
         attachments.push({
           kind: item.kind === "image" ? "image" : "file",
           filePath: downloaded.filePath,
@@ -563,35 +600,52 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
   async #sendInterceptText(toUserId: string, contextToken: string, text: string): Promise<void> {
     if (!this.client || !this.status.enabled) return;
-    const result = await this.client.sendText(toUserId, text, contextToken);
-    if (!result.ok) {
-      console.warn(LOG_PREFIX, "入站媒体拦截回复发送失败:", result.error);
+    try {
+      const result = await this.client.sendText(toUserId, text, contextToken, this.pollAbort ? { signal: this.pollAbort.signal } : undefined);
+      if (!result.ok) console.warn(LOG_PREFIX, "入站媒体拦截回复发送失败:", result.error);
+    } catch (error) {
+      console.warn(LOG_PREFIX, "入站媒体拦截回复发送失败:", error instanceof Error ? error.message : String(error));
+      if (error instanceof SessionExpiredError) {
+        this.client = null;
+        this.isLoggedIn = false;
+        this.clearRecipientState();
+        this.pollAbort?.abort();
+        this.status = { enabled: true, phase: "error", message: "会话已过期，请重新扫码登录" };
+        this.onStatusChanged?.();
+      }
     }
   }
 }
 
-function buildImageItem(media: CDNMedia): SendMessageItem {
+type UploadedMedia = CDNMedia & { rawSize?: number; ciphertextSize?: number };
+function cdnReference(media: CDNMedia): CDNMedia {
+  return { encrypt_query_param: media.encrypt_query_param, aes_key: media.aes_key, encrypt_type: media.encrypt_type };
+}
+
+function buildImageItem(media: UploadedMedia): SendMessageItem {
   return {
     type: 2,
-    image_item: { media },
+    image_item: { media: cdnReference(media), ...(media.ciphertextSize !== undefined ? { mid_size: media.ciphertextSize } : {}) },
   };
 }
 
-function buildFileItem(media: CDNMedia, fileName: string): SendMessageItem {
+function buildFileItem(media: UploadedMedia, fileName: string): SendMessageItem {
   return {
     type: 4,
     file_item: {
       file_name: fileName,
-      media,
+      media: cdnReference(media),
+      ...(media.rawSize !== undefined ? { len: String(media.rawSize) } : {}),
     },
   };
 }
 
-function buildVideoItem(media: CDNMedia): SendMessageItem {
+function buildVideoItem(media: UploadedMedia): SendMessageItem {
   return {
     type: 5,
     video_item: {
-      media,
+      media: cdnReference(media),
+      ...(media.ciphertextSize !== undefined ? { video_size: media.ciphertextSize } : {}),
     },
   };
 }
@@ -600,7 +654,7 @@ function buildVoiceItem(media: CDNMedia, playtime: number, sampleRate: number, e
   return {
     type: 3,
     voice_item: {
-      media,
+      media: cdnReference(media),
       encode_type: encodeType,
       sample_rate: sampleRate,
       playtime,
@@ -622,9 +676,11 @@ interface DownloadedInboundMedia {
 async function downloadInboundWechatMedia(
   item: InboundMediaDescriptor,
   messageId: string,
+  signal?: AbortSignal,
 ): Promise<DownloadedInboundMedia> {
   if (!item.media) throw new Error("缺少媒体下载参数");
-  const data = await downloadWechatMedia(item.media);
+  const data = await downloadWechatMedia(item.media, { signal });
+  signal?.throwIfAborted();
   const ext = pickInboundExtension(item, data);
   const cacheDir = path.join(app.getPath("userData"), "channels", "cache");
   await fs.mkdir(cacheDir, { recursive: true });
@@ -636,9 +692,11 @@ async function downloadInboundWechatMedia(
 async function saveInboundWechatMedia(
   item: InboundMediaDescriptor,
   messageId: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!item.media) throw new Error("缺少媒体下载参数");
-  const data = await downloadWechatMedia(item.media);
+  const data = await downloadWechatMedia(item.media, { signal });
+  signal?.throwIfAborted();
   const ext = pickInboundExtension(item, data);
   const inboxDir = path.join(app.getPath("desktop"), "Cyrene 收件箱");
   await fs.mkdir(inboxDir, { recursive: true });
@@ -650,6 +708,7 @@ async function saveInboundWechatMedia(
 async function transcribeInboundWechatVoice(
   item: InboundMediaDescriptor,
   _messageId: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!item.media) throw new Error("缺少语音下载参数");
   const cfg = getAsrConfig();
@@ -659,7 +718,8 @@ async function transcribeInboundWechatVoice(
     throw new Error("ASR 未配置");
   }
 
-  const source = await downloadWechatMedia(item.media);
+  const source = await downloadWechatMedia(item.media, { signal });
+  signal?.throwIfAborted();
   const sampleRate = item.sampleRate ?? 16000;
   if (sampleRate !== 16000) {
     throw new Error(`暂不支持 ${sampleRate}Hz 微信语音识别`);

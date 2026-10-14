@@ -383,7 +383,7 @@ export class ChannelDispatcher {
   }
 
   private appendOutgoingAuditLog(msg: IncomingMessage, text: string, outgoing: OutgoingMessage): void {
-    try { appendLog({ dir: "outgoing", channel: msg.channel, senderId: msg.senderId, senderName: msg.senderName, chatId: msg.chatId, text, hasAttachments: outgoing.parts.some((part) => part.kind === "audio") }); }
+    try { appendLog({ dir: "outgoing", channel: msg.channel, senderId: msg.senderId, senderName: msg.senderName, chatId: msg.chatId, text, hasAttachments: outgoing.parts.some((part) => part.kind !== "text" && part.kind !== "card") }); }
     catch (err) { console.warn(LOG, "appendLog (outgoing) 失败:", err); }
   }
 

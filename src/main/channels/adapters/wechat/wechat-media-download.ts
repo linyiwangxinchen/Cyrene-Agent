@@ -1,5 +1,6 @@
 import { createDecipheriv } from "node:crypto";
 import type { CDNMedia } from "./ilink-protocol-client";
+import { readWechatMediaResponse, withWechatMediaTimeout } from "./wechat-media-transfer";
 
 const CDN_BASE_URL = "https://novac2c.cdn.weixin.qq.com/c2c";
 
@@ -7,6 +8,8 @@ type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
 interface DownloadOptions {
   fetchImpl?: FetchLike;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export function decodeWechatAesKey(value: string): Buffer {
@@ -38,16 +41,19 @@ export async function downloadWechatMedia(
   media: CDNMedia,
   options: DownloadOptions = {},
 ): Promise<Buffer> {
-  const encryptQueryParam = media.encrypt_query_param?.trim();
-  if (!encryptQueryParam) throw new Error("missing WeChat encrypted query param");
-  const key = decodeWechatAesKey(media.aes_key);
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const url = `${CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`;
-  const response = await fetchImpl(url);
-  if (!response.ok) {
-    const message = await response.text().catch(() => "");
-    throw new Error(`CDN download failed: HTTP ${response.status} ${message.slice(0, 120)}`.trim());
-  }
-  const encrypted = Buffer.from(await response.arrayBuffer());
-  return media.encrypt_type === 0 ? encrypted : decryptAesEcb(encrypted, key);
+  return withWechatMediaTimeout(async (signal) => {
+    const encryptQueryParam = media.encrypt_query_param?.trim();
+    if (!encryptQueryParam && !media.full_url) throw new Error("missing WeChat media download URL");
+    const fetchImpl = options.fetchImpl ?? fetch;
+    const url = media.full_url || `${CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam!)}`;
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" || parsed.username || parsed.password || parsed.port || !(parsed.hostname.endsWith(".cdn.weixin.qq.com") || parsed.hostname === "cdn.weixin.qq.com")) throw new Error("不受支持的微信媒体下载地址");
+    const response = await fetchImpl(url, { signal, redirect: "error" });
+    if (!response.ok) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new Error(`CDN download failed: HTTP ${response.status}`);
+    }
+    const encrypted = await readWechatMediaResponse(response, signal);
+    return media.encrypt_type === 0 ? encrypted : decryptAesEcb(encrypted, decodeWechatAesKey(media.aes_key));
+  }, options);
 }

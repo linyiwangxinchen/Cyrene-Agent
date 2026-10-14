@@ -32,7 +32,13 @@ describe("wechat inbound media classification", () => {
   it("recognizes save intent phrases", () => {
     expect(isWechatSaveIntent("保存到桌面")).toBe(true);
     expect(isWechatSaveIntent("帮我代收一下")).toBe(true);
+    expect(isWechatSaveIntent("保存到服务器")).toBe(true);
+    expect(isWechatSaveIntent("保存到收件箱")).toBe(true);
     expect(isWechatSaveIntent("你好呀")).toBe(false);
+  });
+
+  it("accepts the separate image AES key and a full media URL", () => {
+    expect(describeInboundWechatMedia([{ type: 2, image_item: { aeskey: "00112233445566778899aabbccddeeff", media: { full_url: "https://novac2c.cdn.weixin.qq.com/c2c/image", aes_key: "stale" } } }])[0].media).toMatchObject({ aes_key: "00112233445566778899aabbccddeeff", full_url: "https://novac2c.cdn.weixin.qq.com/c2c/image" });
   });
 
   it("uses partner when preferred name is blank", () => {

@@ -17,6 +17,33 @@ function message(parts: OutgoingMessage["parts"]): OutgoingMessage {
 }
 
 describe("ILinkBotAdapter.send", () => {
+  it("does not report success when text succeeded but the file was rejected", async () => {
+    const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
+    (adapter as any).client = { sendText: vi.fn(async () => ({ ok: true })), sendMessage: vi.fn(async () => ({ ok: false, error: "file rejected" })) };
+    (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
+    (adapter as any).uploadMedia = vi.fn(async () => ({ encrypt_query_param: "file", aes_key: "key", rawSize: 5, ciphertextSize: 16 }));
+    await expect(adapter.send(message([{ kind: "text", text: "报告" }, { kind: "file", filePath: "report.txt" }]))).resolves.toEqual({ ok: false, error: "file rejected" });
+  });
+  it("returns a useful upload failure and rejects empty outgoing messages", async () => {
+    const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
+    (adapter as any).client = { sendMessage: vi.fn() };
+    (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
+    (adapter as any).uploadMedia = vi.fn(async () => { throw new Error("CDN offline"); });
+    await expect(adapter.send(message([{ kind: "file", filePath: "report.txt" }]))).resolves.toEqual({ ok: false, error: "CDN offline" });
+    await expect(adapter.send(message([]))).resolves.toMatchObject({ ok: false });
+  });
+  it("uses the latest context token after an upload completes", async () => {
+    const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
+    const sendMessage = vi.fn(async () => ({ ok: true }));
+    (adapter as any).client = { sendMessage };
+    (adapter as any).replyContextByTarget.set("wx-user-1", "old");
+    (adapter as any).uploadMedia = vi.fn(async () => { (adapter as any).replyContextByTarget.set("wx-user-1", "new"); return { encrypt_query_param: "file", aes_key: "key", rawSize: 5, ciphertextSize: 16 }; });
+    await adapter.send(message([{ kind: "file", filePath: "report.txt" }]));
+    expect(sendMessage.mock.calls[0][2]).toBe("new");
+  });
   it("does not send media that finished uploading after disable", async () => {
     const adapter = new ILinkBotAdapter();
     adapter.status = { enabled: true, phase: "running" };
@@ -41,7 +68,7 @@ describe("ILinkBotAdapter.send", () => {
     const result = await adapter.send(message([{ kind: "text", text: "你好" }]));
 
     expect(result).toEqual({ ok: true });
-    expect(sendText).toHaveBeenCalledWith("wx-user-1", "你好", "ctx-1");
+    expect(sendText).toHaveBeenCalledWith("wx-user-1", "你好", "ctx-1", undefined);
   });
 
   it("sends multiple text parts as separate messages", async () => {
@@ -58,9 +85,9 @@ describe("ILinkBotAdapter.send", () => {
     ]));
 
     expect(result).toEqual({ ok: true });
-    expect(sendText).toHaveBeenNthCalledWith(1, "wx-user-1", "第一句。", "ctx-1");
-    expect(sendText).toHaveBeenNthCalledWith(2, "wx-user-1", "第二句？", "ctx-1");
-    expect(sendText).toHaveBeenNthCalledWith(3, "wx-user-1", "第三句！", "ctx-1");
+    expect(sendText).toHaveBeenNthCalledWith(1, "wx-user-1", "第一句。", "ctx-1", undefined);
+    expect(sendText).toHaveBeenNthCalledWith(2, "wx-user-1", "第二句？", "ctx-1", undefined);
+    expect(sendText).toHaveBeenNthCalledWith(3, "wx-user-1", "第三句！", "ctx-1", undefined);
   });
 
   it("uploads image and sticker parts as image items in one sendmessage payload", async () => {
@@ -84,10 +111,10 @@ describe("ILinkBotAdapter.send", () => {
     ]));
 
     expect(result).toEqual({ ok: true });
-    expect(sendText).toHaveBeenCalledWith("wx-user-1", "看图", "ctx-1");
+    expect(sendText).toHaveBeenCalledWith("wx-user-1", "看图", "ctx-1", undefined);
     expect(uploadMedia).toHaveBeenCalledTimes(2);
-    expect(uploadMedia).toHaveBeenNthCalledWith(1, expect.anything(), "wx-user-1", "C:/tmp/pic.png", 1);
-    expect(uploadMedia).toHaveBeenNthCalledWith(2, expect.anything(), "wx-user-1", "C:/tmp/sticker.png", 1);
+    expect(uploadMedia).toHaveBeenNthCalledWith(1, expect.anything(), "wx-user-1", "C:/tmp/pic.png", 1, undefined);
+    expect(uploadMedia).toHaveBeenNthCalledWith(2, expect.anything(), "wx-user-1", "C:/tmp/sticker.png", 1, undefined);
     expect(sendMessage).toHaveBeenNthCalledWith(1, "wx-user-1", [
       {
         type: 2,
@@ -99,7 +126,7 @@ describe("ILinkBotAdapter.send", () => {
           },
         },
       },
-    ], "ctx-1");
+    ], "ctx-1", undefined);
     expect(sendMessage).toHaveBeenNthCalledWith(2, "wx-user-1", [
       {
         type: 2,
@@ -111,7 +138,7 @@ describe("ILinkBotAdapter.send", () => {
           },
         },
       },
-    ], "ctx-1");
+    ], "ctx-1", undefined);
   });
 
   it("uploads file and video parts as file and video items", async () => {
@@ -133,8 +160,8 @@ describe("ILinkBotAdapter.send", () => {
     ]));
 
     expect(result).toEqual({ ok: true });
-    expect(uploadMedia).toHaveBeenNthCalledWith(1, expect.anything(), "wx-user-1", "C:/tmp/report.pdf", 3);
-    expect(uploadMedia).toHaveBeenNthCalledWith(2, expect.anything(), "wx-user-1", "C:/tmp/demo.mp4", 2);
+    expect(uploadMedia).toHaveBeenNthCalledWith(1, expect.anything(), "wx-user-1", "C:/tmp/report.pdf", 3, undefined);
+    expect(uploadMedia).toHaveBeenNthCalledWith(2, expect.anything(), "wx-user-1", "C:/tmp/demo.mp4", 2, undefined);
     expect(sendMessage).toHaveBeenNthCalledWith(1, "wx-user-1", [
       {
         type: 4,
@@ -147,7 +174,7 @@ describe("ILinkBotAdapter.send", () => {
           },
         },
       },
-    ], "ctx-1");
+    ], "ctx-1", undefined);
     expect(sendMessage).toHaveBeenNthCalledWith(2, "wx-user-1", [
       {
         type: 5,
@@ -159,7 +186,7 @@ describe("ILinkBotAdapter.send", () => {
           },
         },
       },
-    ], "ctx-1");
+    ], "ctx-1", undefined);
   });
 
   it("encodes and uploads audio parts as voice items", async () => {
@@ -189,9 +216,9 @@ describe("ILinkBotAdapter.send", () => {
     ]));
 
     expect(result).toEqual({ ok: true });
-    expect(sendText).toHaveBeenCalledWith("wx-user-1", "语音来了", "ctx-1");
+    expect(sendText).toHaveBeenCalledWith("wx-user-1", "语音来了", "ctx-1", undefined);
     expect(encodeVoice).toHaveBeenCalledWith(expect.any(Buffer), { format: "wav" });
-    expect(uploadMediaData).toHaveBeenCalledWith(expect.anything(), "wx-user-1", Buffer.from("silk-data"), 4);
+    expect(uploadMediaData).toHaveBeenCalledWith(expect.anything(), "wx-user-1", Buffer.from("silk-data"), 4, undefined);
     expect(sendMessage).toHaveBeenCalledWith("wx-user-1", [
       {
         type: 3,
@@ -206,7 +233,7 @@ describe("ILinkBotAdapter.send", () => {
           playtime: 1200,
         },
       },
-    ], "ctx-1");
+    ], "ctx-1", undefined);
   });
 
   it("keeps the text reply successful when optional audio sending is rejected", async () => {
@@ -236,12 +263,23 @@ describe("ILinkBotAdapter.send", () => {
     ]));
 
     expect(result).toEqual({ ok: true });
-    expect(sendText).toHaveBeenCalledWith("wx-user-1", "先把文字发出去", "ctx-1");
+    expect(sendText).toHaveBeenCalledWith("wx-user-1", "先把文字发出去", "ctx-1", undefined);
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });
 
 describe("ILinkBotAdapter inbound media", () => {
+  it("uses a transcript supplied by WeChat without requiring local ASR", async () => {
+    const adapter = new ILinkBotAdapter();
+    adapter.status = { enabled: true, phase: "running" };
+    (adapter as any).client = { sendText: vi.fn() };
+    (adapter as any).isAsrConfigured = vi.fn(() => false);
+    (adapter as any).transcribeVoice = vi.fn();
+    adapter.onMessage = vi.fn(async () => null);
+    await (adapter as any).dispatchInbound({ msgId: "voice-transcript", fromUserId: "user", content: "", contextToken: "ctx", items: [{ type: 3, voice_item: { text: "微信识别的文字" } }] });
+    expect(adapter.onMessage).toHaveBeenCalledWith(expect.objectContaining({ text: "微信识别的文字" }));
+    expect((adapter as any).transcribeVoice).not.toHaveBeenCalled();
+  });
   it("downloads supported image media into incoming attachments", async () => {
     const adapter = new ILinkBotAdapter();
     adapter.status = { enabled: true, phase: "running" };
@@ -278,6 +316,7 @@ describe("ILinkBotAdapter inbound media", () => {
     expect((adapter as any).downloadMedia).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "image" }),
       "msg-1",
+      undefined,
     );
     expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
       channel: "wechat",
@@ -333,6 +372,7 @@ describe("ILinkBotAdapter inbound media", () => {
       "wx-user-1",
       expect.stringContaining("微信附件下载失败"),
       "ctx-1",
+      undefined,
     );
     expect(onMessage).not.toHaveBeenCalled();
   });
@@ -382,11 +422,13 @@ describe("ILinkBotAdapter inbound media", () => {
     expect((adapter as any).saveInboundMedia).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "file", fileName: "archive.zip" }),
       "msg-file-1",
+      undefined,
     );
     expect(sendText).toHaveBeenLastCalledWith(
       "wx-user-1",
       "收好啦，伙伴。人家已经帮你放到桌面的“Cyrene 收件箱”里了：C:/Users/testuser/Desktop/Cyrene 收件箱/archive.zip",
       "ctx-text",
+      undefined,
     );
     expect(onMessage).not.toHaveBeenCalled();
   });
@@ -438,15 +480,18 @@ describe("ILinkBotAdapter inbound media", () => {
       "wx-user-1",
       "好呀，伙伴，尽管把文件发过来吧。我会帮你放到桌面的“Cyrene 收件箱”里哦~~",
       "ctx-text",
+      undefined,
     );
     expect((adapter as any).saveInboundMedia).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "video", fileName: "movie.mp4" }),
       "msg-video-1",
+      undefined,
     );
     expect(sendText).toHaveBeenLastCalledWith(
       "wx-user-1",
       "收好啦，伙伴。人家已经帮你放到桌面的“Cyrene 收件箱”里了：C:/Users/testuser/Desktop/Cyrene 收件箱/movie.mp4",
       "ctx-video",
+      undefined,
     );
     expect(onMessage).not.toHaveBeenCalled();
   });
@@ -497,6 +542,7 @@ describe("ILinkBotAdapter inbound media", () => {
     expect((adapter as any).saveInboundMedia).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "file", fileName: "report.pdf" }),
       "msg-file-2",
+      undefined,
     );
     expect((adapter as any).downloadMedia).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
@@ -538,6 +584,7 @@ describe("ILinkBotAdapter inbound media", () => {
     expect((adapter as any).transcribeVoice).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "voice", fileName: "微信语音" }),
       "msg-voice-1",
+      undefined,
     );
     expect(sendText).not.toHaveBeenCalled();
     expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
@@ -587,6 +634,7 @@ describe("ILinkBotAdapter inbound media", () => {
       "wx-user-1",
       "伙伴，这条语音人家暂时没听清楚：ASR timeout。可以换成文字再发我一次哦~~",
       "ctx-voice",
+      undefined,
     );
     expect(onMessage).not.toHaveBeenCalled();
   });

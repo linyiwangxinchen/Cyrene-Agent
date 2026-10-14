@@ -9,12 +9,14 @@ export interface InboundWechatItem {
     file_name?: unknown;
     name?: unknown;
     media?: unknown;
+    aeskey?: unknown;
   };
   voice_item?: {
     file_name?: unknown;
     name?: unknown;
     media?: unknown;
     sample_rate?: unknown;
+    text?: unknown;
   };
   file_item?: {
     file_name?: unknown;
@@ -37,6 +39,7 @@ export interface InboundMediaDescriptor {
   analyzable: boolean;
   media?: CDNMedia;
   sampleRate?: number;
+  transcript?: string;
 }
 
 const ANALYZABLE_FILE_EXTENSIONS = new Set([
@@ -74,7 +77,7 @@ export function isAnalyzableWechatFile(fileName: string): boolean {
 export function isWechatSaveIntent(text: string): boolean {
   const normalized = text.trim().replace(/\s+/g, "");
   if (!normalized) return false;
-  return /保存到桌面|存到桌面|放到桌面|代收|帮我收|帮我保存|保存文件|收一下/.test(normalized);
+  return /保存到桌面|存到桌面|放到桌面|保存到服务器|存到服务器|保存到收件箱|保存附件|代收|帮我收|帮我保存|保存文件|收一下/.test(normalized);
 }
 
 export function describeInboundWechatMedia(items: InboundWechatItem[]): InboundMediaDescriptor[] {
@@ -87,7 +90,7 @@ export function describeInboundWechatMedia(items: InboundWechatItem[]): InboundM
         fileName,
         extension: getFileExtension(fileName),
         analyzable: true,
-        media: asCdnMedia(item.image_item.media),
+        media: asCdnMedia(item.image_item.media, item.image_item.aeskey),
       });
     } else if (item.type === 3 && item.voice_item) {
       const fileName = asFileName(item.voice_item.file_name ?? item.voice_item.name, "微信语音");
@@ -98,6 +101,7 @@ export function describeInboundWechatMedia(items: InboundWechatItem[]): InboundM
         analyzable: false,
         media: asCdnMedia(item.voice_item.media),
         sampleRate: typeof item.voice_item.sample_rate === "number" ? item.voice_item.sample_rate : undefined,
+        ...(typeof item.voice_item.text === "string" && item.voice_item.text.trim() ? { transcript: item.voice_item.text.trim() } : {}),
       });
     } else if (item.type === 4 && item.file_item) {
       const fileName = asFileName(item.file_item.file_name ?? item.file_item.name, "微信文件");
@@ -122,13 +126,15 @@ export function describeInboundWechatMedia(items: InboundWechatItem[]): InboundM
   return media;
 }
 
-function asCdnMedia(value: unknown): CDNMedia | undefined {
+function asCdnMedia(value: unknown, imageAesKey?: unknown): CDNMedia | undefined {
   if (!value || typeof value !== "object") return undefined;
   const media = value as Partial<CDNMedia>;
-  if (typeof media.encrypt_query_param !== "string" || typeof media.aes_key !== "string") return undefined;
+  const aesKey = typeof imageAesKey === "string" && imageAesKey ? imageAesKey : media.aes_key ?? (media.encrypt_type === 0 ? "" : undefined);
+  if ((typeof media.encrypt_query_param !== "string" || !media.encrypt_query_param) && (typeof media.full_url !== "string" || !media.full_url)) return undefined;
+  if (typeof aesKey !== "string") return undefined;
   return {
-    encrypt_query_param: media.encrypt_query_param,
-    aes_key: media.aes_key,
+    encrypt_query_param: media.encrypt_query_param ?? "",
+    aes_key: aesKey,
     encrypt_type: media.encrypt_type,
     full_url: media.full_url,
   };
@@ -143,12 +149,14 @@ export function buildWechatVideoPrompt(username: string): string {
 }
 
 export function buildWechatSaveIntentPrompt(username: string): string {
-  return `好呀，${username}，尽管把文件发过来吧。我会帮你放到桌面的“Cyrene 收件箱”里哦~~`;
+  return `好呀，${username}，尽管把文件发过来吧。我会帮你放到${wechatInboxLocation()}的“Cyrene 收件箱”里哦~~`;
 }
 
 export function buildWechatSaveSuccessPrompt(username: string, filePath: string): string {
-  return `收好啦，${username}。人家已经帮你放到桌面的“Cyrene 收件箱”里了：${filePath}`;
+  return `收好啦，${username}。人家已经帮你放到${wechatInboxLocation()}的“Cyrene 收件箱”里了：${filePath}`;
 }
+
+function wechatInboxLocation(): string { return process.env.CYRENE_HEADLESS === "1" ? "服务器" : "桌面"; }
 
 export function buildWechatAsrMissingPrompt(username: string): string {
   return `${username}，人家现在还没有配置语音识别，暂时听不懂这条语音。可以发文字给我哦~~`;
