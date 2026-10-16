@@ -4,7 +4,7 @@
 
 ## 修改清单和提交主题
 
-最近一次上游同步：[2026-10-16 集成与验收记录](upstream-integration-20261016.md)。集成分支为 `integrate/upstream-linux-web-20261016`，从共同基点 `a4bd4419` 合入上游 `11c235de`，保留 Linux/Web 适配，补齐后台命令退出收尾并验证实际进程终止及重启后的任务历史。此前的 [2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯压缩器适配和 SQLite 迁移。
+最近一次上游同步：[2026-10-17 集成与验收记录](upstream-integration-20261017.md)。集成分支为 `integrate/upstream-linux-web-20261017`，从共同基点 `11c235de` 合入上游 `8d905897` 的 22 个提交；修复 README 自动生成区冲突，并限制贡献者工作流只在上游运行，减少 fork 后续同步冲突。此前的 [2026-10-16 集成记录](upstream-integration-20261016.md)、[2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯后台任务收尾、压缩器适配和 SQLite 迁移。
 
 [linux-web-changes.md](linux-web-changes.md) 给出每一个新增/修改文件的作用。提交按 10 个主题组织，commit body 也逐文件描述用途：
 
@@ -68,12 +68,17 @@ git push origin integrate/upstream-linux-web-YYYYMMDD
 
 ### 为什么 GitHub 不能自动合并
 
-GitHub 的“无法自动合并”来自两个分支在共同基点之后同时修改同一代码行，并不是 Linux 新增文件本身造成的：
+GitHub 的“无法自动合并”来自两个分支在共同基点之后对同一区域作出了不能自动协调的修改，并不是 ahead/behind 数字或 Linux 新增文件本身造成的。
 
-- 本仓库在 `a20337d8` 之后新增了 SQLite/Web 兼容改动；上游随后提交了 18 个新提交。
-- `src/main/agui-bridge.ts` 同时调整了 Chat 运行记录创建条件；两边语义相同但注释和表达式不同，Git 无法安全选边。
-- `src/renderer/react/features/chat/hooks/useSessionMessages.ts` 两边都调整了同批 React 状态追加的去重实现，只有变量名/注释差异，也会被 Git 标为内容冲突。
-- 上游比较结果显示删除了本仓库新增的 `deploy/`、`src/server/`、`src/renderer/web/` 和部署文档；这些路径在共同基点上是本仓库后来新增的，正常三方合并应保留，不能用“以 upstream 为准”整体覆盖。
+2026-10-17 的唯一文本冲突在 `README.md` 的贡献者头像自动维护区：上游和 fork 都运行相同工作流，但 GitHub 的贡献者统计针对各自仓库，生成的账号、顺序和表格分行不同。两边反复提交同一自动生成区域，就会反复冲突。这次只采用该区域的上游结果，保留 Linux/Web 介绍与文档入口，并将工作流的 job 限制到上游仓库，fork 后续不再回写这段内容。
+
+此前 2026-10-09 的冲突发生在 `agui-bridge.ts` 与 `useSessionMessages.ts` 的相同业务代码行，需要人工协调共享核心逻辑。目录末端之间的 `git diff master..upstream/master` 还会把 fork 新增的 Linux 文件显示为删除，但这不是上游实际删除这些文件；应根据共同基点和三方合并判断，禁止整文件或整目录采用 upstream 覆盖所有适配。
+
+### 后续能否在 GitHub 直接同步
+
+可以在没有新冲突时使用 **Sync fork → Update branch**。本次已消除已知的 README 自动生成冲突来源，后续该区域仅跟随上游。GitHub 仍不会自动解决未来同一业务代码的冲突；遇到冲突时应继续使用集成分支并完成 Windows/Web 验收。
+
+**Sync fork** 是同步上游分支；PR 的 **Enable auto-merge** 是等待审查和必需检查满足后合并 PR，不能替代冲突解决。本次没有配置定时无人值守同步，也没有绕过检查自动选择某一侧代码。参见 [GitHub 同步 fork 文档](https://docs.github.com/en/pull-requests/how-tos/work-with-forks/syncing-a-fork)及 [PR 自动合并文档](https://docs.github.com/en/pull-requests/how-tos/merge-and-close-pull-requests/automatically-merging-a-pull-request)。
 
 ### 便于后续同步的结构约定
 
