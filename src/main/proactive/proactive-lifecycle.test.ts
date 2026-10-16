@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   powerMonitor: null as unknown as EventEmitter & { getSystemIdleTime: () => number },
   route: { available: false, reason: "channel_offline" } as any,
   sendChannel: vi.fn(), readProjection: vi.fn(), listSessions: vi.fn(),
+  modelSettings: { apiKey: "fixture", provider: "fixture", baseUrl: "https://example.test/v1", model: "fixture" } as any,
 }));
 vi.mock("electron", () => ({ get powerMonitor() { return mocks.powerMonitor; } }));
 vi.mock("../chats/chats-store", () => ({
@@ -20,7 +21,13 @@ vi.mock("../channels/manager", () => ({ channelManager: {} }));
 vi.mock("../channels/proactive-delivery", () => ({ getProactiveChannelAvailability: () => mocks.route, sendProactiveChannelMessage: mocks.sendChannel }));
 vi.mock("../orchestrator", () => ({ buildAlwaysOnContext: async () => "", buildMemoryInjection: async () => "" }));
 vi.mock("../prompts/prompt-loader", () => ({ loadPromptFile: () => "昔涟的人格设定" }));
-vi.mock("../settings/model-settings", () => ({ loadModelSettings: () => ({ apiKey: "fixture", model: "fixture" }) }));
+vi.mock("../settings/model-settings", () => ({
+  loadModelSettings: () => mocks.modelSettings,
+  resolveModelSettingsProfile: (settings: any) => {
+    const profile = settings.modelProfiles?.find((item: any) => item.id === settings.defaultModelProfileId) ?? settings.modelProfiles?.[0];
+    return profile ? { ...settings, ...profile } : settings;
+  },
+}));
 vi.mock("../settings-store", () => ({ loadUserProfile: () => ({ timezone: "Asia/Shanghai" }) }));
 vi.mock("./proactive-state-store", () => ({ loadProactiveState: mocks.loadState, saveProactiveState: mocks.saveState }));
 vi.mock("./proactive-model", () => ({ runProactiveModel: mocks.runModel }));
@@ -36,6 +43,7 @@ beforeEach(() => {
   mocks.route = { available: false, reason: "channel_offline" };
   mocks.listSessions.mockResolvedValue([]);
   mocks.readProjection.mockResolvedValue({ messages: [] });
+  mocks.modelSettings = { apiKey: "fixture", provider: "fixture", baseUrl: "https://example.test/v1", model: "fixture" };
 });
 afterEach(() => { vi.useRealTimers(); });
 
@@ -73,6 +81,23 @@ describe("proactive lifecycle on a headless host", () => {
     await ctx.lifecycle.getProactiveChatService()!.evaluateCandidate(ctx.candidate);
     expect(ctx.appendAssistant).not.toHaveBeenCalled();
     expect(mocks.runModel).not.toHaveBeenCalled();
+  });
+
+  it("uses the configured default model profile when the compatibility mirror is empty", async () => {
+    vi.setSystemTime(Date.UTC(2026, 9, 14, 6)); // Shanghai 14:00
+    mocks.modelSettings = {
+      apiKey: "",
+      provider: "旧顶层空壳",
+      baseUrl: "",
+      model: "",
+      defaultModelProfileId: "saved-profile",
+      modelProfiles: [{ id: "saved-profile", provider: "ChatGPT（OpenAI）", baseUrl: "https://relay.example/v1", model: "gpt-6.1-sol", apiKey: "profile-key", explicitTransport: "responses" }],
+    };
+    const ctx = setup();
+    await ctx.lifecycle.getProactiveChatService()!.evaluateCandidate(ctx.candidate);
+    expect(mocks.runModel).toHaveBeenCalledWith(expect.objectContaining({
+      settings: expect.objectContaining({ provider: "ChatGPT（OpenAI）", baseUrl: "https://relay.example/v1", model: "gpt-6.1-sol", apiKey: "profile-key", explicitTransport: "responses" }),
+    }));
   });
 
   it("uses the bound WeChat conversation and journals actual proactive delivery there", async () => {

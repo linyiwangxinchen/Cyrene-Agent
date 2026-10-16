@@ -14,7 +14,7 @@ import { resolveChatContextTimezone } from "../chat-time-context";
 import { buildAlwaysOnContext, buildMemoryInjection } from "../orchestrator";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import type { GeneralSettings } from "../settings/general-settings";
-import { loadModelSettings } from "../settings/model-settings";
+import { loadModelSettings, resolveModelSettingsProfile } from "../settings/model-settings";
 import { loadUserProfile } from "../settings-store";
 import { createProactiveChatService } from "./proactive-service";
 import type {
@@ -295,7 +295,13 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       getSnapshot: getProactiveRuntimeSnapshot,
       buildMessages: async (candidate) => buildProactiveAgentMessages(candidate),
       runModel: async (messages) => {
-        const settings = loadModelSettings();
+        // The model catalog is the source of truth for Web and desktop alike.
+        // The top-level fields are only a compatibility mirror and may be
+        // empty when the user has configured a saved default profile (this is
+        // especially common after migrating web-data.json to the shared core).
+        // Reading the raw settings here made normal chat work while proactive
+        // chat incorrectly reported `missing_api_key` and dropped the message.
+        const settings = resolveModelSettingsProfile(loadModelSettings());
         if (!settings.apiKey) return { kind: "error", reason: "missing_api_key" };
         return runProactiveModel({
           settings: {

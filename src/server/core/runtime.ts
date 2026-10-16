@@ -289,8 +289,13 @@ export async function startHeadlessCore() {
       fs.writeFileSync(markerPath, JSON.stringify(marker, null, 2));
     }
   }
-  scheduler.start(); proactive.initializeProactiveTrigger(); momentsService.startReactionScanner();
+  // Start the connector pollers before proactive evaluation.  The first
+  // proactive scan is delayed, but a slow iLink/Feishu startup used to race
+  // it and leave the trigger in a delivery-offline state until the next retry.
+  scheduler.start();
   await channels.start();
+  proactive.initializeProactiveTrigger();
+  momentsService.startReactionScanner();
   const mcpAbort = new AbortController();
   restoreMcp = (async () => {
     await initMcpManager({ signal: mcpAbort.signal });
