@@ -4,7 +4,7 @@
 
 ## 修改清单和提交主题
 
-最近一次上游同步：[2026-10-09 集成与验收记录](upstream-integration-20261009.md)。集成分支为 `integrate/upstream-linux-web-20261009`，从共同基点 `a20337d8` 合入上游 `9fcff7a3`，保留 Linux/Web 适配并修复服务端模型压缩器接口变化。此前的 [2026-10-08 集成记录](upstream-integration-20261008.md)仍用于追溯 SQLite 迁移。
+最近一次上游同步：[2026-10-16 集成与验收记录](upstream-integration-20261016.md)。集成分支为 `integrate/upstream-linux-web-20261016`，从共同基点 `a4bd4419` 合入上游 `11c235de`，保留 Linux/Web 适配，补齐后台命令退出收尾并验证实际进程终止及重启后的任务历史。此前的 [2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯压缩器适配和 SQLite 迁移。
 
 [linux-web-changes.md](linux-web-changes.md) 给出每一个新增/修改文件的作用。提交按 10 个主题组织，commit body 也逐文件描述用途：
 

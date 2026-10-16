@@ -369,6 +369,8 @@ echo "已回退到: $CYRENE_OLD_COMMIT"
 
 合入 2026-10-08 的上游更新后，会话、运行回执、子任务和模型用量统一保存在数据目录的 `cyrene.sqlite`，数据库读写由独立 worker 执行。首次启动会只读导入旧会话/轨迹、子任务及 `token-usage.json`；旧文件保留，新版本后续写入 SQLite。
 
+2026-10-16 更新还会自动执行迁移 8（记忆待处理轮次）和 9（后台命令历史）。正常 `systemctl stop cyrene-web` 会先终止后台命令并保存最终状态，再关闭数据库；重启不会自动重新执行这些命令。强制结束或断电后的历史可能标记为 `app_restarted_execution_unknown`，应先检查实际结果。需要回退这次更新时，同样恢复升级前的完整数据备份。
+
 升级前停止服务并备份**完整数据目录**。运行中的数据库可能还有 `cyrene.sqlite-wal` 和 `cyrene.sqlite-shm`，不能只复制主数据库文件作为一致备份。若必须在线备份，应使用 SQLite 备份机制并同时处理其他业务文件。回退到迁移前版本时恢复升级前的整份数据备份；旧 JSON 文件不会包含新版本运行后的新增会话。
 
 运行包必须带有 `dist/headless/conversation-database-worker.js`。仅传 `core.cjs` 会使数据库客户端尝试源码编译回退；精简生产包没有 TypeScript 源码和 esbuild，无法承担该回退。`create-web-runtime.mjs` 会校验数据库 worker 是否存在，避免导出不完整运行包。
