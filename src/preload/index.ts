@@ -710,15 +710,6 @@ const live2dSpeechApi = {
 };
 contextBridge.exposeInMainWorld("live2dSpeech", live2dSpeechApi);
 
-const live2dActionApi = {
-  onPlayAction: (callback: (payload: import("../shared/live2d-actions").Live2DTarget) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: import("../shared/live2d-actions").Live2DTarget) => callback(payload);
-    ipcRenderer.on(IPC.LIVE2D_PLAY_ACTION, listener);
-    return () => ipcRenderer.removeListener(IPC.LIVE2D_PLAY_ACTION, listener);
-  },
-};
-contextBridge.exposeInMainWorld("live2dAction", live2dActionApi);
-
 const live2dDiagnosticsApi = {
   getMain: () => ipcRenderer.invoke(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS),
   getIpcListenerCounts: () => getLive2DIpcListenerCounts(ipcRenderer),

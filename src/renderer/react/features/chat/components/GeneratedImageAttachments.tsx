@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { WorkspacePreviewContext } from "./WorkspacePreview";
+import { useContext, useState } from "react";
 import { Dialog } from "radix-ui";
 import { Download, X } from "lucide-react";
 import type { GeneratedImageAttachment } from "../../../../../shared/generated-image";
@@ -25,6 +26,7 @@ export function GeneratedImageAttachments({ attachments }: { attachments: Genera
 }
 
 function GeneratedImageCard({ attachment }: { attachment: GeneratedImageAttachment }) {
+  const openWorkspacePreview = useContext(WorkspacePreviewContext);
   const [open, setOpen] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -46,7 +48,13 @@ function GeneratedImageCard({ attachment }: { attachment: GeneratedImageAttachme
 
   return (
     <Attachment className="cy-generated-image-card">
-      <Dialog.Root open={open} onOpenChange={setOpen}>
+      <Dialog.Root
+        open={open}
+        onOpenChange={(next) => {
+          if (next && openWorkspacePreview) openWorkspacePreview({ kind: "image", attachment });
+          else setOpen(next);
+        }}
+      >
         <AttachmentMedia>
           <Dialog.Trigger asChild>
             <AttachmentTrigger aria-label={t("messageList.generatedImagePreview", { name: attachment.name })} disabled={imageUnavailable}>
@@ -68,24 +76,14 @@ function GeneratedImageCard({ attachment }: { attachment: GeneratedImageAttachme
           {saveError && <p className="cy-generated-image-card__error" role="alert">{saveError}</p>}
         </AttachmentContent>
 
-        <Dialog.Portal>
-          <Dialog.Overlay className="cy-generated-image-preview__overlay" />
-          <Dialog.Content className="cy-generated-image-preview" aria-describedby={undefined}>
-            <header>
-              <Dialog.Title>{attachment.name}</Dialog.Title>
-              <Dialog.Close className="cy-generated-image-preview__close" aria-label={t("common.close")}><X size={18} /></Dialog.Close>
-            </header>
-            {imageUnavailable
-              ? <div className="cy-generated-image-preview__missing" role="status">{t("messageList.generatedImageUnavailable")}</div>
-              : <AttachmentImage attachment={attachment} className="cy-generated-image-preview__image" onUnavailable={() => setImageUnavailable(true)} />}
-            <footer>
-              {saveError && <p className="cy-generated-image-card__error" role="alert">{saveError}</p>}
-              <button type="button" onClick={() => void saveOriginal()} disabled={saving}>
-                <Download size={15} />{t("messageList.generatedImageSave")}
-              </button>
-            </footer>
-          </Dialog.Content>
-        </Dialog.Portal>
+        <GeneratedImagePreviewPortal
+          attachment={attachment}
+          imageUnavailable={imageUnavailable}
+          onUnavailable={() => setImageUnavailable(true)}
+          saveError={saveError}
+          saving={saving}
+          onSave={() => void saveOriginal()}
+        />
       </Dialog.Root>
     </Attachment>
   );
@@ -95,4 +93,62 @@ function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+export function GeneratedImagePreviewPortal({
+  attachment,
+  imageUnavailable,
+  onUnavailable,
+  saveError,
+  saving,
+  onSave,
+  onCloseAutoFocus,
+}: {
+  attachment: GeneratedImageAttachment;
+  imageUnavailable: boolean;
+  onUnavailable: () => void;
+  saveError: string;
+  saving: boolean;
+  onSave: () => void;
+  onCloseAutoFocus?: (event: Event) => void;
+}) {
+  return (
+    <Dialog.Portal>
+      <Dialog.Overlay className="cy-generated-image-preview__overlay" />
+      <Dialog.Content
+        className="cy-generated-image-preview"
+        aria-describedby={undefined}
+        onCloseAutoFocus={onCloseAutoFocus}
+      >
+        <header>
+          <Dialog.Title>{attachment.name}</Dialog.Title>
+          <Dialog.Close className="cy-generated-image-preview__close" aria-label={t("common.close")}>
+            <X size={18} />
+          </Dialog.Close>
+        </header>
+        {imageUnavailable ? (
+          <div className="cy-generated-image-preview__missing" role="status">
+            {t("messageList.generatedImageUnavailable")}
+          </div>
+        ) : (
+          <AttachmentImage
+            attachment={attachment}
+            className="cy-generated-image-preview__image"
+            onUnavailable={onUnavailable}
+          />
+        )}
+        <footer>
+          {saveError && (
+            <p className="cy-generated-image-card__error" role="alert">
+              {saveError}
+            </p>
+          )}
+          <button type="button" onClick={onSave} disabled={saving}>
+            <Download size={15} />
+            {t("messageList.generatedImageSave")}
+          </button>
+        </footer>
+      </Dialog.Content>
+    </Dialog.Portal>
+  );
 }

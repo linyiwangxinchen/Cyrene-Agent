@@ -650,6 +650,8 @@
     "prevQuestion": "Previous question",
     "nextQuestion": "Next question",
     "customAnswerLabel": "Something else",
+    "deferAnswer": "Skip for now",
+    "deferredAnswerText": "The user chose to skip this question for now.",
     "customAnswerPlaceholder": "Type your answer…",
     "additionalContextLabel": "Anything else for Cyrene:",
     "additionalContextPlaceholder": "Optional. Add anything else that might help…",

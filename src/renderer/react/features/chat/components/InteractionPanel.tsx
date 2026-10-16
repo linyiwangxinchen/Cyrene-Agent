@@ -114,6 +114,9 @@ export function AskUserPanel({
   const current = questions[Math.min(page, questions.length - 1)];
   const currentDraft = drafts[current.id] ?? { source: null, optionIds: [], customText: "" };
   const canSubmit = isAskComplete(questions, drafts);
+  const canDeferAnswer = interaction.responseKind === "submission"
+    && interaction.cardMode === "semantic_clarification"
+    && current.allowCustomInput === true;
   const submit = () => {
     if (!canSubmit) return;
     if (interaction.responseKind === "submission") {
@@ -191,6 +194,18 @@ export function AskUserPanel({
             disabled={disabled}
             placeholder={current.freeTextPlaceholder ?? t("interaction.customAnswerPlaceholder")}
             onChange={(event) => setDrafts((values) => updateAskCustomText(values, current.id, event.target.value))}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229
+                || event.repeat || event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
+              event.preventDefault();
+              event.stopPropagation();
+              if (disabled || !isAskComplete([current], drafts)) return;
+              if (page < questions.length - 1) {
+                setPage((value) => value + 1);
+              } else {
+                submit();
+              }
+            }}
           />
         </label>
       )}
@@ -216,6 +231,17 @@ export function AskUserPanel({
         </label>
       )}
       <div className="cy-interaction-panel__actions">
+        {canDeferAnswer && (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => {
+              const deferredAnswerText = t("interaction.deferredAnswerText");
+              setDrafts((values) => updateAskCustomText(values, current.id, deferredAnswerText));
+              setPage((value) => Math.min(questions.length - 1, value + 1));
+            }}
+          >{t("interaction.deferAnswer")}</button>
+        )}
         <button type="button" className="is-primary" disabled={disabled || !canSubmit} onClick={submit}>{questions.length > 1 ? t("interaction.submitAll") : t("interaction.submit")}</button>
       </div>
     </PanelShell>

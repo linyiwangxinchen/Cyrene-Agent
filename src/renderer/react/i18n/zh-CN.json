@@ -650,6 +650,8 @@
     "prevQuestion": "上一个问题",
     "nextQuestion": "下一个问题",
     "customAnswerLabel": "其他回答",
+    "deferAnswer": "暂不回答",
+    "deferredAnswerText": "用户选择暂不回答本题。",
     "customAnswerPlaceholder": "输入你的回答…",
     "additionalContextLabel": "给昔涟的额外补充：",
     "additionalContextPlaceholder": "可以留空，也可以补充任何有帮助的信息…",

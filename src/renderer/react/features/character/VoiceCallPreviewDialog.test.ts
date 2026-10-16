@@ -9,6 +9,15 @@ import { VoiceCallPreviewDialog } from "./VoiceCallPreviewDialog";
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const roots: Root[] = [];
 
+async function waitForPreviewElement(selector: string): Promise<void> {
+  // 退出动画完成后还需要 React 提交新视图，按 DOM 条件等待而非猜测动画耗时。
+  const deadline = Date.now() + 1_000;
+  while (!document.querySelector(selector) && Date.now() < deadline) {
+    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 20)); });
+  }
+  expect(document.querySelector(selector)).not.toBeNull();
+}
+
 afterEach(async () => {
   await act(async () => { for (const root of roots) root.unmount(); });
   roots.length = 0;
@@ -72,8 +81,8 @@ describe("voice call preview dialog", () => {
 
     await act(async () => {
       dialog!.querySelector<HTMLButtonElement>(".cy-call-preview__avatar-toggle")!.click();
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
     });
+    await waitForPreviewElement('[role="dialog"] .cy-call-preview__conversation');
 
     const conversation = document.querySelector('[role="dialog"] .cy-call-preview__conversation');
     expect(conversation).not.toBeNull();
@@ -83,8 +92,8 @@ describe("voice call preview dialog", () => {
 
     await act(async () => {
       document.querySelector<HTMLButtonElement>(".cy-call-preview__back")!.click();
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
     });
+    await waitForPreviewElement('[role="dialog"] .cy-call-preview__avatar-scene');
     expect(document.querySelector('[role="dialog"] .cy-call-preview__avatar-scene')).not.toBeNull();
   });
 });

@@ -213,6 +213,8 @@ export function createChannelsSubsystem(
           mode,
           conversationId: channelInput.target.conversationId,
           channel: msg.channel,
+          userTurnId: channelInput.userTurnId,
+          assistantEntryId: options.transcriptSink?.getLastAssistantEntryId?.(),
         });
         channelResult.sticker = finished.sticker;
       }

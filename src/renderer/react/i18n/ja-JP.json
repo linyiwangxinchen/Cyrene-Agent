@@ -650,6 +650,8 @@
     "prevQuestion": "前の質問",
     "nextQuestion": "次の質問",
     "customAnswerLabel": "その他の回答",
+    "deferAnswer": "今は回答しない",
+    "deferredAnswerText": "ユーザーはこの質問への回答を保留しました。",
     "customAnswerPlaceholder": "回答を入力…",
     "additionalContextLabel": "キュレネへの追加情報：",
     "additionalContextPlaceholder": "任意です。役立つ情報があれば入力してください…",

@@ -165,6 +165,7 @@ function createNativeRecursiveWatcher(paths: string[], options: ChokidarOptions)
   const ignored = typeof options.ignored === "function" ? (options.ignored as (candidate: string) => boolean) : undefined;
   const listeners = new Map<string, Set<(value?: unknown) => void>>();
   const handles: fs.FSWatcher[] = [];
+  const refsRoot = normalizePath(paths[3]);
 
   const emit = (event: string, value?: unknown): void => {
     for (const listener of listeners.get(event) ?? []) listener(value);
@@ -177,6 +178,15 @@ function createNativeRecursiveWatcher(paths: string[], options: ChokidarOptions)
         return;
       }
       const candidate = path.resolve(watchRoot, filename);
+      if (process.platform === "win32" && _eventType === "change" && normalizePath(candidate) === refsRoot) {
+        // Windows 会单独报告 refs 目录元数据变化；只丢弃仍存在的普通目录，
+        // rename、删除后路径不存在、符号链接及无法读取状态时仍保守通知。
+        try {
+          if (fs.lstatSync(candidate, { throwIfNoEntry: false })?.isDirectory()) return;
+        } catch {
+          // 状态读取失败不能吞掉可能的真实 ref 变更。
+        }
+      }
       if (ignored?.(candidate)) return;
       emit("change", candidate);
     });
