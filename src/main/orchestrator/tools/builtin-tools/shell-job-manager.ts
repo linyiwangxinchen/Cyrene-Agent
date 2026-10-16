@@ -85,6 +85,7 @@ const jobs = new Map<string, ShellJob>();
 let ready: Promise<void> | undefined;
 let stopping = false;
 const starting = new Set<Promise<unknown>>();
+const terminatingTrees = new Set<Promise<void>>();
 function database() { return getConversationDatabase(app.getPath("userData")); }
 
 function initializeJobs(): Promise<void> {
@@ -95,21 +96,33 @@ function initializeJobs(): Promise<void> {
 }
 
 /** 可靠终止进程树。Windows 上 child.kill("SIGKILL") 只杀直接子进程，杀不掉孙进程。 */
-export function killTree(child: ChildProcess | undefined | null): void {
-  if (!child || child.pid == null) return;
+export function killTree(child: ChildProcess | undefined | null): Promise<void> {
+  if (!child || child.pid == null) return Promise.resolve();
   if (process.platform === "win32") {
     // /T=含整棵子树  /F=强制  砍掉进程树，避免孙进程成为孤儿
-    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
-      windowsHide: true,
-      shell: false,
-      stdio: "ignore",
+    // Keep the owning process alive until taskkill has walked its process tree.
+    const pending = new Promise<void>((resolve) => {
+      const terminator = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        windowsHide: true,
+        shell: false,
+        stdio: "ignore",
+      });
+      terminator.once("close", () => resolve());
+      terminator.once("error", (error) => {
+        logger.warn(LogTag.BuiltinTools, `[shell_job] taskkill failed: ${String(error)}`);
+        resolve();
+      });
     });
+    terminatingTrees.add(pending);
+    void pending.then(() => terminatingTrees.delete(pending));
+    return pending;
   } else {
     // Unix：后台任务以 detached 启动（自成进程组组长），负 pid 组杀覆盖整棵子树；
     // 前台进程未 detached 时组杀抛 ESRCH，回落直杀（与迁移前行为一致）
     try { process.kill(-child.pid, "SIGKILL"); } catch {
       try { child.kill("SIGKILL"); } catch { /* 已退出则忽略 */ }
     }
+    return Promise.resolve();
   }
 }
 
@@ -197,7 +210,7 @@ function appendJobOutput(job: ShellJob, chunk: Buffer): void {
   job.logStream.write(chunk);
   if (job.totalBytes >= job.logMaxBytes) {
     settleJob(job, "failed", { reason: "output_limit_exceeded" });
-    killTree(job.child);
+    void killTree(job.child);
   }
 }
 
@@ -407,7 +420,7 @@ export async function stopShellJob(jobId: string): Promise<ShellJobSnapshot | nu
   if (!job) return savedSnapshot(jobId);
   if (job.status === "running") {
     settleJob(job, "stopped");
-    killTree(job.child);
+    await killTree(job.child);
   }
   await persistTerminal(job);
   return snapshotJob(job, job.child?.pid ?? null);
@@ -425,7 +438,7 @@ export async function disposeAllShellJobs(): Promise<void> {
   }
   const writes = [...jobs.values()].map(persistTerminal);
   // 历史查询取消只结束调用方等待；其共享初始化/日志清理必须在数据库关闭前收尾。
-  await Promise.allSettled([ready, ...starting]);
+  await Promise.allSettled([ready, ...starting, ...terminatingTrees]);
   const results = await Promise.allSettled(writes);
   const errors = results.filter((result): result is PromiseRejectedResult => result.status === "rejected");
   if (errors.length) throw new AggregateError(errors.map(result => result.reason), "SHELL_JOB_PERSISTENCE_FAILED");

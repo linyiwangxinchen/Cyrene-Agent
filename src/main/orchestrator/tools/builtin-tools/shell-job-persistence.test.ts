@@ -197,6 +197,21 @@ describe("shell job SQLite lifecycle (isolated data, mocked processes)", () => {
     await expect(manager.startShellJob(options())).rejects.toThrow("SHELL_JOBS_STOPPING");
   });
 
+  it.runIf(process.platform === "win32")("keeps shutdown pending until taskkill finishes walking the process tree", async () => {
+    const { jobId } = await manager.startShellJob(options());
+    Object.assign(child, { pid: 12345 });
+    const terminator = new EventEmitter();
+    mocks.spawn.mockReturnValueOnce(terminator);
+    let finished = false;
+    const shutdown = manager.disposeAllShellJobs().then(() => { finished = true; });
+    try {
+      await vi.waitFor(() => expect(mocks.spawn).toHaveBeenCalledWith("taskkill", ["/pid", "12345", "/T", "/F"], expect.any(Object)));
+      await vi.waitFor(async () => expect(await database().call("shellJobs.get", jobId)).toMatchObject({ status: "stopped", reason: "app_exiting" }));
+      expect(finished).toBe(false);
+    } finally { terminator.emit("close", 0); await shutdown; }
+    expect(finished).toBe(true);
+  });
+
   it.each(["shutdown", "cancel"])("does not spawn when %s races with initial persistence", async mode => {
     const client = database();
     const call = client.call.bind(client);

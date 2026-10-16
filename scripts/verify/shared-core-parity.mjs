@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import { mkdtemp, mkdir, writeFile, readFile, stat, readdir } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -12,6 +13,23 @@ const require = createRequire(import.meta.url);
 const { createWebServer } = require('../../dist/server/server/index.js');
 const data = await mkdtemp(path.join(os.tmpdir(), 'cyrene-core-parity-'));
 const workspace = path.join(data, 'workspace'); await mkdir(workspace);
+const backgroundScript = path.join(workspace, 'parity-background.cjs');
+const backgroundPidFile = path.join(workspace, 'parity-background.pid');
+const quotedBackgroundCommand = [process.execPath, backgroundScript, backgroundPidFile].map(value => `"${value}"`).join(' ');
+// cmd /s /c strips the outer quotes; retain the quoted executable path inside.
+const backgroundCommand = process.platform === 'win32' ? `"${quotedBackgroundCommand}"` : quotedBackgroundCommand;
+await writeFile(backgroundScript, "require('node:fs').writeFileSync(process.argv[2], String(process.pid)); console.log('parity-background-ready'); setInterval(() => {}, 1000);\n");
+let backgroundJobId, backgroundPid;
+let backgroundStopped = false;
+function shellRecord(jobId) {
+  const database = new DatabaseSync(path.join(data, 'cyrene.sqlite'), { readOnly: true });
+  try {
+    const row = jobId
+      ? database.prepare('SELECT record_json FROM shell_jobs WHERE job_id=?').get(jobId)
+      : database.prepare('SELECT record_json FROM shell_jobs WHERE json_extract(record_json,\'$.command\')=?').get(backgroundCommand);
+    return row ? JSON.parse(row.record_json) : null;
+  } finally { database.close(); }
+}
 const requests = [], results = [], events = [], logs = [];
 const fixtureModel = createServer(async (req, res) => {
   let raw = ''; for await (const chunk of req) raw += chunk;
@@ -27,6 +45,9 @@ const fixtureModel = createServer(async (req, res) => {
     args = { ...(name === 'Write' ? { file_path: path.join(workspace, `proof-${mode}.txt`) } : { path: path.join(workspace, `proof-${mode}.txt`) }), content: `shared-core-${mode}` };
   } else if (tools.includes('parity-plugin_echo') && userText.includes('case:plugin') && !toolMessages.length) { name = 'parity-plugin_echo'; args = { value: 'plugin-executed' }; }
   else if (tools.includes('channel_send_file') && userText.includes('case:channel-file') && !toolMessages.length) { name = 'channel_send_file'; args = { channel: 'wechat', filePath: path.join(workspace, 'proof-work.txt') }; }
+  else if (tools.includes('run_shell') && userText.includes('case:shell-background') && !toolMessages.length) {
+    name = 'run_shell'; args = { command: backgroundCommand, cwd: workspace, shell: process.platform === 'win32' ? 'cmd' : 'bash', run_in_background: true };
+  }
   const toolResult = toolName => {
     const call = body.messages?.slice(caseIndex + 1).flatMap(message => message.tool_calls ?? []).find(call => call.function?.name === toolName);
     const message = toolMessages.find(message => message.tool_call_id === call?.id);
@@ -329,14 +350,28 @@ try {
     await new Promise(resolve => page.listen(0, '127.0.0.1', resolve));
     try { await invoke('browser-panel:navigate', `http://127.0.0.1:${page.address().port}`); const result = await run(sessions.work, 'case:browser'); assert.equal(clicked, 1); assert.ok((await cssOutput(result.ack.runId)).includes('matchedRules'), 'matched CSS rules are preserved'); } finally { await new Promise(resolve => page.close(resolve)); }
   });
-  await check('SQLite restart retains transcripts, child tasks, usage and idempotency receipts', async () => {
+  await check('Authenticated Web agent starts an actual persistent background shell job', async () => {
+    await run(sessions.work, 'case:shell-background');
+    await waitFor(() => existsSync(backgroundPidFile), 'background shell process startup');
+    backgroundPid = Number(await readFile(backgroundPidFile, 'utf8')); assert.ok(backgroundPid > 0);
+    const record = shellRecord(); assert.equal(record?.status, 'running'); backgroundJobId = record.jobId;
+  });
+  await check('SQLite restart retains transcripts, stopped shell jobs, child tasks, usage and idempotency receipts', async () => {
     const before = await invoke('chats:get', sessions.chat.id), usage = await invoke('token-usage:get', 366);
     await handle.close(); socket = undefined; clientToken = '';
+    const stopped = shellRecord(backgroundJobId);
+    assert.equal(stopped.status, 'stopped'); assert.equal(stopped.reason, 'app_exiting'); assert.ok(stopped.endedAtMs);
+    await waitFor(() => {
+      try { process.kill(backgroundPid, 0); return false; }
+      catch (error) { if (error.code === 'ESRCH') return true; throw error; }
+    }, 'background shell process termination');
+    backgroundStopped = true;
     handle = createWebServer(options); await new Promise(resolve => handle.server.listen(0, '127.0.0.1', resolve)); base = `http://127.0.0.1:${handle.server.address().port}`;
     const login = await http('/api/auth/login', 'POST', { username: 'admin', password: '123456' }); assert.equal(login.response.status, 200); cookie = login.response.headers.get('set-cookie').split(';')[0];
     socket = new WebSocket(base.replace('http:', 'ws:') + '/ws', { headers: { Cookie: cookie } });
     socket.on('message', raw => { const event = JSON.parse(String(raw)); if (event.type === 'ready') clientToken = event.clientToken; if (event.type === 'CORE_EVENT') events.push(event); });
     await waitFor(() => clientToken, 'restart websocket handshake'); await handle.startChannels();
+    assert.deepEqual(shellRecord(backgroundJobId), stopped, 'normal shutdown history must survive startup recovery');
     const after = await invoke('chats:get', sessions.chat.id); assert.deepEqual(after.messages, before.messages);
     assert.deepEqual(await invoke('token-usage:get', 366), usage);
     const task = await invoke('task-session:get', { taskId: legacyTask.id, parentConversationId: legacyConversation.id }); assert.equal(task.resultText, legacyTask.resultText);
@@ -349,4 +384,14 @@ try {
   await writeFile('docs/verification/shared-core-parity-results.json', JSON.stringify({ at: new Date().toISOString(), dataDir: data, results, requests: requests.map(request => ({ model: request.model, stream: request.stream, tools: request.tools?.map(tool => tool.function?.name || tool.name) })), handlerCount: runtimeCapabilities.handlers?.length ?? null, engine: runtimeCapabilities.engine }, null, 2));
   console.log('ALL PASSED', results.length, 'checks; fixture data retained at', data);
 } catch (error) { console.error('FAIL', error); console.error('Recent core logs:', logs.slice(-8).join('\n')); console.error('Request diagnostics:', JSON.stringify(requests.slice(-2).map(body => ({ model: body.model, user: body.messages?.map(message => ({ role: message.role, text: JSON.stringify(message.content).slice(0, 150), cases: JSON.stringify(message.content).match(/case:[\w-]+/g) })) })), null, 2)); console.error('Fixture:', data); process.exitCode = 1; }
-finally { socket?.close(); await handle.close(); await new Promise(resolve => fixtureModel.close(resolve)); }
+finally {
+  try { socket?.close(); if (handle.server.listening) await handle.close(); }
+  finally {
+    // Also clean up our own fixture child when an assertion fails before shutdown.
+    if (!backgroundStopped && existsSync(backgroundPidFile)) {
+      const pid = Number(readFileSync(backgroundPidFile, 'utf8'));
+      if (Number.isSafeInteger(pid) && pid > 0) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    }
+    await new Promise(resolve => fixtureModel.close(resolve));
+  }
+}

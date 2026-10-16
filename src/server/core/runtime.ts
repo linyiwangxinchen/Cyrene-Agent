@@ -16,6 +16,7 @@ import { createGitService } from "../../main/code-git/git-service";
 import { resolveGitExecutable } from "../../main/code-git/git-executable";
 import * as chatsStore from "../../main/chats/chats-store";
 import { closeConversationDatabases } from "../../main/storage/conversation-database-client";
+import { disposeAllShellJobs } from "../../main/orchestrator/tools/builtin-tools/shell-job-manager";
 import { activeConversationRegistry } from "../../main/chats/active-conversation-registry";
 import { createAgentRuntime } from "../../main/orchestrator/agent-runtime";
 import { createRuntimeStateService } from "../../main/orchestrator/runtime-state-service";
@@ -300,20 +301,30 @@ export async function startHeadlessCore() {
     await syncFilesystemMcp({ filesystemMcpEnabled: general.filesystemMcpEnabled, allowedDir: app.getPath("downloads") });
     if (!mcpAbort.signal.aborted && general.searchEngine === "minimax") await syncVolcanoSearchMcp(general);
   })().catch(error => console.error("[MCP] Restore failed:", error));
+  let closing: Promise<void> | undefined;
   return {
     capabilities: () => ({ handlers: [...ipcMain.handlers.keys()], listeners: ipcMain.eventNames(), engine: "shared-windows-core", desktop: false, version: app.getVersion() }),
-    async close() {
-      app.emit("before-quit");
-      voice.close(); ttsSession.cancelAll();
-      mcpAbort.abort(); await restoreMcp;
-      await Promise.allSettled(listMcpServers().map(server => disconnectMcpServer(server.id)));
-      toast.dispose();
-      scheduler.stop(); proactive.stopProactiveTrigger(); momentsService.stopReactionScanner(); await browser.close(); await music.shutdown();
-      await channels.shutdown(); await plugins?.stop();
-      await flushAllSummaryMemory(); await enableWikiMemoryScheduler(false); await flushRAGStore(); await flushUsage();
-      await disposeVectorMemory();
-      await lsp.disposeAll(); await git.dispose(); await knowledge.close(); ipc.dispose();
-      await closeConversationDatabases();
+    close() {
+      return closing ??= (async () => {
+        try {
+          app.emit("before-quit");
+          voice.close(); ttsSession.cancelAll();
+          mcpAbort.abort(); await restoreMcp;
+          await Promise.allSettled(listMcpServers().map(server => disconnectMcpServer(server.id)));
+          toast.dispose();
+          scheduler.stop(); proactive.stopProactiveTrigger(); momentsService.stopReactionScanner(); await browser.close(); await music.shutdown();
+          await channels.shutdown(); await plugins?.stop();
+          await flushAllSummaryMemory(); await enableWikiMemoryScheduler(false); await flushRAGStore(); await flushUsage();
+          await disposeVectorMemory();
+          await lsp.disposeAll(); await git.dispose(); await knowledge.close(); ipc.dispose();
+        } finally {
+          // The desktop shutdown coordinator owns this upstream cleanup. The
+          // headless host must also await terminal writes before closing SQLite,
+          // including when another resource failed to shut down.
+          try { await disposeAllShellJobs(); }
+          finally { await closeConversationDatabases(); }
+        }
+      })();
     },
   };
 }
