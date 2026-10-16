@@ -1219,6 +1219,8 @@
       "resetBaseUrl": "プロバイダーの既定アドレスに戻す",
       "endpointPreview": "リクエスト URL のプレビュー",
       "transport": "API プロトコル",
+      "responsesNative": "ネイティブ OpenAI Responses 互換",
+      "responsesNativeHint": "GPT モデルでは既定で有効です。キャッシュのルーティング情報と暗号化された推論の再送を保持します。ネイティブ Responses のパラメーターを拒否する中継サービスでは無効にしてください。キャッシュのヒット状況はプロバイダーが返す使用量に基づきます。",
       "transportOpenAI": "chat/completions",
       "transportAnthropic": "anthropic",
       "model": "モデル ID",
