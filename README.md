@@ -595,6 +595,8 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <sub><b>Modusensus</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/boring9720">
                     <img src="https://avatars.githubusercontent.com/u/20534568?v=4" width="48;" alt="boring9720"/>
@@ -602,8 +604,6 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <sub><b>chuxuan</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/Tobi1chi">
                     <img src="https://avatars.githubusercontent.com/u/49900770?v=4" width="48;" alt="Tobi1chi"/>
