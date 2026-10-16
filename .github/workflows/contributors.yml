@@ -14,6 +14,9 @@ on:
 
 jobs:
   update-contributors:
+    # Fork 的 master 需要保持可直接同步上游；只让上游仓库回写 README，
+    # 避免 fork 自己的贡献者列表改写上游维护区并制造同步冲突。
+    if: github.repository == 'Playa-Cyrene/Cyrene-Agent'
     runs-on: ubuntu-latest
     permissions:
       # 需要写权限把更新后的 README 提交回仓库
