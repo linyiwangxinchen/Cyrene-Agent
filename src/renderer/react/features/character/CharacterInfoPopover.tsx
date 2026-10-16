@@ -203,6 +203,7 @@ export function CharacterInfoPopover() {
         {open && (
           <Popover.Portal forceMount>
             <Popover.Content
+              aria-modal={false}
               className="cy-character-card"
               side="bottom"
               align="start"

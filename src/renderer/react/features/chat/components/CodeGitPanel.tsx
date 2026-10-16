@@ -51,6 +51,13 @@ export function CodeGitPanel({ sessionId, projectName, todoState, containerRef, 
   const floating = useFloatingCard({ width: 260, containerRef });
 
   useEffect(() => {
+    setDialog(null);
+    setNewBranch("");
+    setCommitMessage("");
+    setOperationError(null);
+  }, [sessionId]);
+
+  useEffect(() => {
     if (!api) return undefined;
     const controller = createCodeGitRefreshController({
       load: () => api.getStatus(sessionId),

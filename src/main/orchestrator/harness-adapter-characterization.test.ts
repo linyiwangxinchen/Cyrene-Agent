@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { trace, runHarness, runStore, reviewTracker } = vi.hoisted(() => ({
   trace: [] as string[],
@@ -40,13 +43,17 @@ vi.mock("../prompts/prompt-loader", () => ({
 }));
 
 vi.mock("electron", () => ({
-  app: { getPath: vi.fn(() => "C:\\cyrene-characterization") },
+  app: { getPath: vi.fn(() => userData) },
 }));
 
 import { runHarnessWithAdapter } from "./harness-adapter";
+import { closeConversationDatabases } from "../storage/conversation-database-client";
+
+let userData: string;
 
 describe("harness-adapter characterization", () => {
   beforeEach(() => {
+    userData = mkdtempSync(path.join(tmpdir(), "cyrene-characterization-"));
     trace.length = 0;
     runHarness.mockReset();
     runStore.create.mockReset();
@@ -71,6 +78,11 @@ describe("harness-adapter characterization", () => {
         rounds: 1,
       };
     });
+  });
+
+  afterEach(async () => {
+    await closeConversationDatabases();
+    rmSync(userData, { recursive: true, force: true });
   });
 
   it("preserves create, run, terminal, review, and return order", async () => {

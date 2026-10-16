@@ -1,7 +1,7 @@
 // run_shell 边界分支测试：补齐 fail-closed / capture-limit / timeout 三个专项文件
 // 之外的独立分支——非法 shell 值、灾难命令守卫、GBK 解码回落、stderr 超限丢弃、
 // 预先取消的 signal、bash 不可用。
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // bash 解析固定 mock 为"不可用"：BASH_UNAVAILABLE 分支需要确定性环境
 // （本机可能装有 Git Bash，真实探测会让断言随环境翻转）。cmd 路径保持真实行为。
@@ -40,6 +40,9 @@ async function run(
 }
 
 describe.runIf(process.platform === "win32")("run_shell 边界分支", () => {
+  // 隔离运行器可能通过 NODE_OPTIONS 注入权限模型，其启动警告不是命令测试输出。
+  beforeEach(() => vi.stubEnv("NODE_NO_WARNINGS", "1"));
+  afterEach(() => vi.unstubAllEnvs());
   it("shell 为非法值（powershell）返回 SHELL_UNSUPPORTED，不尝试执行", async () => {
     const parsed = await run({ command: "echo hi", shell: "powershell" });
     expect(parsed.errorCode).toBe("SHELL_UNSUPPORTED");

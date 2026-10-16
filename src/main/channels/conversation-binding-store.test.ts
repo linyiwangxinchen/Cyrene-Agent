@@ -22,6 +22,20 @@ describe("ChannelConversationBindingStore", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
+  it("keeps the previous disk binding and retries dirty state after rename retries are exhausted", () => {
+    const store = new ChannelConversationBindingStore(filePath);
+    store.observe({ sessionId: "channel:qq:a", channel: "qq", chatId: "a", chatType: "private", lastAt: 1 });
+    store.bind("channel:qq:a", "old");
+    const error = Object.assign(new Error("target busy"), { code: "EPERM" });
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation(() => { throw error; });
+    expect(() => store.bind("channel:qq:a", "new")).toThrow(error);
+    expect(rename).toHaveBeenCalledTimes(5);
+    expect(new ChannelConversationBindingStore(filePath).resolve("channel:qq:a")).toBe("old");
+    rename.mockRestore();
+    store.flush();
+    expect(new ChannelConversationBindingStore(filePath).resolve("channel:qq:a")).toBe("new");
+  });
+
   it("coalesces timestamp writes while keeping the live list current", () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
     const store = new ChannelConversationBindingStore(filePath);

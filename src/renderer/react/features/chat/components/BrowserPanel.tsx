@@ -3,6 +3,7 @@ import { ArrowLeft, ArrowRight, BookOpen, Globe, LoaderCircle, MousePointerClick
 import { useTranslation } from "../../../i18n";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import type { BrowserPanelState, BrowserPanelTabState } from "../../../../../shared/browser-panel-types";
+import { observeDialogOcclusion } from "./browser-dialog-occlusion";
 import "./BrowserPanel.css";
 import { WebBrowserViewport } from "../../../../web/WebBrowserViewport";
 
@@ -80,10 +81,17 @@ export function BrowserPanel({ active }: { active: boolean }) {
       if (api) void api.setBounds(null);
       return;
     }
+    let occluded = false;
     const update = () => {
+      if (occluded) return;
       const rect = host.getBoundingClientRect();
       void api.setBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
     };
+    const stopObservingDialogs = observeDialogOcclusion((next) => {
+      occluded = next;
+      if (occluded) void api.setBounds(null);
+      else update();
+    });
     const inspector = host.closest(".cy-right-inspector");
     let frame = 0;
     const startedAt = performance.now();
@@ -98,6 +106,7 @@ export function BrowserPanel({ active }: { active: boolean }) {
     window.addEventListener("resize", update);
     frame = requestAnimationFrame(trackEntranceAnimation);
     return () => {
+      stopObservingDialogs();
       cancelAnimationFrame(frame);
       observer.disconnect();
       inspector?.removeEventListener("animationend", onAnimationEnd);

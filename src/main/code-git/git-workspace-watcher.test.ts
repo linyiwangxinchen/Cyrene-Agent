@@ -23,6 +23,33 @@ function createWatcherHarness() {
 }
 
 describe("GitWorkspaceWatcher", () => {
+  it("cancels a pending refresh immediately when a later event arrives", async () => {
+    vi.useFakeTimers();
+    const harness = createWatcherHarness();
+    const changed = vi.fn();
+    const watcher = createGitWorkspaceWatcher({
+      createWatcher: () => harness.watcher,
+      onWorkspaceChanged: changed,
+      onError: vi.fn(),
+      eventDebounceMs: 150,
+      debounceMs: 80,
+    });
+    try {
+      await watcher.subscribe({ sessionId: "s1", workspaceRoot: "C:\\repo", gitDir: "C:\\repo\\.git" });
+      harness.emit("change", "C:\\repo\\refs");
+      await vi.advanceTimersByTimeAsync(200);
+      harness.emit("change", "C:\\repo\\HEAD");
+      await vi.advanceTimersByTimeAsync(40);
+      expect(changed).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(190);
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(changed).toHaveBeenCalledWith(["s1"]);
+    } finally {
+      await watcher.dispose();
+      vi.useRealTimers();
+    }
+  });
+
   it("shares one watcher and refreshes after one minute without workspace changes", async () => {
     vi.useFakeTimers();
     const harness = createWatcherHarness();

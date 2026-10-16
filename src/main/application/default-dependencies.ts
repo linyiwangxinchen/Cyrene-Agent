@@ -306,7 +306,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
     prepare: () => prepareBeforeReady({
       installSingleInstance: (onSecondInstance) => installSingleInstanceGuard(app, onSecondInstance),
       migrateLegacyUserData: () => {
-        migrateLegacyUserData({
+        return migrateLegacyUserData({
           appDataPath: app.getPath("appData"),
           targetUserDataPath: app.getPath("userData"),
         });

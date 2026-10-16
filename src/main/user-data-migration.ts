@@ -13,6 +13,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { renameWithRetrySync } from "./storage/rename-with-retry";
 
 /** 历史目录名：package.json 的 name 字段 */
 const LEGACY_USER_DATA_DIR_NAME = "live2d-cyrene";
@@ -46,7 +47,7 @@ export type LegacyUserDataMigrationStatus =
   | "renamed" // 目标不存在，旧目录整体原子重命名
   | "merged" // 两者并存，逐项并入且全部成功
   | "partial" // 逐项并入但有失败，残留留在旧目录
-  | "failed" // 整体重命名失败，本次放弃（应用将以全新目录启动）
+  | "failed" // 整体重命名失败，保留旧目录并阻止本次启动
   | "already_migrated"; // 已迁移过（有完成标记），重新出现的旧目录原样保留、不再并入
 
 export interface LegacyUserDataMigrationResult {
@@ -78,7 +79,7 @@ export function migrateLegacyUserData(
   if (!fs.existsSync(input.targetUserDataPath)) {
     try {
       fs.mkdirSync(path.dirname(input.targetUserDataPath), { recursive: true });
-      fs.renameSync(legacyPath, input.targetUserDataPath);
+      renameWithRetrySync(legacyPath, input.targetUserDataPath);
       console.log(`[Cyrene] 用户数据目录已整体迁移: ${legacyPath} -> ${input.targetUserDataPath}`);
       writeMigrationMarker(markerPath, "renamed");
       return { status: "renamed" };

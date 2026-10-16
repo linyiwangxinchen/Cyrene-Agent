@@ -4,7 +4,7 @@ import { prepareBeforeReady, type PreReadyDependencies } from "./pre-ready";
 function makePreReadyDeps(calls: string[], overrides: Partial<PreReadyDependencies> = {}): PreReadyDependencies {
   return {
     installSingleInstance: vi.fn(() => { calls.push("single-instance-lock"); return true; }),
-    migrateLegacyUserData: vi.fn(() => { calls.push("migrate-user-data"); }),
+    migrateLegacyUserData: vi.fn(() => { calls.push("migrate-user-data"); return { status: "none" }; }),
     registerPrivilegedSchemes: vi.fn(() => { calls.push("register-schemes"); }),
     configureGpuSwitches: vi.fn(() => { calls.push("gpu-switches"); }),
     ensureGpuSandboxAcl: vi.fn(() => { calls.push("gpu-acl"); }),
@@ -14,6 +14,13 @@ function makePreReadyDeps(calls: string[], overrides: Partial<PreReadyDependenci
 }
 
 describe("prepareBeforeReady", () => {
+  it.each(["failed", "partial"] as const)("stops before reading settings when migration is %s", (status) => {
+    const deps = makePreReadyDeps([], { migrateLegacyUserData: () => ({ status }) });
+    expect(() => prepareBeforeReady(deps)).toThrow("用户数据迁移未完成");
+    expect(deps.registerPrivilegedSchemes).not.toHaveBeenCalled();
+    expect(deps.configureGpuSwitches).not.toHaveBeenCalled();
+    expect(deps.ensureGpuSandboxAcl).not.toHaveBeenCalled();
+  });
   it("performs every Electron pre-ready operation synchronously in order", () => {
     const calls: string[] = [];
     const result = prepareBeforeReady(makePreReadyDeps(calls));

@@ -533,10 +533,10 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/linyiwangxinchen">
-                    <img src="https://avatars.githubusercontent.com/u/54473991?v=4" width="48;" alt="linyiwangxinchen"/>
+                <a href="https://github.com/LZhWi">
+                    <img src="https://avatars.githubusercontent.com/u/306725149?v=4" width="48;" alt="LZhWi"/>
                     <br />
-                    <sub><b>linyiwangxinchen</b></sub>
+                    <sub><b>LZhWi</b></sub>
                 </a>
             </td>
             <td align="center">
@@ -544,13 +544,6 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <img src="https://avatars.githubusercontent.com/u/60803753?v=4" width="48;" alt="lll69"/>
                     <br />
                     <sub><b>lll69</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/LZhWi">
-                    <img src="https://avatars.githubusercontent.com/u/306725149?v=4" width="48;" alt="LZhWi"/>
-                    <br />
-                    <sub><b>LZhWi</b></sub>
                 </a>
             </td>
             <td align="center">
@@ -595,8 +588,6 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <sub><b>Modusensus</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/boring9720">
                     <img src="https://avatars.githubusercontent.com/u/20534568?v=4" width="48;" alt="boring9720"/>
@@ -604,6 +595,8 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <sub><b>chuxuan</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/Tobi1chi">
                     <img src="https://avatars.githubusercontent.com/u/49900770?v=4" width="48;" alt="Tobi1chi"/>

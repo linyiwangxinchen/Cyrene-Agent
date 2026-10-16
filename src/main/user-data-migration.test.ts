@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import * as nodeFs from "node:fs";
 import { migrateLegacyUserData } from "./user-data-migration";
+
+vi.mock("node:fs", async (original) => ({ ...await original<typeof import("node:fs")>() }));
 
 // 用临时目录模拟 appData，构造旧目录 live2d-cyrene 与新目录 Cyrene 的各种组合
 let root: string;
@@ -43,10 +46,36 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 describe("migrateLegacyUserData", () => {
+  it("recovers from a transient directory rename error without changing file contents", () => {
+    writeFixture(legacyDir(), "cyrene-chats/conv.json", '{"messages":["preserve"]}');
+    const rename = vi.spyOn(nodeFs, "renameSync").mockImplementationOnce(() => {
+      throw Object.assign(new Error("busy"), { code: "EPERM" });
+    });
+    expect(migrate().status).toBe("renamed");
+    expect(rename.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(readTarget("cyrene-chats/conv.json")).toBe('{"messages":["preserve"]}');
+    expect(fs.existsSync(legacyDir())).toBe(false);
+    expect(fs.existsSync(path.join(targetDir(), ".legacy-user-data-migrated"))).toBe(true);
+  });
+
+  it("preserves the old directory and leaves no marker when retries are exhausted", () => {
+    writeFixture(legacyDir(), "cyrene-chats/conv.json", '{"messages":["preserve"]}');
+    const rename = vi.spyOn(nodeFs, "renameSync").mockImplementation(() => {
+      throw Object.assign(new Error("busy"), { code: "EPERM" });
+    });
+    expect(migrate().status).toBe("failed");
+    expect(rename).toHaveBeenCalledTimes(5);
+    expect(fs.readFileSync(path.join(legacyDir(), "cyrene-chats/conv.json"), "utf8")).toBe('{"messages":["preserve"]}');
+    expect(fs.existsSync(targetDir())).toBe(false);
+    rename.mockRestore();
+    expect(migrate().status).toBe("renamed");
+    expect(readTarget("cyrene-chats/conv.json")).toBe('{"messages":["preserve"]}');
+  });
   it("旧目录不存在时什么都不做", () => {
     const result = migrateLegacyUserData({ appDataPath: root, targetUserDataPath: targetDir() });
     expect(result.status).toBe("none");

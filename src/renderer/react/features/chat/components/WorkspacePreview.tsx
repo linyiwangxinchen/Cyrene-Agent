@@ -20,10 +20,15 @@ export function WorkspacePreviewContent({
   active?: boolean;
 }) {
   const [expanded, setExpanded] = useState<WorkspacePreview | null>(null);
+  const [{ open: svgOpen, generation: svgGeneration }, setSvgState] = useState({ open: false, generation: 0 });
   const [unavailable, setUnavailable] = useState(false);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const triggerRef = useRef<HTMLDivElement>(null);
+  // state 保存回调所属代际，ref 在重开事件中立即使旧回调失效，避免批处理窗口。
+  const svgGenerationRef = useRef(0);
+  const currentRef = useRef({ active, preview, svgOpen });
+  currentRef.current = { active, preview, svgOpen };
   useEffect(() => {
     if (!active) setExpanded(null);
   }, [active]);
@@ -37,6 +42,13 @@ export function WorkspacePreviewContent({
   const close = () => {
     setExpanded(null);
     triggerRef.current?.focus();
+  };
+  const finishSvgClose = () => {
+    // 旧关闭动画可能晚于内容切换或再次打开，不能关闭新预览或抢走其焦点。
+    const current = currentRef.current;
+    if (svgGeneration !== svgGenerationRef.current || current.preview !== preview || current.svgOpen) return;
+    setExpanded(null);
+    if (current.active && triggerRef.current?.isConnected) triggerRef.current.focus();
   };
   async function save() {
     if (preview.kind !== "image" || !window.chat?.saveGeneratedImage) return;
@@ -72,12 +84,18 @@ export function WorkspacePreviewContent({
               : t("messageList.diagramZoomHint")
           }
           onClick={() => {
-            if (!unavailable) setExpanded(preview);
+            if (!unavailable) {
+              setSvgState({ open: true, generation: ++svgGenerationRef.current });
+              setExpanded(preview);
+            }
           }}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              if (!unavailable) setExpanded(preview);
+              if (!unavailable) {
+                setSvgState({ open: true, generation: ++svgGenerationRef.current });
+                setExpanded(preview);
+              }
             }
           }}
         >
@@ -125,7 +143,13 @@ export function WorkspacePreviewContent({
               />
             </Dialog.Root>
           ) : (
-            <SvgPreviewModal svg={preview.svg} open centered onClose={close} />
+            <SvgPreviewModal
+              svg={preview.svg}
+              open={svgOpen}
+              centered
+              onClose={() => setSvgState(state => ({ ...state, open: false }))}
+              afterClose={finishSvgClose}
+            />
           )}
         </WorkspacePreviewContext.Provider>
       )}

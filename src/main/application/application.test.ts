@@ -73,6 +73,18 @@ function makeApplicationDeps(calls: string[], overrides: Partial<ApplicationDepe
 }
 
 describe("createApplication", () => {
+  it("reports and quits on pre-ready failure without starting business services", async () => {
+    const error = new Error("用户数据迁移未完成");
+    const deps = makeApplicationDeps([], { prepare: () => { throw error; } });
+    const application = createApplication(deps);
+    application.prepareBeforeReady();
+    if (application.isPrimaryProcess()) await application.start();
+    await vi.waitFor(() => expect(deps.app.quit).toHaveBeenCalledOnce());
+    expect(deps.dialog.showErrorBox).toHaveBeenCalledWith("Cyrene 启动失败", expect.stringContaining(error.message));
+    expect(deps.startShell).not.toHaveBeenCalled();
+    expect(deps.startCore).not.toHaveBeenCalled();
+    expect(deps.startBackground).not.toHaveBeenCalled();
+  });
   it("runs shell, core, and background in order", async () => {
     const calls: string[] = [];
     const app = createApplication(makeApplicationDeps(calls));

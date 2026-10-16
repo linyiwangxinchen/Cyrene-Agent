@@ -47,12 +47,17 @@ async function click(selector: string, scope: ParentNode = document) {
   expect(element, selector).not.toBeNull();
   await act(async () => element!.click());
 }
-
-async function waitForFocus(element: Element | null): Promise<void> {
-  // 弹层卸载后的焦点恢复可能在下一轮定时器执行，等待实际焦点而非 click 的 act 返回。
-  const deadline = Date.now() + 1_000;
-  while (document.activeElement !== element && Date.now() < deadline) {
-    await act(async () => { await new Promise((resolve) => window.setTimeout(resolve, 20)); });
+async function waitForClose(trigger: Element | null) {
+  // 弹层关闭完成及卸载焦点恢复均有异步边界，等待实际结果后保留原断言。
+  const deadline = Date.now() + 1_500;
+  while ((document.querySelector('[role="dialog"]') || document.activeElement !== trigger) && Date.now() < deadline) {
+    await act(async () => {
+      for (const node of document.querySelectorAll(".ant-modal, .ant-modal-mask")) {
+        node.dispatchEvent(new Event("animationend", { bubbles: true }));
+        node.dispatchEvent(new Event("transitionend", { bubbles: true }));
+      }
+      await new Promise(resolve => setTimeout(resolve, 20));
+    });
   }
 }
 
@@ -62,10 +67,10 @@ describe("workspace preview lifecycle", () => {
     await click(".cy-workspace-preview__zoom", host);
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     await click(preview.kind === "image" ? ".cy-generated-image-preview__close" : ".ant-modal-close");
+    await waitForClose(host.querySelector(".cy-workspace-preview__zoom"));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(host.querySelector(".cy-workspace-preview__zoom")).not.toBeNull();
-    await waitForFocus(host.querySelector(".cy-workspace-preview__zoom"));
-    expect(document.activeElement).toBe(host.querySelector(".cy-workspace-preview__zoom"));
+    await vi.waitFor(() => expect(document.activeElement).toBe(host.querySelector(".cy-workspace-preview__zoom")));
   });
 
   it.each([image, svg])("removes $kind zoom immediately when its tab becomes inactive", async (preview) => {

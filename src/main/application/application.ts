@@ -48,7 +48,12 @@ export function createApplication(deps: ApplicationDependencies): Application {
 
   return {
     prepareBeforeReady(): void {
-      primaryResult = deps.prepare();
+      try {
+        primaryResult = deps.prepare();
+      } catch (error) {
+        primaryResult = null;
+        void this.handleFatalStartup(error);
+      }
     },
 
     isPrimaryProcess(): boolean {
