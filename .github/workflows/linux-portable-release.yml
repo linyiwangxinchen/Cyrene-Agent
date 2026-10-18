@@ -2,9 +2,15 @@ name: Build Linux portable
 
 on:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: '上传到已创建的 GitHub Release 标签；留空则只保留 Actions 产物'
+        required: false
+        type: string
+        default: ''
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   linux-x64-portable:
@@ -58,6 +64,11 @@ jobs:
           cd "$GITHUB_WORKSPACE/release-linux"
           sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
           ls -lh
+      - name: Upload portable package to GitHub Release
+        if: inputs.release_tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release_tag }}" release-linux/* --repo "$GITHUB_REPOSITORY" --clobber
       - uses: actions/upload-artifact@v7
         with:
           name: cyrene-linux-x64-portable
