@@ -1,0 +1,59 @@
+name: Linux Web
+
+on:
+  push:
+    branches: [master, 'integrate/**']
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      NODE_OPTIONS: --max-old-space-size=4096
+      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/cyrene-browsers
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Verify upstream preview preserves Git state
+        run: node --test scripts/verify/upstream-sync.test.mjs
+      - name: Check shared core and Web contracts
+        run: |
+          pnpm run check:main
+          pnpm run check:preload
+          pnpm run check:server
+          pnpm run check:renderer
+      - name: Test Linux and channel boundaries
+        run: >-
+          pnpm exec vitest run src/server
+          src/main/browser/address-input.test.ts
+          src/main/browser/browser-panel-ipc.test.ts
+          src/main/channels/adapters/qq/onebot-reverse-ws.test.ts
+          src/main/channels/bootstrap.test.ts
+          src/main/channels/dispatcher.test.ts
+          src/main/channels/outgoing-composer.test.ts
+          src/main/orchestrator/build-options.test.ts
+          src/main/orchestrator/conversation-transcript-projection.test.ts
+          src/main/orchestrator/vendors/model-factory.test.ts
+          src/main/orchestrator/vendors/model-runtime.test.ts
+          src/main/orchestrator/shell-runtime.test.ts
+          src/main/orchestrator/tools/builtin-tools/run-shell-platform.test.ts
+      - run: pnpm run build:web
+      - run: pnpm exec playwright install --with-deps chromium
+      - name: Verify authenticated Web business and voice MCP paths
+        run: |
+          pnpm run verify:shared-core
+          pnpm run verify:voice-mcp
