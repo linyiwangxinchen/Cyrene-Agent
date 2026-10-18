@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
-import type { CustomEvent } from "@ag-ui/core";
+import type { CustomEvent, ToolCallArgsEvent, ToolCallStartEvent } from "@ag-ui/core";
 import type { GeneratedImageAttachment } from "../../shared/generated-image";
 import { app, type BrowserWindow } from "electron";
 import type { IpcScope } from "../application/ipc-scope";
@@ -120,6 +120,8 @@ export function createChannelsSubsystem(
       : input as ChannelAgentInput;
     const channelResult: Awaited<ReturnType<DispatcherDeps["buildAndRunAgent"]>> = { text: "", sticker: null };
     const generatedImages = new Map<string, GeneratedImageAttachment>();
+    const explicitImagePaths = new Set<string>();
+    const fileSendArguments = new Map<string, string>();
     const imageKey = (filePath: string) => process.platform === "win32"
       ? resolvePath(filePath).toLowerCase() : resolvePath(filePath);
 
@@ -204,6 +206,29 @@ export function createChannelsSubsystem(
       const reply = await new Promise<string>((resolve, reject) => {
         agent.runWithEvents(options).subscribe({
           next: (event) => {
+            // Harness 的 tool_start 在权限检查与派发记账后产生；结果摘要不会
+            // 保存工具实参，必须消费真实执行事件，不能依赖 lastResult.toolResults。
+            if (event.runId === runId && event.type === "TOOL_CALL_START") {
+              const started = event as ToolCallStartEvent;
+              if (started.toolCallName === "channel_send_file") fileSendArguments.set(started.toolCallId, "");
+              return;
+            }
+            if (event.runId === runId && event.type === "TOOL_CALL_ARGS") {
+              const argsEvent = event as ToolCallArgsEvent;
+              const previous = fileSendArguments.get(argsEvent.toolCallId);
+              if (previous === undefined) return;
+              const serialized = previous + argsEvent.delta;
+              fileSendArguments.set(argsEvent.toolCallId, serialized);
+              try {
+                const args = JSON.parse(serialized) as Record<string, unknown>;
+                if (typeof args.filePath === "string" && args.filePath.trim()
+                  && (!args.channel || args.channel === msg.channel)) {
+                  // 成功、失败或未确认的显式派发都不能在收尾时隐式重发。
+                  explicitImagePaths.add(imageKey(args.filePath.trim()));
+                }
+              } catch { /* 实参可能分块到达，等待完整 JSON。 */ }
+              return;
+            }
             if (event.type !== "CUSTOM") return;
             const custom = event as CustomEvent;
             if (custom.name !== "cyrene.image_attachments") return;
@@ -227,12 +252,7 @@ export function createChannelsSubsystem(
       const terminalStatus = agent.lastResult?.terminal?.status;
       if (agent.lastResult && (terminalStatus === undefined || terminalStatus === "success")) {
         // 显式附件发送（包括失败/未确认）由工具报告结果，不能在轮次结束后自动重发。
-        for (const tool of agent.lastResult.toolResults) {
-          if (tool.toolId === "channel_send_file" && typeof tool.args.filePath === "string"
-            && (!tool.args.channel || tool.args.channel === msg.channel)) {
-            generatedImages.delete(imageKey(tool.args.filePath));
-          }
-        }
+        for (const filePath of explicitImagePaths) generatedImages.delete(filePath);
         if (generatedImages.size > 0) channelResult.attachments = [...generatedImages.values()];
         const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, {
           source: "channel",

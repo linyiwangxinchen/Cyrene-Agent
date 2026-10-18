@@ -2,6 +2,8 @@
 // 核心回归点：createChannelsSubsystem 在构造期只创建对象并连接依赖，
 // 不做任何初始化/启动 —— initialize / start / shutdown 必须显式调用。
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import type { HarnessEvent } from "../orchestrator/harness/types";
+import { sendHarnessEventAsAgui } from "../orchestrator/harness/adapter/event-mapper";
 
 const channelMocks = vi.hoisted(() => ({
   resolveBoundConversation: undefined as ((sessionId: string) => string | null) | undefined,
@@ -13,6 +15,7 @@ const channelMocks = vi.hoisted(() => ({
   dispatcherDeps: [] as Array<Record<string, any>>,
   agentError: undefined as Error | undefined,
   agentEvents: [] as unknown[],
+  agentHarnessEvents: [] as HarnessEvent[],
   agentResult: { reply: "渠道回复", toolResults: [] } as {
     reply: string;
     toolResults: unknown[];
@@ -89,8 +92,11 @@ vi.mock("../orchestrator/cyrene-agent", () => ({
       return channelMocks.agentResult;
     }
 
-    runWithEvents() {
+    runWithEvents(options: { runId: string }) {
       return { subscribe: ({ next, complete, error }: { next?: (event: unknown) => void; complete: () => void; error: (err: Error) => void }) => {
+        for (const event of channelMocks.agentHarnessEvents) {
+          sendHarnessEventAsAgui(event, "assistant-1", "thread-1", options.runId, (mapped) => next?.(mapped));
+        }
         for (const event of channelMocks.agentEvents) next?.(event);
         if (channelMocks.agentError) error(channelMocks.agentError);
         else complete();
@@ -152,6 +158,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   channelMocks.agentError = undefined;
   channelMocks.agentEvents = [];
+  channelMocks.agentHarnessEvents = [];
   channelMocks.agentResult = { reply: "渠道回复", toolResults: [] };
   channelMocks.dispatcherDeps.length = 0;
 });
@@ -447,12 +454,47 @@ describe("createChannelsSubsystem lifecycle", () => {
     });
   });
 
-  it.each(["succeeded", "failed"])("显式发送过的生成文件不再自动发图，工具状态=%s", async (status) => {
+  it.each(["success", "failure", "unknown"] as const)("真实 Harness 已派发文件时不再自动发图，工具结果=%s", async (outcome) => {
     const image = { id: "file-image", kind: "image", source: "model", status: "done", byteLength: 8,
-      name: "portrait.png", mime: "image/png", filePath: "/data/portrait.png" };
-    channelMocks.agentEvents = [{ type: "CUSTOM", name: "cyrene.image_attachments", value: { attachments: [image] } }];
-    channelMocks.agentResult.toolResults = [{ toolId: "channel_send_file", args: { filePath: image.filePath, kind: "file" }, status,
-      output: JSON.stringify({ success: status === "succeeded" }) }];
+      name: "portrait.png", mime: "image/png", filePath: "/data/portrait.png" } as const;
+    // 使用生产事件映射器；真实 Harness adapter 不在 lastResult 聚合工具结果。
+    channelMocks.agentHarnessEvents = [
+      { type: "tool_start", toolCallId: "send-1", toolName: "channel_send_file",
+        args: { filePath: ` ${image.filePath} `, kind: "file" } },
+      { type: "tool_end", toolCallId: "send-1", outcome, preview: "发送结果" },
+      { type: "image_attachments", messageId: "assistant-1", roundId: "round-2", attachments: [image] },
+    ];
+    createChannelsSubsystem({ ...makeChannelsDeps(), agentRuntime: makeAgentRuntime() });
+    const result = await channelMocks.buildAndRunAgent!({ channel: "wechat", senderId: "user-1", at: new Date(0) }, "channel-session");
+    expect(channelMocks.agentResult.toolResults).toEqual([]);
+    expect(result).not.toHaveProperty("attachments");
+  });
+
+  it.each(["other_tool", "other_channel", "custom_claim"])("未在当前渠道真实派发的声明不能吞掉生成图：%s", async (caseName) => {
+    const image = { id: "unsent-image", kind: "image", source: "model", status: "done", byteLength: 8,
+      name: "portrait.png", mime: "image/png", filePath: "/data/portrait.png" } as const;
+    channelMocks.agentHarnessEvents = [{
+      type: "tool_start", toolCallId: "unrelated-1", toolName: caseName === "other_tool" ? "read_file" : "channel_send_file",
+      args: { filePath: image.filePath, ...(caseName === "other_channel" ? { channel: "feishu" } : {}) },
+    }];
+    if (caseName === "custom_claim") {
+      channelMocks.agentHarnessEvents = [];
+      channelMocks.agentEvents = [{ type: "CUSTOM", name: "channel_send_file", value: { filePath: image.filePath, success: true } }];
+    }
+    channelMocks.agentEvents.push({ type: "CUSTOM", name: "cyrene.image_attachments", value: { attachments: [image] } });
+    createChannelsSubsystem({ ...makeChannelsDeps(), agentRuntime: makeAgentRuntime() });
+    const result = await channelMocks.buildAndRunAgent!({ channel: "wechat", senderId: "user-1", at: new Date(0) }, "channel-session");
+    expect(result).toMatchObject({ attachments: [image] });
+  });
+
+  it("显式发送已开始但没有完成回执时，不能在成功收尾中隐式重发", async () => {
+    const image = { id: "unconfirmed-image", kind: "image", source: "model", status: "done", byteLength: 8,
+      name: "portrait.png", mime: "image/png", filePath: "/data/portrait.png" } as const;
+    channelMocks.agentHarnessEvents = [
+      { type: "image_attachments", messageId: "assistant-1", roundId: "round-1", attachments: [image] },
+      { type: "tool_start", toolCallId: "send-unknown", toolName: "channel_send_file", args: { filePath: image.filePath } },
+    ];
+    channelMocks.agentResult.terminal = { status: "success", reason: "unknown_side_effect", externalEffectsMayContinue: true };
     createChannelsSubsystem({ ...makeChannelsDeps(), agentRuntime: makeAgentRuntime() });
     const result = await channelMocks.buildAndRunAgent!({ channel: "wechat", senderId: "user-1", at: new Date(0) }, "channel-session");
     expect(result).not.toHaveProperty("attachments");
