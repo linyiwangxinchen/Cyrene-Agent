@@ -18,7 +18,7 @@ export async function prepareMinGit(options) {
   const { manifest, cacheDir, outputDir } = options;
   const probe = options.probe ?? probeGit;
   const download = options.download ?? downloadFile;
-  const unzip = options.extract ?? ((archive, destination) => extract(archive, { dir: destination }));
+  const unzip = options.extract ?? extractArchive;
   const gitPath = path.join(outputDir, "cmd", "git.exe");
 
   if (await fileExists(gitPath) && await probe(gitPath)) return "cached";
@@ -57,6 +57,19 @@ export async function prepareMinGit(options) {
 export async function sha256File(filePath) {
   const content = await readFile(filePath);
   return createHash("sha256").update(content).digest("hex");
+}
+
+async function extractArchive(archive, destination) {
+  // extract-zip can leave a pending read stream under Node 24 on Windows.
+  if (process.platform === "win32") {
+    const systemTar = path.join(process.env.SystemRoot ?? process.env.WINDIR ?? "C:\\Windows", "System32", "tar.exe");
+    await execFileAsync(systemTar, ["-xf", archive, "-C", destination], {
+      windowsHide: true,
+      timeout: 60_000,
+    });
+    return;
+  }
+  await extract(archive, { dir: destination });
 }
 
 async function hasExpectedHash(filePath, expected) {
