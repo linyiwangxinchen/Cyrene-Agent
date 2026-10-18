@@ -16,6 +16,10 @@ import { composePromptLayers } from "./prompt-layers"
 import { getAdapterForConfig, generateChatWithAiSdk, streamChatWithSdk } from "./vendors"
 import { jsonResponse, responseBody, sseResponse, streamEvents } from "./vendors/sdk-stream/model-fixtures"
 import type { ChatMessage } from "./vendors/types"
+import { ConversationTranscriptCompactor } from "./conversation-transcript-compactor"
+import { ConversationTranscriptStore } from "./conversation-transcript-store"
+import { ConversationJournalService } from "./conversation-journal-service"
+import { closeConversationDatabases } from "../storage/conversation-database-client"
 
 function createBuildDeps(): BuildOptionsDeps {
   return {
@@ -1067,8 +1071,9 @@ describe("build-options", () => {
 describe("本轮图片附件回归", () => {
   const tempDirs: string[] = []
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.unstubAllGlobals()
+    await closeConversationDatabases()
     for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
     tempDirs.length = 0
   })
@@ -1099,6 +1104,46 @@ describe("本轮图片附件回归", () => {
   function imageBlocks(content: unknown) {
     return Array.isArray(content) ? content.filter((block) => block.type === "image_url") : []
   }
+
+  it.each([false, true])("真实压缩归档并重启后改图的 Responses 请求仍携带最近一组原照片，stream=%s", async (stream) => {
+    const { image } = createImageInput()
+    const bytes = fs.readFileSync(image.filePath)
+    const root = path.dirname(image.filePath)
+    let store = new ConversationTranscriptStore(root)
+    let journal = new ConversationJournalService(store)
+    await journal.appendUser("archived-photo", { id: "original-user", turnId: "original-turn", text: "我拍的照片".repeat(100),
+      attachments: [{ kind: "image", ...image }] })
+    await journal.createRunSink({ conversationId: "archived-photo", runId: "first-run" }).appendAssistant({ message: { role: "assistant", content: "收到" } })
+    await journal.appendUser("archived-photo", { id: "edit-user", turnId: "edit-turn", text: "用原照片做蓝底证件照，保持同一个人" })
+    const compactor = new ConversationTranscriptCompactor({ store, summarize: async () => "用户上传过原照片，准备改图" })
+    await compactor.compact({ conversationId: "archived-photo", trigger: "manual", retainTokens: 1 })
+    expect((await store.read("archived-photo")).entries.some(entry => entry.id === "original-user")).toBe(false)
+    await closeConversationDatabases()
+    store = new ConversationTranscriptStore(root)
+    journal = new ConversationJournalService(store)
+    const deps = createBuildDeps()
+    deps.loadModelSettings = () => ({ provider: "ChatGPT", baseUrl: "https://proxy.test/v1", apiKey: "fixture", model: "gpt-test",
+      explicitTransport: "responses", imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" } })
+    deps.buildModelContext = id => journal.buildModelContext(id)
+    const built = await buildAgentRunOptions({ sessionId: "archived-photo", channel: "wechat",
+      currentUser: { turnId: "edit-turn", text: "用原照片做蓝底证件照，保持同一个人" } }, deps)
+    const sent: any[] = []
+    vi.stubGlobal("fetch", vi.fn(async (url, init) => {
+      sent.push(JSON.parse(await new Request(url, init).text()))
+      return stream ? sseResponse(streamEvents("responses")) : jsonResponse(responseBody("responses"))
+    }))
+    const settings = built.options.settings
+    const args = { adapter: getAdapterForConfig(settings), config: settings,
+      request: { model: settings.model, messages: built.options.messages, imageGeneration: settings.imageGeneration }, timeoutMs: 2000 }
+    if (stream) await streamChatWithSdk(args)
+    else await generateChatWithAiSdk(args)
+    const users = sent[0].input.filter((item: any) => item.role === "user")
+    const images = users.flatMap((item: any) => item.content).filter((item: any) => item.type === "input_image")
+    expect(images).toEqual([{ type: "input_image", image_url: `data:image/png;base64,${bytes.toString("base64")}` }])
+    expect(users[0].content.some((item: any) => item.text?.includes("压缩前用户原图引用"))).toBe(true)
+    expect(users.at(-1).content.some((item: any) => item.type === "input_image")).toBe(false)
+    expect(sent[0].tools).toContainEqual(expect.objectContaining({ type: "image_generation" }))
+  })
 
   it.each([
     { phase: "本轮附图", stream: false }, { phase: "本轮附图", stream: true },

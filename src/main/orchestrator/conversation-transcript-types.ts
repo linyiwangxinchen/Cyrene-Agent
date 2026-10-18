@@ -218,11 +218,20 @@ function isMusicCard(value: Record<string, unknown>): boolean {
     optionalField(track, "album", (album) => typeof album === "string") && optionalField(track, "coverUrl", (coverUrl) => typeof coverUrl === "string"));
 }
 
+/** 仅保留压缩历史最近一次用户上传的原图引用，不保存图片编码数据。 */
+export interface TranscriptCompactionImageReference {
+  sourceEntryId: string;
+  sourceTurnId: string;
+  sourceSeq: number;
+  attachments: PendingChatAttachment[];
+}
+
 export type TranscriptCompactionCheckpointPayload = {
   baseThroughSeq: number;
   sourceThroughSeq: number;
   sourceDigest: string;
   replacement: CanonicalChatMessage;
+  recentUserImages?: TranscriptCompactionImageReference;
   trigger: "automatic" | "manual";
 };
 

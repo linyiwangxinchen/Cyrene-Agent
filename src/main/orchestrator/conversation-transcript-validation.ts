@@ -90,6 +90,7 @@ function isValidTranscriptPayload(entry: Partial<TranscriptEntry>): boolean {
         Number.isInteger(entry.payload.sourceThroughSeq) && entry.payload.sourceThroughSeq >= 0 &&
         typeof entry.payload.sourceDigest === "string" &&
         isValidCanonicalChatMessage(entry.payload.replacement) &&
+        (entry.payload.recentUserImages === undefined || isValidCompactionImageReference(entry.payload.recentUserImages, entry.payload.sourceThroughSeq)) &&
         ["automatic", "manual"].includes(entry.payload.trigger as string);
     case "presentation_patch":
       return typeof entry.payload.messageId === "string" &&
@@ -107,6 +108,19 @@ function isValidTranscriptPayload(entry: Partial<TranscriptEntry>): boolean {
     default:
       return false;
   }
+}
+function isValidCompactionImageReference(value: unknown, throughSeq: number): boolean {
+  if (!isRecord(value)) return false;
+  return typeof value.sourceEntryId === "string" && value.sourceEntryId.length > 0
+    && typeof value.sourceTurnId === "string" && value.sourceTurnId.length > 0
+    && Number.isSafeInteger(value.sourceSeq) && Number(value.sourceSeq) > 0 && Number(value.sourceSeq) <= throughSeq
+    && Array.isArray(value.attachments) && value.attachments.length > 0
+    && value.attachments.every(attachment => isRecord(attachment)
+      && Object.keys(attachment).every(key => ["kind", "name", "filePath", "mime", "hasAnnotations"].includes(key))
+      && attachment.kind === "image" && typeof attachment.name === "string" && attachment.name.length > 0
+      && typeof attachment.filePath === "string" && path.isAbsolute(attachment.filePath)
+      && (attachment.mime === undefined || typeof attachment.mime === "string")
+      && (attachment.hasAnnotations === undefined || typeof attachment.hasAnnotations === "boolean"));
 }
 export function snapshotEntriesAreConsistent(entries: TranscriptEntry[], throughSeq: number, seenEntryIds: string[], seenUserRevisions: string[], allowArchivedPrefix = false): boolean {
   let previousSeq = 0;

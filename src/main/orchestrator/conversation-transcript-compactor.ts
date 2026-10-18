@@ -4,6 +4,7 @@ import { ConversationTranscriptArchive } from "./conversation-transcript-archive
 import {
   buildCompactionSourceView,
   buildModelContextFromCompactedView,
+  selectCompactionImageReference,
   type TranscriptRunReader,
 } from "./conversation-transcript-projection";
 import type { TranscriptAppendInput, TranscriptEntry } from "./conversation-transcript-types";
@@ -184,6 +185,7 @@ export class ConversationTranscriptCompactor {
         throw createTranscriptCompactionRequiredError();
       }
 
+      const recentUserImages = selectCompactionImageReference(afterSummary.entries, sourceThroughSeq);
       const checkpointInput: TranscriptAppendInput = {
         id: `compaction:${sourceThroughSeq}:${sourceDigest}`,
         at: this.now(),
@@ -193,6 +195,7 @@ export class ConversationTranscriptCompactor {
           sourceThroughSeq,
           sourceDigest,
           replacement,
+          ...(recentUserImages ? { recentUserImages } : {}),
           trigger: request.trigger,
         },
       };

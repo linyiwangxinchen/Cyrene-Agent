@@ -17,6 +17,7 @@ import type { ChatMessage as UiChatMessage } from "../../shared/chat-types";
 import type {
   TranscriptEntry,
   TranscriptPresentationPatch,
+  TranscriptCompactionImageReference,
 } from "./conversation-transcript-types";
 import type { ChatMessage, ChatMessageContent, ToolCall } from "./vendors/types";
 
@@ -1123,9 +1124,11 @@ export function buildCompactionSourceView(
   const delivery = failedDeliveryNotesWithSources(entries, active.nodes, checkpoint.payload.sourceThroughSeq);
   const interruption = interruptionNotesWithSources(entries, active.nodes, checkpoint.payload.sourceThroughSeq);
   const suffixWithInternalNotes = insertInternalNotes(materialized, [...delivery.notes, ...interruption.notes]);
+  const imageReference = materializeCompactionImageReference(entries, checkpoint, suffix);
   return {
     messages: [
       checkpoint.payload.replacement,
+      ...imageReference.messages,
       ...suffixWithInternalNotes.messages,
     ],
     uncertainEffects: recovery.uncertainEffects,
@@ -1134,8 +1137,52 @@ export function buildCompactionSourceView(
     throughSeq: active.throughSeq,
     // 旧摘要对应的源边界是上一个检查点的 sourceThroughSeq：切点覆盖它时，
     // 新检查点即完整接管旧检查点所代表的历史。
-    sourceSeqs: [checkpoint.payload.sourceThroughSeq, ...suffixWithInternalNotes.sourceSeqs],
+    sourceSeqs: [checkpoint.payload.sourceThroughSeq, ...imageReference.sourceSeqs, ...suffixWithInternalNotes.sourceSeqs],
     previousReplacement: checkpoint.payload.replacement,
+  };
+}
+
+/** 归档前选择活动分支最近一组图片；后续压缩可沿用上次检查点的有界引用。 */
+export function selectCompactionImageReference(
+  entries: TranscriptEntry[],
+  sourceThroughSeq: number,
+): TranscriptCompactionImageReference | undefined {
+  const active = reduceActiveTranscript(entries);
+  const checkpoint = latestValidCompaction(entries, active);
+  let reference = checkpoint?.payload.recentUserImages;
+  if (reference && (reference.sourceSeq > sourceThroughSeq || entries.some(entry => entry.seq > checkpoint!.seq && (
+    (entry.kind === "turn_tombstone" && entry.payload.targetUserTurnId === reference!.sourceTurnId)
+    || (entry.kind === "turn_rewind" && entry.payload.anchorUserTurnId === reference!.sourceTurnId)
+  )))) reference = undefined;
+  for (const node of active.nodes) {
+    if (node.kind !== "user" || node.entry.seq > sourceThroughSeq) continue;
+    const attachments = (node.entry.kind === "user" ? node.entry.payload.attachments
+      : node.entry.payload.replacementUser?.attachments)?.filter(attachment => attachment.kind === "image" && attachment.filePath);
+    if (attachments?.length && node.entry.turnId && (!reference || node.entry.seq >= reference.sourceSeq)) {
+      reference = { sourceEntryId: node.entry.id, sourceTurnId: node.entry.turnId, sourceSeq: node.entry.seq,
+        attachments: attachments.map(attachment => ({ kind: "image", name: attachment.name, filePath: attachment.filePath,
+          ...(attachment.mime ? { mime: attachment.mime } : {}), ...(attachment.hasAnnotations ? { hasAnnotations: true } : {}) })) };
+    }
+  }
+  return reference ? structuredClone(reference) : undefined;
+}
+
+function materializeCompactionImageReference(
+  entries: TranscriptEntry[],
+  checkpoint: CompactionEntry,
+  suffix: ActiveNode[],
+): { messages: ChatMessage[]; sourceSeqs: number[] } {
+  // 后缀已有新照片时只使用新照片，避免旧人像混入本轮改图。
+  if (suffix.some(node => node.kind === "user" && (node.entry.kind === "user" ? node.entry.payload.attachments
+    : node.entry.payload.replacementUser?.attachments)?.some(attachment => attachment.kind === "image" && attachment.filePath))) {
+    return { messages: [], sourceSeqs: [] };
+  }
+  const reference = selectCompactionImageReference(entries, checkpoint.payload.sourceThroughSeq);
+  if (!reference) return { messages: [], sourceSeqs: [] };
+  return {
+    messages: [{ role: "user", content: `【压缩前用户原图引用】这是历史用户轮次 ${reference.sourceTurnId} 上传的原图，仅供后续继续查看或编辑；不是本轮新上传的图片。`,
+      userAttachments: reference.attachments }],
+    sourceSeqs: [reference.sourceSeq],
   };
 }
 
@@ -1180,9 +1227,11 @@ export function buildModelContextFromCompactedView(
   const delivery = failedDeliveryNotesWithSources(entries, active.nodes, checkpoint.payload.sourceThroughSeq);
   const interruption = interruptionNotesWithSources(entries, active.nodes, checkpoint.payload.sourceThroughSeq);
   const suffixWithInternalNotes = insertInternalNotes(materialized, [...delivery.notes, ...interruption.notes]);
+  const imageReference = materializeCompactionImageReference(entries, checkpoint, suffix);
   return {
     messages: [
       checkpoint.payload.replacement,
+      ...imageReference.messages,
       ...suffixWithInternalNotes.messages,
     ],
     uncertainEffects: recovery.uncertainEffects,

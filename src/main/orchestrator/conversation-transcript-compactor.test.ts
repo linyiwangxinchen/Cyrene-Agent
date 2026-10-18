@@ -8,6 +8,7 @@ import { ConversationTranscriptArchive } from "./conversation-transcript-archive
 import { ConversationJournalService } from "./conversation-journal-service";
 import { ConversationTranscriptStore } from "./conversation-transcript-store";
 import type { ChatMessage } from "./vendors/types";
+import { buildCompactionSourceView } from "./conversation-transcript-projection";
 
 function assertNoOrphanToolPairs(messages: ChatMessage[]): boolean {
   const calls = new Set(messages.flatMap((message) =>
@@ -73,6 +74,57 @@ describe("ConversationTranscriptCompactor", () => {
     });
     await fixture.journal.appendUser("c1", { turnId: "u2", id: "u2", text: "最新问题" });
   }
+
+  it("归档及重启后只保留最近一组原图，二次压缩继续保留引用且来源序号一致", async () => {
+    const fixture = createFixture();
+    const first = path.join(roots.at(-1)!, "first.png");
+    const second = path.join(roots.at(-1)!, "second.png");
+    await fixture.journal.appendUser("photos", { id: "photo-1", turnId: "photo-turn-1", text: "旧照片".repeat(50),
+      attachments: [{ kind: "image", name: "first.png", filePath: first }] });
+    await fixture.journal.appendUser("photos", { id: "photo-2", turnId: "photo-turn-2", text: "当前原照片".repeat(50),
+      attachments: [{ kind: "image", name: "second.png", filePath: second }] });
+    await fixture.journal.appendUser("photos", { id: "request", turnId: "request-turn", text: "按最近照片制作" });
+    await fixture.compactor.compact({ conversationId: "photos", trigger: "manual", retainTokens: 1 });
+    const snapshot = await fixture.store.read("photos");
+    expect(snapshot.entries.some(entry => entry.id === "photo-1" || entry.id === "photo-2")).toBe(false);
+    await closeConversationDatabases();
+    const reopenedStore = new ConversationTranscriptStore(roots.at(-1)!);
+    const reopenedJournal = new ConversationJournalService(reopenedStore);
+    const before = await reopenedJournal.buildModelContext("photos");
+    expect(before.messages.flatMap(message => message.userAttachments ?? []).map(image => image.filePath)).toEqual([second]);
+    const source = buildCompactionSourceView((await reopenedStore.read("photos")).entries, { get: () => null });
+    expect(source.messages).toEqual(before.messages);
+    expect(source.sourceSeqs).toHaveLength(source.messages.length);
+    expect(source.sourceSeqs.every(seq => seq <= source.throughSeq)).toBe(true);
+    await reopenedJournal.appendUser("photos", { id: "next", turnId: "next-turn", text: "继续制作".repeat(50) });
+    await reopenedJournal.appendUser("photos", { id: "latest", turnId: "latest-turn", text: "现在发给我" });
+    await new ConversationTranscriptCompactor({ store: reopenedStore, summarize: async () => "二次摘要" })
+      .compact({ conversationId: "photos", trigger: "manual", retainTokens: 1 });
+    const after = await reopenedJournal.buildModelContext("photos");
+    expect(after.messages.flatMap(message => message.userAttachments ?? []).map(image => image.filePath)).toEqual([second]);
+    expect(JSON.stringify((await reopenedStore.read("photos")).entries)).not.toContain("base64");
+
+    await reopenedJournal.appendUser("photos", { id: "new-photo", turnId: "new-photo-turn", text: "换用这张",
+      attachments: [{ kind: "image", name: "new.png", filePath: first }] });
+    expect((await reopenedJournal.buildModelContext("photos")).messages.flatMap(message => message.userAttachments ?? []).map(image => image.filePath)).toEqual([first]);
+  });
+
+  it.each(["turn_tombstone", "turn_rewind"] as const)("归档原图被 %s 移除后不会由检查点恢复", async (kind) => {
+    const fixture = createFixture();
+    const filePath = path.join(roots.at(-1)!, "removed.png");
+    await fixture.journal.appendUser("removed-photo", { id: "removed", turnId: "removed-turn", text: "照片".repeat(100),
+      attachments: [{ kind: "image", name: "removed.png", filePath }] });
+    await fixture.journal.appendUser("removed-photo", { id: "after", turnId: "after-turn", text: "继续" });
+    await fixture.compactor.compact({ conversationId: "removed-photo", trigger: "manual", retainTokens: 1 });
+    if (kind === "turn_tombstone") await fixture.store.append("removed-photo", { id: "remove", kind, at: 100,
+      payload: { targetUserTurnId: "removed-turn", reason: "pending_withdrawn" } });
+    else await fixture.store.append("removed-photo", { id: "replace", kind, at: 100, turnId: "removed-turn", revision: 2,
+      payload: { anchorUserTurnId: "removed-turn", disposition: "replace_user", reason: "edit", replacementUser: { text: "不附图片" } } });
+    const context = await fixture.journal.buildModelContext("removed-photo");
+    expect(context.messages.flatMap(message => message.userAttachments ?? [])).toEqual([]);
+    const source = buildCompactionSourceView((await fixture.store.read("removed-photo")).entries, { get: () => null });
+    expect(source.messages).toEqual(context.messages);
+  });
 
   it("压缩边界不切断 assistant tool call 与 tool result", async () => {
     const fixture = createFixture();
