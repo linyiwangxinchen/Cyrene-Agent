@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // mock electron — sync 函数 import 时不依赖它,但防万一
 vi.mock("electron", () => ({
@@ -26,6 +26,28 @@ describe("syncPlaywrightMcp", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockListConfigs.mockReturnValue([]);
+    vi.stubEnv("CYRENE_HEADLESS", undefined);
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", undefined);
+    vi.stubEnv("PLAYWRIGHT_MCP_EXECUTABLE_PATH", undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("forwards only configured browser paths to the headless MCP process", () => {
+    vi.stubEnv("CYRENE_HEADLESS", "1");
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", "/srv/browser-cache");
+    vi.stubEnv("PLAYWRIGHT_MCP_EXECUTABLE_PATH", "/opt/chromium/chrome");
+    vi.stubEnv("UNRELATED_PROVIDER_API_KEY", "must-not-be-forwarded");
+    const config = buildPlaywrightMcpConfig();
+    expect(config.args).toEqual(expect.arrayContaining(["--headless", "--browser", "chromium"]));
+    expect(config.env).toEqual({
+      PLAYWRIGHT_BROWSERS_PATH: "/srv/browser-cache",
+      PLAYWRIGHT_MCP_EXECUTABLE_PATH: "/opt/chromium/chrome",
+    });
+  });
+
+  it("keeps desktop Node mode alongside configured browser paths", () => {
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", "browser-cache");
+    expect(buildPlaywrightMcpConfig().env).toEqual({ ELECTRON_RUN_AS_NODE: "1", PLAYWRIGHT_BROWSERS_PATH: "browser-cache" });
   });
 
   it("does nothing when disabled and no stored config", async () => {

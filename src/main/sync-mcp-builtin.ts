@@ -41,13 +41,20 @@ export function resolvePlaywrightMcpCliPath(): string {
  * 版本随 package.json 精确锁定（@playwright/mcp 无 ^ 漂移）。
  */
 export function buildPlaywrightMcpConfig(): McpServerConfig {
+  // MCP's stdio transport inherits a restricted environment, not process.env.
+  // Preserve configured browser locations without forwarding unrelated secrets.
+  const env: Record<string, string> = process.env.CYRENE_HEADLESS === "1" ? {} : { ELECTRON_RUN_AS_NODE: "1" };
+  for (const key of ["PLAYWRIGHT_BROWSERS_PATH", "PLAYWRIGHT_MCP_EXECUTABLE_PATH"] as const) {
+    const value = process.env[key];
+    if (value !== undefined) env[key] = value;
+  }
   return {
     id: PLAYWRIGHT_MCP_ID,
     name: "Playwright 浏览器",
     transport: "stdio",
     command: process.execPath,
     args: [resolvePlaywrightMcpCliPath(), "--isolated", "--headless", "--browser", process.env.CYRENE_HEADLESS === "1" ? "chromium" : "msedge"],
-    env: process.env.CYRENE_HEADLESS === "1" ? {} : { ELECTRON_RUN_AS_NODE: "1" },
+    env,
   };
 }
 

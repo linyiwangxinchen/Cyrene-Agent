@@ -20,6 +20,8 @@ const pcm = Buffer.alloc(32_000); for (let i = 0; i < 16_000; i++) pcm.writeInt1
 const wav = Buffer.alloc(44 + pcm.length); wav.write('RIFF'); wav.writeUInt32LE(wav.length - 8, 4); wav.write('WAVEfmt ', 8); wav.writeUInt32LE(16, 16); wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(16000, 24); wav.writeUInt32LE(32000, 28); wav.writeUInt16LE(2, 32); wav.writeUInt16LE(16, 34); wav.write('data', 36); wav.writeUInt32LE(pcm.length, 40); pcm.copy(wav, 44);
 await writeFile(path.join(workspace, 'audio-test.wav'), wav);
 const results = [], events = [], logs = [], modelRequests = [], ttsRequests = [], asrRequests = [], mcpCalls = [];
+const browserProof = 'MCP_BROWSER_NATIVE_OK';
+let browserPageRequests = 0;
 const sseTransports = new Map(), mcpInstances = new Set();
 function makeMcp() {
   const mcp = new McpServer({ name: 'Cyrene acceptance', version: '1.0.0' });
@@ -30,6 +32,12 @@ function makeMcp() {
 const fixture = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/mcp-browser-fixture') {
+      browserPageRequests++;
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(`<!doctype html><title>MCP browser acceptance</title><h1>${browserProof}</h1>`);
+      return;
+    }
     if (url.pathname === '/mcp' || url.pathname === '/sse' || url.pathname === '/messages') {
       if (req.headers.authorization !== 'Bearer fixture-mcp') { res.writeHead(401).end(); return; }
       if (url.pathname === '/sse') {
@@ -60,7 +68,15 @@ const fixture = createServer(async (req, res) => {
     const messages = body.messages || [], index = messages.findLastIndex(m => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('case:'));
     const user = messages[index]?.content || '', tools = body.tools?.map(t => t.function?.name) || [];
     let name, args;
-    if (!messages.slice(index + 1).some(m => m.role === 'tool') && user.includes('case:mcp-')) {
+    if (user.includes('case:mcp-browser')) {
+      const called = messages.slice(index + 1).flatMap(message => message.tool_calls ?? []).map(call => call.function?.name);
+      if (!called.includes('playwright-mcp-browser_navigate')) {
+        name = 'playwright-mcp-browser_navigate'; args = { url: fixtureUrl + '/mcp-browser-fixture' };
+      } else if (!called.includes('playwright-mcp-browser_evaluate')) {
+        name = 'playwright-mcp-browser_evaluate'; args = { function: '() => document.body.innerText' };
+      }
+      if (name) assert.ok(tools.includes(name), `Tool ${name} missing from model request`);
+    } else if (!messages.slice(index + 1).some(m => m.role === 'tool') && user.includes('case:mcp-')) {
       const id = user.includes('unknown') ? 'accept-http-unknown' : user.includes('http') ? 'accept-http-echo' : user.includes('sse') ? 'accept-sse-echo' : 'filesystem-mcp-read_text_file';
       assert.ok(tools.includes(id), `Tool ${id} missing from model request`);
       name = id; args = id.endsWith('unknown') ? {} : id.endsWith('echo') ? { value: user } : { path: path.join(workspace, 'read-proof.txt') };
@@ -100,9 +116,9 @@ async function launch() {
   await invoke('settings:get-general');
 }
 async function check(name, action) { const start = Date.now(); await action(); results.push({ name, ok: true, ms: Date.now() - start }); console.log('PASS', name); }
-async function run(session, text) {
+async function run(session, text, timeout = 20000) {
   const start = events.length; const ack = await invoke('agui:run', { sessionId: session.id, currentUser: { turnId: randomUUID(), text, visibleContent: text }, assistantTurnId: randomUUID(), styleId: 'default' }); assert.equal(ack.success, true);
-  await waitFor(() => events.slice(start).some(event => event.channel === 'agui:event' && event.args[0]?.runId === ack.runId && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.args[0]?.type)), 'agent finished');
+  await waitFor(() => events.slice(start).some(event => event.channel === 'agui:event' && event.args[0]?.runId === ack.runId && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.args[0]?.type)), 'agent finished', timeout);
   const runEvents = events.slice(start).filter(e => e.channel === 'agui:event' && e.args[0]?.runId === ack.runId).map(e => e.args[0]); assert.ok(!runEvents.some(e => e.type === 'RUN_ERROR'), JSON.stringify(runEvents));
   return runEvents;
 }
@@ -177,10 +193,23 @@ try {
     for (let i = 0; i < 100; i++) { if ((await invoke('mcp:list-servers')).filter(c => c.connected && c.id.startsWith('accept-')).length === 2) break; await delay(50); }
     assert.equal((await invoke('mcp:list-servers')).filter(c => c.connected && c.id.startsWith('accept-')).length, 2);
   });
-  await check('Bundled MCP settings sync uses Node/headless Chromium and removes tools when disabled', async () => {
+  await check('Bundled MCP settings sync uses Node/headless Chromium', async () => {
     await invoke('settings:save-general', { playwrightMcpEnabled: true, filesystemMcpEnabled: true }); const configs = await invoke('mcp:list-server-configs'); const pw = configs.find(c => c.id === 'playwright-mcp'); assert.ok(pw.args.includes('chromium')); assert.equal(pw.env.ELECTRON_RUN_AS_NODE, undefined);
+    assert.equal(pw.command, process.execPath); assert.ok(pw.args.includes('--headless'));
     assert.ok((await invoke('mcp:list-servers')).find(c => c.id === 'playwright-mcp')?.toolCount > 0);
+  });
+  await check('Bundled Playwright MCP launches its Chromium and reads a real local page through the Agent', async () => {
+    const beforeRequests = browserPageRequests, beforeModel = modelRequests.length;
+    const stream = await run(work, 'case:mcp-browser', 60000);
+    assert.ok(browserPageRequests > beforeRequests, 'the MCP browser must actually request the fixture page');
+    assert.ok(stream.some(event => event.type === 'TOOL_CALL_START' && event.toolCallName === 'playwright-mcp-browser_navigate'));
+    assert.ok(stream.some(event => event.type === 'TOOL_CALL_START' && event.toolCallName === 'playwright-mcp-browser_evaluate'));
+    assert.ok(stream.some(event => event.type === 'TOOL_CALL_RESULT' && String(event.content).includes(browserProof)), 'the real browser page text must reach the tool result');
+    assert.ok(modelRequests.slice(beforeModel).some(request => request.messages?.some(message => message.role === 'tool' && String(message.content).includes(browserProof))), 'the browser result must reach the next model request');
+  });
+  await check('Disabling bundled MCP removes its persisted configurations and tools', async () => {
     await invoke('settings:save-general', { playwrightMcpEnabled: false, filesystemMcpEnabled: false }); assert.ok(!(await invoke('mcp:list-server-configs')).some(c => ['playwright-mcp', 'filesystem-mcp'].includes(c.id)));
+    assert.ok(!(await invoke('mcp:list-servers')).some(c => ['playwright-mcp', 'filesystem-mcp'].includes(c.id)));
   });
   await check('MCP remove disconnects the server and removes the persisted tools', async () => { await invoke('mcp:remove-server', 'accept-sse'); assert.ok(!(await invoke('mcp:list-server-configs')).some(c => c.id === 'accept-sse')); assert.ok(!(await invoke('mcp:list-servers')).some(c => c.id === 'accept-sse')); });
   await mkdir('docs/verification', { recursive: true }); await writeFile('docs/verification/shared-core-voice-mcp-results.json', JSON.stringify({ at: new Date().toISOString(), dataDir: data, results, actualMcpCalls: mcpCalls, audio: { ttsRequests: ttsRequests.length, asrRequests: asrRequests.length, wavBytes: wav.length }, fixtureUrl }, null, 2));
