@@ -20,6 +20,7 @@ import { classifyShellEffect, isCatastrophicCommand, type ShellEffect } from "..
 import { logger, LogTag } from "../../../logger";
 import {
   buildDirectShellInvocation,
+  getDefaultShellKind,
   resolveShellExecutable,
   type ResolvedShellExecutable,
   type ShellKind,
@@ -498,17 +499,26 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
   if (timeoutPolicy.explicitDeadline) {
     logger.info(LogTag.BuiltinTools, `[run_shell] explicit deadline: raw=${String(args.timeout_ms)} → total=${timeoutPolicy.totalMs}ms, idle detection disabled`);
   }
-  const requestedShell = args.shell === undefined || args.shell === "cmd"
-    ? "cmd"
-    : args.shell === "bash"
-      ? "bash"
-      : null;
+  const requestedShell = args.shell === undefined
+    ? getDefaultShellKind()
+    : args.shell === "cmd"
+      ? "cmd"
+      : args.shell === "bash"
+        ? "bash"
+        : null;
   if (!command) return "[错误] command 不能为空";
   if (!requestedShell) {
     return JSON.stringify({
       command, cwd, shell: String(args.shell), errorCode: "SHELL_UNSUPPORTED",
       exitCode: -1, timedOut: false, captureTruncated: false, effect: "unknown", sandboxed: false,
       stderr: "[SHELL_UNSUPPORTED] shell 仅支持 cmd 或 bash", stdout: "",
+    });
+  }
+  if (requestedShell === "cmd" && process.platform !== "win32") {
+    return JSON.stringify({
+      command, cwd, shell: requestedShell, errorCode: "SHELL_UNSUPPORTED",
+      exitCode: -1, timedOut: false, captureTruncated: false, effect: "unknown", sandboxed: false,
+      stderr: "[SHELL_UNSUPPORTED] 当前系统不支持 cmd，请使用 bash。", stdout: "",
     });
   }
 
@@ -549,7 +559,10 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
     return JSON.stringify({
       command, cwd, shell: requestedShell, errorCode: "BASH_UNAVAILABLE",
       exitCode: -1, timedOut: false, captureTruncated: false, effect, sandboxed: false,
-      stderr: "[BASH_UNAVAILABLE] 未找到可用的 Bash。请安装 Git Bash，并确保 bash.exe 可执行。", stdout: "",
+      stderr: process.platform === "win32"
+        ? "[BASH_UNAVAILABLE] 未找到可用的 Bash。请安装 Git Bash，并确保 bash.exe 可执行。"
+        : "[BASH_UNAVAILABLE] 未找到可用的 Bash。请安装 bash，并确保服务的 PATH 包含 Bash 所在目录。",
+      stdout: "",
     });
   }
 
@@ -641,7 +654,7 @@ export const runShellTool: ToolDefinition = {
   needsContext: true,
   name: "执行命令",
   description:
-    "在用户电脑上执行一条 Shell 命令字符串。默认由 cmd.exe 解析；需要类 Unix 语法时可显式选择 bash。返回 exitCode + stdout + stderr。\n\n" +
+    "在运行服务的机器上执行一条 Shell 命令字符串。Windows 默认 cmd，可选择 Git Bash；Linux/macOS 默认使用系统 Bash。返回 exitCode + stdout + stderr。\n\n" +
     "cmd 模式语义：\n" +
     "- 管道：git status | findstr TODO\n" +
     "- 重定向：npm run build > build.log 或 echo hello >> out.txt\n" +
@@ -650,7 +663,7 @@ export const runShellTool: ToolDefinition = {
     "- 环境变量：%VAR% 会被展开\n\n" +
     "bash 模式语义：\n" +
     "- 设置 shell=\"bash\"，可使用 pwd / grep / sed / awk、$VAR、POSIX 管道及脚本语法\n" +
-    "- 仅在检测到可用 Git Bash 时执行；不可用会明确返回 BASH_UNAVAILABLE，不会改用 cmd\n\n" +
+    "- 使用系统 Bash（Windows 使用 Git Bash）；不可用会明确返回 BASH_UNAVAILABLE，不会改用其他解释器\n\n" +
     "何时用：\n" +
     "- git clone / git status / git log 等版本控制操作\n" +
     "- npm install / npm run / pip install / node xxx.js 等开发操作\n" +
@@ -674,7 +687,7 @@ export const runShellTool: ToolDefinition = {
     "之后用 shell_job 工具查询状态（可带 wait_ms 阻塞等待）或终止任务。\n\n" +
     "安全说明：非完全信任档位下，写副作用的命令会在沙箱中执行（限制文件系统访问范围）。" +
     "灾难命令（format/shutdown/dd 等）一律拒绝。\n" +
-    "参数：command (完整命令行字符串，如 \"git status\")，cwd (可选工作目录)，shell (cmd 或 bash，默认 cmd)，" +
+    "参数：command (完整命令行字符串，如 \"git status\")，cwd (可选工作目录)，shell (Windows 默认 cmd，可选 bash；Linux/macOS 默认且仅支持 bash)，" +
     "timeout_ms (可选执行上限毫秒数，1000–1800000，设置后禁用无输出检测)，" +
     "run_in_background (可选 true，后台执行并用 shell_job 管理)。",
   enabled: true,
@@ -688,9 +701,9 @@ export const runShellTool: ToolDefinition = {
       cwd: { type: "string", description: "工作目录绝对路径，可选" },
       shell: {
         type: "string",
-        enum: ["cmd", "bash"],
-        default: "cmd",
-        description: "命令解释器：cmd（默认，兼容旧命令）或 bash（需要用户已安装 Git Bash）",
+        enum: process.platform === "win32" ? ["cmd", "bash"] : ["bash"],
+        default: getDefaultShellKind(),
+        description: "命令解释器：Windows 默认 cmd，可选择 Git Bash；Linux/macOS 默认且仅支持系统 bash",
       },
       timeout_ms: {
         type: "number",

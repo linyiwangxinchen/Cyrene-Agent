@@ -43,6 +43,15 @@ describe("built-in-tools 注册快照", () => {
   it.each(BUILT_IN_TOOL_IDS)("模型可见字段快照：%s", (id) => {
     const tool = toolRegistry.getById(id);
     expect(tool, `工具 ${id} 应已注册`).toBeDefined();
+    const inputSchema = structuredClone(tool!.inputSchema) as { properties?: { shell?: { default?: string; enum?: string[] } } };
+    if (id === "run_shell") {
+      const shell = inputSchema.properties!.shell!;
+      expect(shell.default).toBe(process.platform === "win32" ? "cmd" : "bash");
+      expect(shell.enum).toEqual(process.platform === "win32" ? ["cmd", "bash"] : ["bash"]);
+      // 平台差异单独断言，稳定快照供 Windows 和 Linux 共用。
+      delete shell.default;
+      delete shell.enum;
+    }
     expect(
       JSON.stringify({
         id: tool!.id,
@@ -54,7 +63,7 @@ describe("built-in-tools 注册快照", () => {
         effectKind: tool!.effectKind,
         verificationPolicy: tool!.verificationPolicy,
         ledgerPolicy: tool!.ledgerPolicy,
-        inputSchema: tool!.inputSchema,
+        inputSchema,
       }),
     ).toMatchSnapshot();
   });

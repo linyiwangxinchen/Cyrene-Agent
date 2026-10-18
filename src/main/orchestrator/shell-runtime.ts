@@ -4,6 +4,10 @@ import path from "path";
 
 export type ShellKind = "cmd" | "bash";
 
+export function getDefaultShellKind(): ShellKind {
+  return process.platform === "win32" ? "cmd" : "bash";
+}
+
 export interface ResolvedShellExecutable {
   kind: ShellKind;
   executable: string;
@@ -29,7 +33,7 @@ export function buildDirectShellInvocation(
 
 export async function resolveShellExecutable(kind: ShellKind): Promise<ResolvedShellExecutable | null> {
   if (kind === "cmd") {
-    return { kind, executable: process.env.ComSpec || "cmd.exe" };
+    return process.platform === "win32" ? { kind, executable: process.env.ComSpec || "cmd.exe" } : null;
   }
 
   for (const candidate of collectBashCandidates()) {
@@ -40,22 +44,27 @@ export async function resolveShellExecutable(kind: ShellKind): Promise<ResolvedS
 }
 
 function collectBashCandidates(): string[] {
+  const windows = process.platform === "win32";
+  const paths = windows ? path.win32 : path.posix;
   const candidates: string[] = [];
-  for (const entry of (process.env.PATH ?? "").split(path.delimiter)) {
+  for (const entry of (process.env.PATH ?? "").split(paths.delimiter)) {
     const directory = entry.trim().replace(/^"|"$/g, "");
-    if (directory) candidates.push(path.join(directory, "bash.exe"));
+    if (directory && paths.isAbsolute(directory)) candidates.push(paths.join(directory, windows ? "bash.exe" : "bash"));
   }
+
+  if (!windows) candidates.push("/bin/bash", "/usr/bin/bash", "/usr/local/bin/bash");
 
   const programFiles = process.env.ProgramFiles;
   const programFilesX86 = process.env["ProgramFiles(x86)"];
   const localAppData = process.env.LOCALAPPDATA;
-  if (programFiles) candidates.push(path.join(programFiles, "Git", "bin", "bash.exe"));
-  if (programFilesX86) candidates.push(path.join(programFilesX86, "Git", "bin", "bash.exe"));
-  if (localAppData) candidates.push(path.join(localAppData, "Programs", "Git", "bin", "bash.exe"));
+  if (windows && programFiles) candidates.push(paths.join(programFiles, "Git", "bin", "bash.exe"));
+  if (windows && programFilesX86) candidates.push(paths.join(programFilesX86, "Git", "bin", "bash.exe"));
+  if (windows && localAppData) candidates.push(paths.join(localAppData, "Programs", "Git", "bin", "bash.exe"));
 
   const seen = new Set<string>();
   return candidates.filter((candidate) => {
-    const key = path.normalize(candidate).toLowerCase();
+    const normalized = paths.normalize(candidate);
+    const key = windows ? normalized.toLowerCase() : normalized;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
