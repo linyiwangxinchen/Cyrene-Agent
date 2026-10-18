@@ -12,6 +12,10 @@ import {
 import type { MaterializedTranscript } from "./conversation-transcript-context"
 import type { SocialAtom } from "../social-context/types"
 import type { ConversationMode } from "../../shared/chat-types"
+import { composePromptLayers } from "./prompt-layers"
+import { getAdapterForConfig, generateChatWithAiSdk, streamChatWithSdk } from "./vendors"
+import { jsonResponse, responseBody, sseResponse, streamEvents } from "./vendors/sdk-stream/model-fixtures"
+import type { ChatMessage } from "./vendors/types"
 
 function createBuildDeps(): BuildOptionsDeps {
   return {
@@ -701,7 +705,7 @@ describe("build-options", () => {
 
     const latestUser = result.options.messages.at(-1)
     expect(latestUser?.content).toBe(
-      "这张图报什么错？\n\n【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n- error.png：截图显示一个红色错误提示",
+      "这张图报什么错？\n\n【图片视觉信息】\n以下内容是视觉模型对这条用户消息所附图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n- error.png：截图显示一个红色错误提示",
     )
     expect(result.options.imageCaptionFallback).toBeUndefined()
   })
@@ -1064,6 +1068,7 @@ describe("本轮图片附件回归", () => {
   const tempDirs: string[] = []
 
   afterEach(() => {
+    vi.unstubAllGlobals()
     for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true })
     tempDirs.length = 0
   })
@@ -1094,6 +1099,156 @@ describe("本轮图片附件回归", () => {
   function imageBlocks(content: unknown) {
     return Array.isArray(content) ? content.filter((block) => block.type === "image_url") : []
   }
+
+  it.each([
+    { phase: "本轮附图", stream: false }, { phase: "本轮附图", stream: true },
+    { phase: "后续改图", stream: false }, { phase: "后续改图", stream: true },
+    { phase: "工具循环压缩后本轮附图", stream: false }, { phase: "工具循环压缩后本轮附图", stream: true },
+    { phase: "工具循环压缩后改图", stream: false }, { phase: "工具循环压缩后改图", stream: true },
+  ])("$phase 的实际 Responses 请求携带原图字节与绘图工具，stream=$stream", async ({ phase, stream }) => {
+    const { image, input } = createImageInput()
+    const originalBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jf1sAAAAASUVORK5CYII=", "base64")
+    fs.writeFileSync(image.filePath, originalBytes)
+    const originalMessage: ChatMessage = {
+      role: "user", content: "这是我拍的照片", userAttachments: [{ kind: "image", ...image }],
+    }
+    const followup: ChatMessage[] = [
+      originalMessage, { role: "assistant", content: "收到照片" },
+      { role: "user", content: "请基于原照片做蓝底证件照，保留同一个人的五官" },
+    ]
+    const deps = createBuildDeps()
+    deps.loadModelSettings = () => ({
+      provider: "ChatGPT", baseUrl: "https://proxy.test/v1", apiKey: "test-key", model: "gpt-test",
+      explicitTransport: "responses", imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" },
+    })
+    deps.captionImageForFallback = vi.fn(async () => ({ ok: true, caption: "只有文字描述" }))
+    const currentPhoto = phase.includes("本轮附图")
+    deps.buildModelContext = vi.fn(async () => ({
+      messages: structuredClone(currentPhoto ? [originalMessage] : followup), uncertainEffects: [], throughSeq: 3,
+    }))
+    deps.compactTranscript = vi.fn(async () => undefined)
+    const built = await buildAgentRunOptions(phase === "本轮附图" ? input : {
+      sessionId: "wechat-photo-followup", channel: "wechat",
+      currentUser: { turnId: "followup", text: "继续按原照制作", visibleContent: "继续按原照制作" },
+    }, deps)
+    const messages = phase.startsWith("工具循环压缩")
+      ? await built.options.compactTranscript!({ retainTokens: 20_000, transientMessages: [] })
+      : built.options.messages
+    const settings = built.options.settings
+    const sent: Array<{
+      input: Array<{ role?: string; content?: Array<{ type: string; image_url?: string }> }>
+      tools: Array<{ type: string; model?: string }>
+      stream?: boolean
+    }> = []
+    vi.stubGlobal("fetch", vi.fn(async (url, init) => {
+      sent.push(JSON.parse(await new Request(url, init).text()))
+      return stream ? sseResponse(streamEvents("responses")) : jsonResponse(responseBody("responses"))
+    }))
+    const request = {
+      model: settings.model,
+      messages: composePromptLayers({ stablePrefix: built.options.soulSystemBaseContent,
+        runtimeContext: built.options.soulRuntimeContext }, messages).messages,
+      imageGeneration: settings.imageGeneration,
+    }
+    const args = { adapter: getAdapterForConfig(settings), config: settings, request, timeoutMs: 2000 }
+    if (stream) await streamChatWithSdk(args)
+    else await generateChatWithAiSdk(args)
+
+    expect(sent).toHaveLength(1)
+    const users = sent[0].input.filter(item => item.role === "user")
+    const imageInputs = users.flatMap(item => item.content ?? []).filter(item => item.type === "input_image")
+    expect(imageInputs).toEqual([{ type: "input_image", image_url: `data:image/png;base64,${originalBytes.toString("base64")}` }])
+    expect(Buffer.from(imageInputs[0].image_url!.split(",")[1], "base64")).toEqual(originalBytes)
+    expect(users[0].content).toContainEqual(imageInputs[0])
+    if (!currentPhoto) expect(users.at(-1)?.content?.some(item => item.type === "input_image")).toBe(false)
+    expect(sent[0].tools).toContainEqual(expect.objectContaining({ type: "image_generation", model: "gpt-image-2.5-flare" }))
+    expect(deps.captionImageForFallback).not.toHaveBeenCalled()
+    expect(JSON.stringify(sent)).not.toContain("userAttachments")
+    expect(originalMessage.content).toBe("这是我拍的照片")
+  })
+
+  it.each(["caption", "reject", "missing", "removed"] as const)("压缩后 %s 不得复用旧图片或绕过视觉路由", async (route) => {
+    const { image, input } = createImageInput()
+    const deps = createBuildDeps()
+    if (route === "caption" || route === "reject") deps.loadModelSettings = () => ({
+      provider: "test", baseUrl: "https://example.test", model: "text-only", apiKey: "k", multimodal: false,
+      ...(route === "caption" ? { vision: { baseUrl: "https://vision.test", model: "vision", apiKey: "k" } } : {}),
+    })
+    deps.captionImageForFallback = vi.fn(async () => ({ ok: true, caption: "压缩后重新分析的照片" }))
+    deps.compactTranscript = vi.fn(async () => undefined)
+    deps.buildModelContext = vi.fn(async () => ({ messages: [
+      { role: "user", content: "原照片", userAttachments: route === "removed" ? [] : [{ kind: "image", ...image }] },
+    ], uncertainEffects: [], throughSeq: 3 }))
+    const built = await buildAgentRunOptions(input, deps)
+    if (route === "missing") fs.unlinkSync(image.filePath)
+    const messages = await built.options.compactTranscript!({ retainTokens: 20_000, transientMessages: [] })
+    expect(imageBlocks(messages[0].content)).toHaveLength(0)
+    const text = JSON.stringify(messages)
+    expect(text).not.toContain("data:image")
+    if (route === "caption") expect(text).toContain("压缩后重新分析的照片")
+    if (route === "reject") expect(text).toContain("【图片发送失败】")
+    if (route === "missing") expect(text).toContain("文件不存在")
+    if (route === "removed") expect(text).not.toContain(image.filePath.replaceAll("\\", "\\\\"))
+  })
+
+  it("后续文字请求仍携带原用户照片，直发和降级均保留原来的消息位置", async () => {
+    const { image } = createImageInput()
+    const messages = [
+      { role: "user", content: "这是原照片", userAttachments: [{ kind: "image", ...image }] },
+      { role: "assistant", content: "收到照片" },
+      { role: "user", content: "用刚刚的照片做证件照" },
+    ]
+    const deps = createBuildDeps()
+    deps.captionImageForFallback = vi.fn(async () => ({ ok: true, caption: "用户的原照片" }))
+    const result = await buildAgentRunOptions({ messages, sessionId: "followup-image" }, deps)
+    expect(imageBlocks(result.options.messages[0].content)).toHaveLength(1)
+    expect(imageBlocks(result.options.cleanMessages?.[0].content)).toHaveLength(1)
+    expect(imageBlocks(result.options.messages.at(-1)?.content)).toHaveLength(0)
+    expect(JSON.stringify(result.options.messages[0].content)).toContain(image.filePath.replaceAll("\\", "\\\\"))
+    const fallback = await result.options.imageCaptionFallback!()
+    expect(fallback[1].content).toContain("用户的原照片")
+    expect(JSON.stringify(fallback)).not.toContain("data:image")
+    // 装配请求不能污染权威历史，文件内容只在请求中按需读入。
+    expect(messages[0].content).toBe("这是原照片")
+  })
+
+  it("历史照片被删除时明确告知模型，不能悄悄丢图", async () => {
+    const { image } = createImageInput()
+    fs.unlinkSync(image.filePath)
+    const result = await buildAgentRunOptions({ messages: [
+      { role: "user", content: "照片", userAttachments: [{ kind: "image", ...image }] },
+      { role: "assistant", content: "收到" },
+      { role: "user", content: "继续编辑" },
+    ] }, createBuildDeps())
+    expect(JSON.stringify(result.options.messages[0].content)).toContain("文件不存在")
+    expect(imageBlocks(result.options.messages[0].content)).toHaveLength(0)
+  })
+
+  it("直接从 journal 重建当前轮时也能恢复图片，不依赖前端再次携带附件", async () => {
+    const { image } = createImageInput()
+    const deps = createBuildDeps()
+    deps.buildModelContext = async () => ({
+      messages: [{ role: "user", content: "编辑照片", userAttachments: [{ kind: "image", ...image }] }],
+      uncertainEffects: [], throughSeq: 1,
+    })
+    const result = await buildAgentRunOptions({
+      sessionId: "restored-image", currentUser: { turnId: "restored-user", text: "编辑照片", visibleContent: "编辑照片" },
+    }, deps)
+    expect(imageBlocks(result.options.messages.at(-1)?.content)).toHaveLength(1)
+    expect(imageBlocks(result.options.cleanMessages?.at(-1)?.content)).toHaveLength(1)
+  })
+
+  it("历史附件沿用当前模型的视觉路由，纯文本模型不能收到图片块", async () => {
+    const { image } = createImageInput()
+    const deps = createBuildDeps()
+    deps.loadModelSettings = () => ({ provider: "test", baseUrl: "https://example.test", model: "text-only", apiKey: "k", multimodal: false })
+    const result = await buildAgentRunOptions({ messages: [
+      { role: "user", content: "照片", userAttachments: [{ kind: "image", ...image }] },
+      { role: "user", content: "继续" },
+    ] }, deps)
+    expect(result.options.messages[0].content).toContain("【图片发送失败】")
+    expect(imageBlocks(result.options.messages[0].content)).toHaveLength(0)
+  })
 
   it.each([false, true])("本轮图片去重后直发，新旧字段同时存在=%s", async (withLegacy) => {
     const { input, image } = createImageInput()

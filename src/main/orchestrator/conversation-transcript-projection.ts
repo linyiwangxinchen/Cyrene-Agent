@@ -226,7 +226,13 @@ function materializeNodes(
   const sourceSeqs: number[] = [];
   for (const node of nodes) {
     if (node.kind === "user") {
-      messages.push({ role: "user", content: node.text });
+      const attachments = node.entry.kind === "user"
+        ? node.entry.payload.attachments
+        : node.entry.payload.replacementUser?.attachments;
+      messages.push({
+        role: "user", content: node.text,
+        ...(attachments?.length ? { userAttachments: structuredClone(attachments) } : {}),
+      });
       sourceSeqs.push(node.entry.seq);
       continue;
     }

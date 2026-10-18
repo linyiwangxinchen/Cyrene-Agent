@@ -80,6 +80,25 @@ function compactedFixture(): TranscriptEntry[] {
 }
 
 describe("conversation transcript projection", () => {
+  it("重建历史和编辑替换时保留 canonical 用户附件，撤回后不能重现旧图", () => {
+    nextSeq = 0;
+    const photo = user("u1", "原照片");
+    if (photo.kind !== "user") throw new Error("expected user fixture");
+    photo.payload.attachments = [{ kind: "image", name: "original.png", filePath: "/data/original.png" }];
+    const entries: TranscriptEntry[] = [photo, assistant("a1", "收到"), user("u2", "继续编辑")];
+    const context = buildFullModelContext(entries, noRuns);
+    expect(context.messages[0].userAttachments).toEqual(photo.payload.attachments);
+    context.messages[0].userAttachments![0].name = "mutated.png";
+    expect(photo.payload.attachments[0].name).toBe("original.png");
+    entries.push({ seq: ++nextSeq, id: "rewind-photo", at: 10, kind: "turn_rewind", turnId: "u1", revision: 2,
+      payload: { anchorUserTurnId: "u1", disposition: "replace_user", replacementUser: {
+        text: "换一张", attachments: [{ kind: "image", name: "new.png", filePath: "/data/new.png" }],
+      } } });
+    expect(buildFullModelContext(entries, noRuns).messages[0].userAttachments?.[0].filePath).toBe("/data/new.png");
+    entries.push(tombstone("u1"));
+    expect(buildFullModelContext(entries, noRuns).messages).toEqual([]);
+  });
+
   it("墓碑移除目标 user 及其尾部但不删除更早 UI 历史", () => {
     nextSeq = 0;
     const result = reduceTranscriptProjection([

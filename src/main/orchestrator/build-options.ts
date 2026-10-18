@@ -351,7 +351,9 @@ function withAttachmentPathReferences(
 
 /** 本轮图片优先；渠道等旧入口回退 imageAttachments，统一供四条视觉路径消费。 */
 function resolveImageAttachments(input: AguiRunInput): NonNullable<AguiRunInput["imageAttachments"]> {
-  const currentImages = input.currentUser?.attachments?.flatMap((attachment) => {
+  const userAttachments = input.currentUser?.attachments
+    ?? input.modelContext?.messages.filter((message) => message.role === "user").at(-1)?.userAttachments;
+  const currentImages = userAttachments?.flatMap((attachment) => {
     if (attachment.kind !== "image" || typeof attachment.filePath !== "string" || !attachment.filePath.trim()) return [];
     return [{ name: attachment.name, filePath: attachment.filePath, mime: attachment.mime }];
   }) ?? [];
@@ -365,6 +367,38 @@ function resolveImageAttachments(input: AguiRunInput): NonNullable<AguiRunInput[
     seen.add(key);
     return true;
   });
+}
+
+/** 历史图片仍属于原来的用户消息，不能挪到本轮或仅保留文件名。 */
+async function withHistoricalImageAttachments(
+  messages: ChatMessage[],
+  input: AguiRunInput,
+  deps: BuildOptionsDeps,
+  route: { mode: "direct" } | { mode: "caption" } | { mode: "reject"; reason: string },
+): Promise<ChatMessage[]> {
+  const latestUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+  const next = messages.slice();
+  for (let index = 0; index < latestUserIndex; index++) {
+    const message = messages[index];
+    if (message.role !== "user" || !message.userAttachments?.length) continue;
+    const historyInput: AguiRunInput = {
+      ...input,
+      modelContext: undefined,
+      currentUser: undefined,
+      imageAttachments: message.userAttachments.flatMap((attachment) =>
+        attachment.kind === "image" && attachment.filePath
+          ? [{ name: attachment.name, filePath: attachment.filePath, mime: attachment.mime }]
+          : []),
+    };
+    historyInput.imageAttachments = resolveImageAttachments(historyInput);
+    const hydrated = route.mode === "direct"
+      ? withDirectImageAttachments([message], historyInput)
+      : route.mode === "caption"
+        ? await withCaptionedImageAttachments([message], historyInput, deps)
+        : withImageRejectNotice([message], historyInput, route.reason);
+    next[index] = hydrated[0];
+  }
+  return next;
 }
 
 function withDirectImageAttachments(messages: ChatMessage[], input: AguiRunInput): ChatMessage[] {
@@ -439,7 +473,7 @@ async function withCaptionedImageAttachments(
     }
   }
 
-  const imageContext = "【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n" + imageLines.join("\n");
+  const imageContext = "【图片视觉信息】\n以下内容是视觉模型对这条用户消息所附图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n" + imageLines.join("\n");
   captionedMessages[latestUserIndex] = {
     ...current,
     content: text ? `${text}\n\n${imageContext}` : imageContext,
@@ -453,11 +487,17 @@ function buildImageCaptionFallbackMessages(
   input: AguiRunInput,
   deps: BuildOptionsDeps,
 ): (() => Promise<ChatMessage[]>) | undefined {
-  if (!input.imageAttachments?.length || !deps.captionImageForFallback) return undefined;
-  return async () => [
-    { role: "system", content: systemContent },
-    ...await withCaptionedImageAttachments(messages, input, deps),
-  ];
+  const hasHistoryImages = messages.some((message) => message.role === "user"
+    && message.userAttachments?.some((attachment) => attachment.kind === "image" && attachment.filePath));
+  if ((!input.imageAttachments?.length && !hasHistoryImages) || !deps.captionImageForFallback) return undefined;
+  return async () => {
+    // 使用原始文本上下文重新装配，不能把已直发的 base64 图片留在降级请求中。
+    const historical = await withHistoricalImageAttachments(messages, input, deps, { mode: "caption" });
+    return [
+      { role: "system", content: systemContent },
+      ...await withCaptionedImageAttachments(historical, input, deps),
+    ];
+  };
 }
 
 /**
@@ -609,13 +649,16 @@ export async function buildAgentRunOptions(
     ?? (input.currentUser
       ? [{ role: "user" as const, content: input.currentUser.text } as ChatMessage]
       : []);
-  const currentAttachments = input.currentUser?.attachments;
+  const latestUserIndex = transcriptMessages.map((message) => message.role).lastIndexOf("user");
+  const currentAttachments = input.currentUser?.attachments ?? transcriptMessages[latestUserIndex]?.userAttachments;
   const hasFileAttachments = Boolean(currentAttachments?.some((attachment) =>
     (attachment.kind === "image" || attachment.kind === "document")
     && typeof attachment.filePath === "string"
     && attachment.filePath.trim().length > 0,
   ));
-  const messages = withAttachmentPathReferences(transcriptMessages, currentAttachments);
+  const messages = transcriptMessages.map((message, index) => message.role === "user"
+    ? withAttachmentPathReferences([message], index === latestUserIndex ? currentAttachments : message.userAttachments)[0]
+    : message);
   if (messages.length === 0) {
     throw new Error("没有可发送的聊天内容。");
   }
@@ -1000,7 +1043,7 @@ export async function buildAgentRunOptions(
   const directVisionOk = imageRoute.mode === "direct";
   // [image-send] 链路日志①：直发判定。图片"传不过去"先看这条——
   // direct=false 时图片走 caption 降级/文本占位，根本不会以 image 块发给主模型。
-  const imageInput = { ...input, imageAttachments: resolveImageAttachments(input) };
+  const imageInput = { ...input, imageAttachments: resolveImageAttachments({ ...input, modelContext: transcriptContext }) };
   if (imageInput.imageAttachments?.length) {
     console.log("[image-send] 直发判定:", {
       provider: settings.provider,
@@ -1010,16 +1053,18 @@ export async function buildAgentRunOptions(
       结果: directVisionOk ? "直发 image 块" : imageRoute.mode === "caption" ? "降级（caption/文本占位）" : "拒绝（无可用视觉链路）",
     });
   }
+  const historicalMessages = await withHistoricalImageAttachments(llmMessages as unknown as ChatMessage[], imageInput, deps, imageRoute);
+  const historicalCleanMessages = await withHistoricalImageAttachments(cleanLlm as unknown as ChatMessage[], imageInput, deps, imageRoute);
   const fcMessages: ChatMessage[] = directVisionOk
-    ? withDirectImageAttachments(llmMessages as unknown as ChatMessage[], imageInput)
+    ? withDirectImageAttachments(historicalMessages, imageInput)
     : imageRoute.mode === "caption"
-      ? await withCaptionedImageAttachments(llmMessages as unknown as ChatMessage[], imageInput, deps)
-      : withImageRejectNotice(llmMessages as unknown as ChatMessage[], imageInput, imageRoute.reason);
+      ? await withCaptionedImageAttachments(historicalMessages, imageInput, deps)
+      : withImageRejectNotice(historicalMessages, imageInput, imageRoute.reason);
   const cleanFcMessages: ChatMessage[] = directVisionOk
-    ? withDirectImageAttachments(cleanLlm as unknown as ChatMessage[], imageInput)
+    ? withDirectImageAttachments(historicalCleanMessages, imageInput)
     : imageRoute.mode === "caption"
-      ? await withCaptionedImageAttachments(cleanLlm as unknown as ChatMessage[], imageInput, deps)
-      : withImageRejectNotice(cleanLlm as unknown as ChatMessage[], imageInput, imageRoute.reason);
+      ? await withCaptionedImageAttachments(historicalCleanMessages, imageInput, deps)
+      : withImageRejectNotice(historicalCleanMessages, imageInput, imageRoute.reason);
   const imageCaptionFallback = directVisionOk
     ? buildImageCaptionFallbackMessages(
         isChatMode
@@ -1069,7 +1114,22 @@ export async function buildAgentRunOptions(
             transientMessages,
             signal,
           });
-          return (await requireBuildModelContext(deps)(input.sessionId!, tailTokens)).messages;
+          const compactedContext = await requireBuildModelContext(deps)(input.sessionId!, tailTokens);
+          // journal 只保存附件引用。工具循环压缩后也要重新读图，不能把纯文本
+          // 历史直接交回 Harness，更不能复用压缩前的 currentUser / 旧附件。
+          const compactedInput: AguiRunInput = {
+            ...input, currentUser: undefined, imageAttachments: undefined, modelContext: compactedContext,
+          };
+          compactedInput.imageAttachments = resolveImageAttachments(compactedInput);
+          const compactedMessages = compactedContext.messages.map((message) => message.role === "user"
+            ? withAttachmentPathReferences([message], message.userAttachments)[0]
+            : message);
+          const historical = await withHistoricalImageAttachments(compactedMessages, compactedInput, deps, imageRoute);
+          return directVisionOk
+            ? withDirectImageAttachments(historical, compactedInput)
+            : imageRoute.mode === "caption"
+              ? await withCaptionedImageAttachments(historical, compactedInput, deps)
+              : withImageRejectNotice(historical, compactedInput, imageRoute.reason);
         },
       } : {}),
       executionMode,

@@ -9,6 +9,7 @@ import type { ProviderCapability, Transport } from "../../../shared/vendor-regis
 import type { AssistantContent } from "ai";
 import type { GeneratedImageOutput } from "../../../shared/generated-image";
 import type { GeneratedImageAttachment } from "../../../shared/generated-image";
+import type { PendingChatAttachment } from "../../../shared/chat-types";
 
 // 厂商能力系类型已迁入 shared/vendor-registry/types（厂商注册表的类型事实源）；
 // 此处 re-export 保持既有 import 路径（./types）不变，调用方零改动。
@@ -97,6 +98,8 @@ export interface ChatMessage {
   providerReplay?: ProviderReplay;
   /** 已落盘的模型生成图片引用；编码数据不得出现在此字段。 */
   attachments?: GeneratedImageAttachment[];
+  /** canonical 用户附件引用；请求装配按视觉路由读取，Adapter 不直接序列化本字段。 */
+  userAttachments?: PendingChatAttachment[];
   /** 仅供本地 transcript / UI 使用；Adapter 序列化时不得发送。 */
   visibility?: "user" | "internal";
   /** 仅供本地持久化和去重使用；Adapter 序列化时不得发送。 */
