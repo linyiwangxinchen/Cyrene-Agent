@@ -136,6 +136,37 @@ describe("channels/dispatcher", () => {
     expect(reloadLogFromDisk).not.toHaveBeenCalled();
   });
 
+  it.each([true, false])("生成图真正进入微信发送边界，发送成功=%s", async (ok) => {
+    const send = vi.fn(async () => ({ ok, error: ok ? undefined : "image upload failed" }));
+    const appendDeliveryReceipt = vi.fn(async () => undefined);
+    const dispatcher = makeDispatcher({
+      manager: makeManager(send),
+      journal: {
+        appendUser: vi.fn(async () => ({ id: "user-image" })),
+        appendPresentation: vi.fn(async () => undefined),
+        buildModelContext: vi.fn(async () => ({ messages: [], uncertainEffects: [], throughSeq: 0 })),
+        createRunSink: vi.fn(() => ({})),
+        appendDeliveryReceipt,
+      } as unknown as DispatcherDeps["journal"],
+      buildAndRunAgent: async () => ({
+        text: "已生成", sticker: null,
+        attachments: [{ id: "generated", kind: "image", source: "model", status: "done", byteLength: 8,
+          name: "portrait.png", mime: "image/png", filePath: "/data/generated/portrait.png" }],
+      }),
+    });
+    const result = await dispatcher.handleIncoming(makeIncoming({ channel: "wechat" }));
+    expect(send).toHaveBeenCalledWith(expect.objectContaining({
+      channel: "wechat",
+      parts: [{ kind: "text", text: "已生成" }, { kind: "image", filePath: "/data/generated/portrait.png" }],
+    }));
+    if (ok) expect(result?.parts).toHaveLength(2);
+    else expect(result).toBeNull();
+    expect(appendDeliveryReceipt).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({
+      status: ok ? "delivered" : "failed",
+      ...(ok ? {} : { errorCode: "image upload failed" }),
+    }));
+  });
+
   it("turn ID 回退源中的换行会被压成空格，保证 entry ID 合法", () => {
     // 附件/多行正文在缺少 messageId 时走时间+正文回退，换行必须被清洗
     const withNewlines = makeChannelTurnId({

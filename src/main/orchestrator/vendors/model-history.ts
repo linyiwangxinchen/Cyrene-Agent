@@ -137,7 +137,7 @@ export function projectModelHistory(
       const portable: AssistantPart[] = [];
       const generatedImages = (message.attachments ?? []).filter(attachment =>
         attachment.kind === "image" && attachment.source === "model");
-      const text = [contentText(message.content), ...generatedImages.map(image => `已生成图片：${image.name}`)]
+      const text = [contentText(message.content), ...generatedImages.map(image => `已生成图片：${image.name}（本机文件路径：${image.filePath}）`)]
         .filter(Boolean).join("\n");
       if (text) portable.push({ type: "text", text });
       for (const call of calls) {

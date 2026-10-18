@@ -20,6 +20,7 @@ import type { TranscriptSink } from "../orchestrator/transcript-sink";
 import type { ChannelsSettings } from "./settings-store";
 import { appendLog } from "./message-log";
 import type { MobileMessageSegmentationMode } from "../../shared/preferences";
+import type { GeneratedImageAttachment } from "../../shared/generated-image";
 import { rememberProactiveChannelRecipient } from "./proactive-delivery";
 import type { ChannelRateLimiter } from "./rate-limiter";
 import type { KeyedQueue } from "./keyed-queue";
@@ -106,7 +107,7 @@ export interface DispatcherDeps {
   readonly buildAndRunAgent: (
     msg: IncomingMessage,
     inputOrSessionId: ChannelAgentInput,
-  ) => Promise<{ text: string; sticker: string | null }>;
+  ) => Promise<{ text: string; sticker: string | null; attachments?: GeneratedImageAttachment[] }>;
   /** 延迟读取渠道设置，避免应用就绪前访问加密存储。 */
   readonly loadSettings: () => ChannelsSettings;
   /** 读取与渠道发送有关的通用设置。 */
@@ -253,7 +254,7 @@ export class ChannelDispatcher {
       assistantTurnId,
     });
 
-    let result: { text: string; sticker: string | null };
+    let result: Awaited<ReturnType<DispatcherDeps["buildAndRunAgent"]>>;
     try {
       result = await this.deps.buildAndRunAgent(msg, {
         sessionId: context.sessionId,
@@ -273,6 +274,7 @@ export class ChannelDispatcher {
       incoming: msg,
       replyText: result.text,
       sticker: result.sticker,
+      attachments: result.attachments,
       settings: {
         ttsEnabled: this.settings.ttsEnabled,
         stickerEnabled: this.settings.stickerEnabled,

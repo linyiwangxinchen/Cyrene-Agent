@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import type { GeneratedImageAttachment } from "../../shared/generated-image";
 import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
@@ -41,6 +42,8 @@ export interface ComposeOutgoingInput {
   incoming: IncomingMessage;
   replyText: string;
   sticker: string | null;
+  /** 会话中已持久化的生成图片；发送后仍供 Web/桌面历史读取，不得当临时文件删除。 */
+  attachments?: readonly GeneratedImageAttachment[];
   capability?: ChannelCapability;
   settings: {
     ttsEnabled: boolean;
@@ -184,6 +187,12 @@ export function createOutgoingComposer(
         input.replyText,
         input.mobileMessageSegmentation,
       );
+      const imagePaths = new Set<string>();
+      for (const attachment of input.attachments ?? []) {
+        if (attachment.status !== "done" || !attachment.filePath || imagePaths.has(attachment.filePath)) continue;
+        imagePaths.add(attachment.filePath);
+        parts.push({ kind: "image", filePath: attachment.filePath });
+      }
 
       if (shouldAppendChannelTtsAudio(
         input.incoming.channel,

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildTextOutgoingParts,
   createOutgoingComposer,
@@ -49,6 +49,25 @@ function makeIncoming(
 }
 
 describe("channels/outgoing-composer", () => {
+  it("将生成图和表情分别发送，清理临时文件时保留会话图片", async () => {
+    const removeFile = vi.fn(async () => undefined);
+    const composer = createOutgoingComposer({ removeFile, resolveStickerImagePath: () => "/stickers/ok.png" });
+    const image = { id: "portrait", kind: "image" as const, source: "model" as const, status: "done" as const,
+      name: "portrait.png", mime: "image/png", filePath: "/data/generated/portrait.png", byteLength: 8 };
+    const prepared = await composer.compose({
+      incoming: makeIncoming({ channel: "wechat" }), replyText: "做好了", sticker: "OK",
+      attachments: [image, image], capability: makeCapability(),
+      settings: { ttsEnabled: false, stickerEnabled: true },
+    });
+    expect(prepared.message.parts).toEqual([
+      { kind: "text", text: "做好了" },
+      { kind: "image", filePath: image.filePath },
+      { kind: "sticker", stickerId: "OK", imagePath: "/stickers/ok.png" },
+    ]);
+    await composer.cleanupTransientFiles(prepared.transientFiles);
+    expect(removeFile).not.toHaveBeenCalled();
+  });
+
   describe("文本分段", () => {
     it("关闭移动端分段时保留为一个文本片段", () => {
       expect(buildTextOutgoingParts("第一句。第二句？", "off")).toEqual([

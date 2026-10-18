@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { resolve as resolvePath } from "node:path";
+import type { CustomEvent } from "@ag-ui/core";
+import type { GeneratedImageAttachment } from "../../shared/generated-image";
 import { app, type BrowserWindow } from "electron";
 import type { IpcScope } from "../application/ipc-scope";
 import { IPC } from "../../shared/ipc-channels";
@@ -115,7 +118,10 @@ export function createChannelsSubsystem(
         runId: randomUUID(),
       }
       : input as ChannelAgentInput;
-    const channelResult: { text: string; sticker: string | null } = { text: "", sticker: null };
+    const channelResult: Awaited<ReturnType<DispatcherDeps["buildAndRunAgent"]>> = { text: "", sticker: null };
+    const generatedImages = new Map<string, GeneratedImageAttachment>();
+    const imageKey = (filePath: string) => process.platform === "win32"
+      ? resolvePath(filePath).toLowerCase() : resolvePath(filePath);
 
     const sandbox = loadChannelsSettings().toolSandbox;
     const policy = resolveChannelAgentPolicy(sandbox, {
@@ -197,6 +203,18 @@ export function createChannelsSubsystem(
     try {
       const reply = await new Promise<string>((resolve, reject) => {
         agent.runWithEvents(options).subscribe({
+          next: (event) => {
+            if (event.type !== "CUSTOM") return;
+            const custom = event as CustomEvent;
+            if (custom.name !== "cyrene.image_attachments") return;
+            const value = custom.value as { attachments?: GeneratedImageAttachment[] } | undefined;
+            for (const attachment of value?.attachments ?? []) {
+              if (attachment.kind === "image" && attachment.source === "model"
+                && attachment.status === "done" && attachment.filePath) {
+                generatedImages.set(imageKey(attachment.filePath), attachment);
+              }
+            }
+          },
           complete: () => {
             resolve(agent.lastResult?.reply ?? "");
           },
@@ -208,6 +226,14 @@ export function createChannelsSubsystem(
       // Observable 在超时终态下也会正常 complete；只有成功终态才能进入记忆、表情等成功收尾。
       const terminalStatus = agent.lastResult?.terminal?.status;
       if (agent.lastResult && (terminalStatus === undefined || terminalStatus === "success")) {
+        // 显式附件发送（包括失败/未确认）由工具报告结果，不能在轮次结束后自动重发。
+        for (const tool of agent.lastResult.toolResults) {
+          if (tool.toolId === "channel_send_file" && typeof tool.args.filePath === "string"
+            && (!tool.args.channel || tool.args.channel === msg.channel)) {
+            generatedImages.delete(imageKey(tool.args.filePath));
+          }
+        }
+        if (generatedImages.size > 0) channelResult.attachments = [...generatedImages.values()];
         const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, {
           source: "channel",
           mode,

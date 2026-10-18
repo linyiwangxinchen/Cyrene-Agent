@@ -361,7 +361,7 @@ describe("#167 模型执行历史互通", () => {
     expect(onDelta.mock.calls.flat().some(value => (value as any)?.name === "image_generation")).toBe(false);
   });
 
-  it("同来源历史只向模型说明已生成图片，不发送本地文件路径", () => {
+  it("生成图历史提供可供文件工具重新发送的路径，不重放图片编码数据", () => {
     const source = configs[1];
     const origin = modelMessageOrigin(getAdapterForConfig(source), source);
     const projected = projectModelHistory([{ role: "assistant", content: "好了", attachments: [{
@@ -370,6 +370,7 @@ describe("#167 模型执行历史互通", () => {
     }] }], origin);
 
     expect(JSON.stringify(projected)).toContain("已生成图片：generated-1.png");
-    expect(JSON.stringify(projected)).not.toContain("C:/private");
+    expect(JSON.stringify(projected)).toContain("本机文件路径：C:/private/generated-1.png");
+    expect(JSON.stringify(projected)).not.toContain("data:image");
   });
 });

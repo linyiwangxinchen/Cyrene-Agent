@@ -18,6 +18,8 @@ import { channelManager } from "../../channels/manager";
 import { ILinkBotAdapter } from "../../channels/adapters/wechat/ilink-bot-adapter";
 import { ILinkClient } from "../../channels/adapters/wechat/ilink-protocol-client";
 import { encryptAesEcb } from "../../channels/adapters/wechat/wechat-media-upload";
+import { createOutgoingComposer } from "../../channels/outgoing-composer";
+import { createChannelDeliveryService } from "../../channels/delivery-service";
 import type { ToolContext } from "./registry/tool-context";
 
 const ctx: ToolContext = { userQuery: "把报告微信发给我", permissionMode: "allow_all", channelContext: { channel: "wechat", targetId: "wx-user", chatType: "private", sessionId: "channel:wechat:test" } };
@@ -61,6 +63,26 @@ afterEach(async () => {
 });
 
 describe("channel_send_file with the real iLink upload and adapter", () => {
+  it("自动生成图经过出站组合、真实 iLink 加密上传及发送后仍保留 Web 附件", async () => {
+    const source = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const filePath = path.join(state.root, "generated-portrait.png");
+    await fs.writeFile(filePath, source);
+    const composer = createOutgoingComposer();
+    const prepared = await composer.compose({
+      incoming: { channel: "wechat", chatType: "private", chatId: "wx-user", senderId: "wx-user", text: "做证件照", at: new Date(0) },
+      replyText: "做好了", sticker: null, capability: adapter.capability,
+      attachments: [{ id: "generated-photo", kind: "image", source: "model", status: "done", byteLength: source.length,
+        name: "portrait.png", filePath, mime: "image/png" }],
+      settings: { ttsEnabled: false, stickerEnabled: false },
+    });
+    expect(await createChannelDeliveryService(channelManager).send(prepared.message)).toEqual({ ok: true });
+    expect(sent.some(message => message.item_list.some((item: any) => item.type === 2))).toBe(true);
+    const decipher = createDecipheriv("aes-128-ecb", Buffer.from(uploads[0].request.aeskey, "hex"), null);
+    expect(Buffer.concat([decipher.update(uploads[0].bytes), decipher.final()])).toEqual(source);
+    await composer.cleanupTransientFiles(prepared.transientFiles);
+    expect(await fs.readFile(filePath)).toEqual(source);
+  });
+
   it("registers the tool for Windows and headless shared core", () => {
     const registry = { register: vi.fn() };
     registerChannelFileTool(registry as any);

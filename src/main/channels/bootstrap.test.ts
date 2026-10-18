@@ -12,6 +12,7 @@ const channelMocks = vi.hoisted(() => ({
   buildAndRunAgent: undefined as ((...args: unknown[]) => Promise<unknown>) | undefined,
   dispatcherDeps: [] as Array<Record<string, any>>,
   agentError: undefined as Error | undefined,
+  agentEvents: [] as unknown[],
   agentResult: { reply: "渠道回复", toolResults: [] } as {
     reply: string;
     toolResults: unknown[];
@@ -89,7 +90,8 @@ vi.mock("../orchestrator/cyrene-agent", () => ({
     }
 
     runWithEvents() {
-      return { subscribe: ({ complete, error }: { complete: () => void; error: (err: Error) => void }) => {
+      return { subscribe: ({ next, complete, error }: { next?: (event: unknown) => void; complete: () => void; error: (err: Error) => void }) => {
+        for (const event of channelMocks.agentEvents) next?.(event);
         if (channelMocks.agentError) error(channelMocks.agentError);
         else complete();
       } };
@@ -149,6 +151,7 @@ function makeAgentRuntime(onRunFinished = vi.fn(async () => ({ sticker: null }))
 beforeEach(() => {
   vi.clearAllMocks();
   channelMocks.agentError = undefined;
+  channelMocks.agentEvents = [];
   channelMocks.agentResult = { reply: "渠道回复", toolResults: [] };
   channelMocks.dispatcherDeps.length = 0;
 });
@@ -381,7 +384,28 @@ describe("createChannelsSubsystem lifecycle", () => {
     expect(typeof finishedPayload.durationMs).toBe("number");
   });
 
+  it("渠道生成图片事件跨轮次去重后交给出站消息，不丢失 Web 已保存的附件", async () => {
+    const image = {
+      id: "image-1", kind: "image", source: "model", status: "done", byteLength: 8,
+      name: "portrait.png", mime: "image/png", filePath: "/data/generated/portrait.png",
+    };
+    const second = { ...image, id: "image-2", filePath: "/data/generated/second.png" };
+    channelMocks.agentEvents = [
+      { type: "CUSTOM", name: "cyrene.image_attachments", value: { attachments: [image] } },
+      { type: "CUSTOM", name: "cyrene.image_attachments", value: { attachments: [image, second] } },
+      { type: "CUSTOM", name: "other.event", value: { attachments: [{ ...image, filePath: "/unrelated.png" }] } },
+    ];
+    createChannelsSubsystem({ ...makeChannelsDeps(), agentRuntime: makeAgentRuntime() });
+    const result = await channelMocks.buildAndRunAgent!({
+      channel: "wechat", senderId: "user-1", at: new Date(0),
+    }, "channel-session");
+    expect(result).toMatchObject({ text: "渠道回复", attachments: [image, second] });
+  });
+
   it("渠道超时终态不进入成功收尾", async () => {
+    channelMocks.agentEvents = [{ type: "CUSTOM", name: "cyrene.image_attachments", value: { attachments: [{
+      id: "partial", kind: "image", source: "model", status: "done", filePath: "/data/partial.png",
+    }] } }];
     channelMocks.agentResult = {
       reply: "超时前的部分回复",
       toolResults: [],
@@ -410,6 +434,7 @@ describe("createChannelsSubsystem lifecycle", () => {
     }, "channel-session", []) as { text: string };
 
     expect(result.text).toBe("超时前的部分回复");
+    expect(result).not.toHaveProperty("attachments");
     expect(onRunFinished).not.toHaveBeenCalled();
 
     // 超时终态仍发布一次结束事件，状态与 agent 终态一致
@@ -420,6 +445,17 @@ describe("createChannelsSubsystem lifecycle", () => {
       status: "timeout",
       conversationId: "channel-session",
     });
+  });
+
+  it.each(["succeeded", "failed"])("显式发送过的生成文件不再自动发图，工具状态=%s", async (status) => {
+    const image = { id: "file-image", kind: "image", source: "model", status: "done", byteLength: 8,
+      name: "portrait.png", mime: "image/png", filePath: "/data/portrait.png" };
+    channelMocks.agentEvents = [{ type: "CUSTOM", name: "cyrene.image_attachments", value: { attachments: [image] } }];
+    channelMocks.agentResult.toolResults = [{ toolId: "channel_send_file", args: { filePath: image.filePath, kind: "file" }, status,
+      output: JSON.stringify({ success: status === "succeeded" }) }];
+    createChannelsSubsystem({ ...makeChannelsDeps(), agentRuntime: makeAgentRuntime() });
+    const result = await channelMocks.buildAndRunAgent!({ channel: "wechat", senderId: "user-1", at: new Date(0) }, "channel-session");
+    expect(result).not.toHaveProperty("attachments");
   });
 
   it("渠道执行失败时不进入成功收尾路径", async () => {
