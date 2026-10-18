@@ -74,6 +74,12 @@ describe("设置页文字层级契约", () => {
     expect(settingsCss).toMatch(/@media\s*\(min-width:\s*1024px\)[\s\S]*?\.cy-settings-content h1\s*\{[^}]*font-size:\s*30px;/);
   });
 
+  it("设置内容区覆盖工作区的隐藏溢出，保证 Windows 设置页可滚动", () => {
+    const contentRule = rule(".cy-settings-page .cy-settings-content");
+    expect(contentRule).toContain("overflow: auto;");
+    expect(contentRule).toContain("min-height: 0;");
+  });
+
   it("React 设置页的插件标题不覆盖轻字重层级", () => {
     const pluginCss = readFileSync(
       resolve(__dirname, "../features/settings/PluginSettingsPanel.css"),
