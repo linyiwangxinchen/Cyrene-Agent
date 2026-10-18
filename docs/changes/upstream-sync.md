@@ -4,7 +4,7 @@
 
 ## 修改清单和提交主题
 
-最近一次上游同步：[2026-10-17 集成与验收记录](upstream-integration-20261017.md)。集成分支为 `integrate/upstream-linux-web-20261017`，从共同基点 `11c235de` 合入上游 `8d905897` 的 22 个提交；修复 README 自动生成区冲突，并限制贡献者工作流只在上游运行，减少 fork 后续同步冲突。此前的 [2026-10-16 集成记录](upstream-integration-20261016.md)、[2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯后台任务收尾、压缩器适配和 SQLite 迁移。
+最近一次上游同步：[2026-10-18 集成与验收记录](upstream-integration-20261018.md)。集成分支为 `integrate/upstream-linux-web-20261018`，从共同基点 `8d905897` 合入上游 `13f61493` 的 37 个提交（v1.3.4）；本次三方合并无文本冲突，并补齐 Web 地址栏兼容、图片上下文与微信投递修复，新增只读同步预检和独立 Linux/Web CI。[2026-10-17 集成记录](upstream-integration-20261017.md)记录了 README 自动生成区冲突的处理；此前的 [2026-10-16 集成记录](upstream-integration-20261016.md)、[2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯后台任务收尾、压缩器适配和 SQLite 迁移。
 
 [linux-web-changes.md](linux-web-changes.md) 给出每一个新增/修改文件的作用。提交按 10 个主题组织，commit body 也逐文件描述用途：
 
@@ -43,7 +43,11 @@ Linux 适配独立分支可先基于这套基准执行 `git am ../cyrene-linux-p
 ## 同步上游新代码
 
 ```bash
+set -e
+git fetch origin --prune
 git fetch upstream --prune
+node scripts/verify/upstream-sync.mjs master upstream/master
+git branch backup/master-before-upstream-YYYYMMDD master
 git switch -c integrate/upstream-linux-web-YYYYMMDD master
 BASE=$(git merge-base master upstream/master)
 git rev-list --left-right --count master...upstream/master
@@ -63,6 +67,10 @@ corepack pnpm@10.33.0 exec vitest run
 git commit                         # 保留 merge commit 和冲突说明
 git push origin integrate/upstream-linux-web-YYYYMMDD
 ```
+
+日期分支名应替换为当次日期。预检脚本会拒绝未提交修改，显示共同祖先、两侧提交数、重叠文件及 `merge-tree` 预览结果，并检查 Windows/Linux/Web 关键入口和贡献者工作流的上游仓库限制。它不会 fetch、stash、恢复文件或修改分支、索引、工作树；Git 只会写入临时合并对象。需要 Git 2.38 及以上。退出码 `0` 表示可自动合并且入口保护通过，`2` 表示冲突，`3` 表示适配保护失败，`1` 表示前置检查失败。
+
+预检通过只表示没有文本/结构冲突；上游可能新增 Windows 专用 IPC，仍需检查 Web 对应实现。本次地址栏补全就是这样发现的差异。独立的 `.github/workflows/linux-web.yml` 在 `master`、`integrate/**` 推送及面向 `master` 的 PR 上运行 Ubuntu 类型、构建、渠道/图片测试和认证后的共享业务验收，不修改上游 Windows CI 文件。
 
 `pnpm@10.33.0` 必须显式调用：项目的 `pnpm.overrides` 与锁文件由该版本维护，pnpm 11 会提示忽略该字段并可能报告错误的 lockfile config mismatch。不要在合并验证时并行运行多个 pnpm 安装，否则 Windows 的 `node_modules` 符号链接可能出现 `EEXIST/EBUSY`。
 
@@ -87,6 +95,16 @@ GitHub 的“无法自动合并”来自两个分支在共同基点之后对同�
 3. 每次同步都保留独立的 `integrate/upstream-linux-web-YYYYMMDD` 分支和日期报告；验证成功后再快进或合并到 `master`，不要直接在正式运行目录解决冲突。
 4. 先用 `git merge-tree --write-tree master upstream/master` 预览冲突，再逐文件处理；禁止用 `git checkout upstream/master -- .` 覆盖整棵树。
 5. 每次同步必须同时做 Server/Renderer 类型检查、全量 Vitest、`build:web` 和共享核心/语音-MCP 验收；仅能编译或 GitHub 能合并不表示 Web 运行链路兼容。
+6. 版本号、release 配置、依赖和锁文件跟随上游；fork 的新脚本优先放独立文件，不为了挂一个命令反复修改 `package.json`。不要对全仓执行换行归一化，也不要用 `ours` 驱动跳过共享代码冲突。
+
+本地可开启 Git 的冲突解决记录，减少同一冲突反复手工处理；关闭自动暂存，复用结果仍需检查：
+
+```bash
+git config rerere.enabled true
+git config rerere.autoupdate false
+```
+
+构建后如只有已跟踪 `dist/renderer` 的行尾发生变化，按 Linux 更新教程的差异检查恢复这些构建改写后再预检；存在实际修改时应先保留审查。不要为通过预检删除运行数据或执行全仓 `reset --hard` / `clean`。
 
 特别检查新增上游 IPC 是否已经由平台宿主注册、preload 是否与 Web 桥一致，以及提示词、journal、权限策略、工具效果和渠道生命周期是否继续复用。Windows 版的构建/测试也要按上游要求完成；不得只因 Web 页面可见就判断适配完整。
 
