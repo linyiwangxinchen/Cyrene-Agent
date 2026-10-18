@@ -16,6 +16,7 @@ sudo "$(command -v node)" node_modules/playwright/cli.js install-deps chromium
 # Browser binaries must be readable by the systemd service account.
 export PLAYWRIGHT_BROWSERS_PATH="$(pwd -P)/.browsers"
 node node_modules/playwright/cli.js install chromium
+node "$(node -e 'const p=require("node:path");const r=require("node:module").createRequire(require.resolve("@playwright/mcp/package.json"));console.log(p.join(p.dirname(r.resolve("playwright/package.json")),"cli.js"))')" install chromium
 ```
 
 构建结果为 `dist/server/server/index.js`、`dist/headless/core.cjs`、知识库索引 worker、SQLite 数据库 worker、`dist/plugin-panel/` 和 `dist/renderer/`。运行时保留 `node_modules/`、`prompts/`、`skills/`、`resources/` 和可选的 `vendor/cyrene-skills/`，不能仅复制 HTML 或 `dist/server/`。Node 使用 24.x，系统需有 Git；Code 模式的语言服务器和 Skill 自身依赖按所用语言/技能安装。Chromium 和系统依赖的安装方式见 [Playwright 官方文档](https://playwright.dev/docs/browsers#install-system-dependencies)。
@@ -25,6 +26,8 @@ node node_modules/playwright/cli.js install chromium
 用户覆盖文件位于 `$CYRENE_DATA_DIR/prompts/`，按文件优先于随程序部署的版本。自定义表达风格位于 `$CYRENE_DATA_DIR/styles/custom/custom.md`；可选通用语气规则为 `$CYRENE_DATA_DIR/prompts/tone-rules.md`。这些文件使用 UTF-8。身份规则与风格分开，风格只改变表达方式；Work/Code 不注入 Chat 风格或风格采样参数。
 
 每轮模型请求读取已保存的用户资料、启用的 L0/L1/L2 记忆、关系线索及已有会话/工作区摘要；摘要、Wiki 和向量模式由原记忆调度器管理。`memoryMode=off` 会关闭记忆和关系线索注入及关系日志记录，用户资料仍用于语言和称呼设置。
+
+两条 Chromium 安装命令分别匹配 Web 浏览器面板和内置 Playwright MCP；两者的锁定版本可能不同。更新时都应执行，安装器会复用对应版本的缓存，不能只检查目录里是否存在任意 `chromium-*`。
 
 当前 Web 端不启动 Electron、Live2D 或桌面窗口；所有工作区路径指向服务端文件系统。浏览器只负责显示 UI 和发送操作请求。
 

@@ -51,6 +51,8 @@ dist/renderer/assets/
 sudo "$(command -v node)" node_modules/playwright/cli.js install-deps chromium
 export PLAYWRIGHT_BROWSERS_PATH="$(pwd -P)/.browsers"
 node node_modules/playwright/cli.js install chromium
+# 内置 MCP 锁定独立 Playwright 版本，也要安装其对应 Chromium。
+node "$(node -e 'const p=require("node:path");const r=require("node:module").createRequire(require.resolve("@playwright/mcp/package.json"));console.log(p.join(p.dirname(r.resolve("playwright/package.json")),"cli.js"))')" install chromium
 ```
 
 系统库安装命令使用当前 Node 的实际路径，避免 nvm 安装的 Node 不在 sudo 的 PATH 中。浏览器目录须能被服务账号读取。LSP、Python 库、uv/uvx、向量模型以及特定 Skill/MCP 的依赖按实际使用情况另装；项目不内置 Whisper 服务或所有语言工具链。
@@ -331,9 +333,9 @@ corepack pnpm@10.33.0 run check:server
 corepack pnpm@10.33.0 run check:renderer
 corepack pnpm@10.33.0 run build:web
 export PLAYWRIGHT_BROWSERS_PATH="$BROWSER_DIR"
-if ! compgen -G "$PLAYWRIGHT_BROWSERS_PATH/chromium-*" > /dev/null; then
-  corepack pnpm@10.33.0 exec playwright install chromium
-fi
+# 每次按锁定版本检查/安装；已有旧 chromium-* 不代表新版本可用。
+node node_modules/playwright/cli.js install chromium
+node "$(node -e 'const p=require("node:path");const r=require("node:module").createRequire(require.resolve("@playwright/mcp/package.json"));console.log(p.join(p.dirname(r.resolve("playwright/package.json")),"cli.js"))')" install chromium
 sudo systemctl daemon-reload
 sudo systemctl restart "$SERVICE"
 sudo systemctl status "$SERVICE" --no-pager -l
@@ -408,6 +410,8 @@ ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --prod --frozen-lockfile
 sudo "$(command -v node)" node_modules/playwright/cli.js install-deps chromium
 export PLAYWRIGHT_BROWSERS_PATH="$(pwd -P)/.browsers"
 node node_modules/playwright/cli.js install chromium
+# 内置 MCP 使用自己依赖的 Playwright，运行包同样需要此浏览器。
+node "$(node -e 'const p=require("node:path");const r=require("node:module").createRequire(require.resolve("@playwright/mcp/package.json"));console.log(p.join(p.dirname(r.resolve("playwright/package.json")),"cli.js"))')" install chromium
 ```
 
 随后在该运行包根目录按第 3 节前台启动，或第 4 节生成 systemd 配置；首次使用创建账号，升级则复用原数据目录。HTTPS 反向代理按第 4.3 节配置。异机编译包不需要重新执行 `check:server`、`check:renderer` 或 `build:web`。
