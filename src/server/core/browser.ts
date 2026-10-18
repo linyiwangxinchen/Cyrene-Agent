@@ -6,6 +6,8 @@ import { IPC } from "../../shared/ipc-channels";
 import type { BrowserPanelState, BrowserPanelTabState } from "../../shared/browser-panel-types";
 import { capturePlaywrightPageSnapshot, validatePlaywrightSnapshotTarget, startPlaywrightElementPicker, readPlaywrightElementPicker, cancelPlaywrightElementPicker, resetPlaywrightPageSnapshot, type RuntimeSnapshot } from "../../main/browser/playwright-page-snapshot";
 import { registerBrowserPageTools } from "../../main/browser/browser-page-tools";
+import { normalizeAddressInput } from "../../main/browser/address-input";
+import { navigationErrorCode, parseHttpUrl } from "../../main/browser/http-url";
 import { setBrowserPanelController } from "../../main/browser/browser-panel-runtime";
 import { registerExamPageSource } from "../../main/learn/exam-page-authority";
 import type { ExamPaperStore } from "../../main/learn/exam-paper-store";
@@ -85,8 +87,8 @@ export class HeadlessBrowser {
     this.tabs.push({ state, history: [], cursor: -1 }); this.activeTabId = state.id; this.publish(); return true;
   }
   async navigate(input: string, addHistory = true): Promise<{ ok: true } | { ok: false; error: "invalid_url" | "unsupported_protocol" | "unavailable" }> {
-    let url: URL; try { url = new URL(input); } catch { return { ok: false, error: "invalid_url" }; }
-    if (!["http:", "https:"].includes(url.protocol)) return { ok: false, error: "unsupported_protocol" };
+    const url = parseHttpUrl(input);
+    if (!url) return { ok: false, error: navigationErrorCode(input) };
     const tab = this.active(); if (tab.state.kind === "exam") this.newTab();
     const target = this.active(); target.state.loading = true; target.state.url = url.href; this.publish();
     try {
@@ -212,7 +214,7 @@ export function registerHeadlessBrowser(ipc: IpcScope, examStore: ExamPaperStore
       }
       return browser.getState();
     }], [IPC.BROWSER_PANEL_SET_BOUNDS, () => true],
-    [IPC.BROWSER_PANEL_NAVIGATE, (_e, url) => browser.navigate(url)], [IPC.BROWSER_PANEL_BACK, () => browser.moveHistory(-1)], [IPC.BROWSER_PANEL_FORWARD, () => browser.moveHistory(1)],
+    [IPC.BROWSER_PANEL_NAVIGATE, (_e, url) => browser.navigate(normalizeAddressInput(url))], [IPC.BROWSER_PANEL_BACK, () => browser.moveHistory(-1)], [IPC.BROWSER_PANEL_FORWARD, () => browser.moveHistory(1)],
     [IPC.BROWSER_PANEL_RELOAD, () => browser.reload()], [IPC.BROWSER_PANEL_STOP, () => browser.stop()], [IPC.BROWSER_PANEL_NEW_TAB, () => browser.newTab()], [IPC.BROWSER_PANEL_OPEN_IN_NEW_TAB, (_e, url) => browser.openInNewTab(url)],
     [IPC.BROWSER_PANEL_ACTIVATE_TAB, (_e, id) => browser.activateTab(id)], [IPC.BROWSER_PANEL_CLOSE_TAB, (_e, id) => browser.closeTab(id)],
     [IPC.BROWSER_PANEL_START_ELEMENT_PICKER, () => browser.startElementPicker()], [IPC.BROWSER_PANEL_CANCEL_ELEMENT_PICKER, () => browser.cancelElementPicker()], [IPC.BROWSER_PANEL_CLEAR_COOKIES, () => browser.clearCookies()],
