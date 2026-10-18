@@ -17,7 +17,6 @@ jobs:
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
       NODE_OPTIONS: --max-old-space-size=4096
-      PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/cyrene-browsers
     steps:
       - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
@@ -27,6 +26,8 @@ jobs:
         with:
           node-version: '24'
           cache: pnpm
+      - name: Configure browser cache
+        run: echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/cyrene-browsers" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       - name: Verify upstream preview preserves Git state
         run: node --test scripts/verify/upstream-sync.test.mjs
