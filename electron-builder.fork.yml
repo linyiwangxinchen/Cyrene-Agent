@@ -1,0 +1,9 @@
+# Fork releases use their own update feed; upstream configuration stays unchanged.
+extends: ./electron-builder.yml
+publish:
+  provider: github
+  owner: linyiwangxinchen
+  repo: Cyrene-Agent
+nsis:
+  artifactName: Cyrene-Windows-x64-Setup-${version}.${ext}
+afterPack: ./scripts/packaging/after-pack-fork.cjs

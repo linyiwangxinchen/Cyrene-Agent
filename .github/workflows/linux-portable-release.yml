@@ -1,0 +1,66 @@
+name: Build Linux portable
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64-portable:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+      NODE_OPTIONS: --max-old-space-size=4096
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.16.0'
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build shared Web runtime
+        run: |
+          pnpm run check:server
+          pnpm run check:renderer
+          pnpm run build:web
+      - name: Install browser system libraries
+        run: pnpm exec playwright install-deps chromium
+      - name: Assemble native Linux portable directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/package with spaces"
+          version=$(node -p 'require("./package.json").version')
+          bundle="$RUNNER_TEMP/package with spaces/Cyrene-Agent-${version}-linux-x64-portable"
+          echo "CYRENE_PORTABLE_BUNDLE=$bundle" >> "$GITHUB_ENV"
+          node scripts/packaging/create-linux-portable.mjs "$bundle"
+          file "$bundle/cyrene-web" "$bundle/runtime/node"
+          du -sh "$bundle" "$bundle/browsers" "$bundle/node_modules"
+      - name: Accept ELF launcher with isolated data and temporary port
+        run: '"$CYRENE_PORTABLE_BUNDLE/runtime/node" scripts/verify/linux-portable.mjs "$CYRENE_PORTABLE_BUNDLE"'
+      - name: Accept packaged core, SQLite workers, native indexing, shell and real MCP browser
+        run: |
+          cd "$CYRENE_PORTABLE_BUNDLE"
+          ./cyrene-web --node scripts/verify/shared-core-parity.mjs
+          ./cyrene-web --node scripts/verify/shared-core-voice-mcp.mjs
+      - name: Archive verified portable product and checksums
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/release-linux"
+          # These isolated fixture scripts/results are verification tools, not runtime requirements.
+          rm -rf "$CYRENE_PORTABLE_BUNDLE/scripts" "$CYRENE_PORTABLE_BUNDLE/docs/verification" "$CYRENE_PORTABLE_BUNDLE/.playwright-mcp"
+          name=$(basename "$CYRENE_PORTABLE_BUNDLE")
+          cp "$CYRENE_PORTABLE_BUNDLE/BUILD-INFO.json" "$GITHUB_WORKSPACE/release-linux/$name-BUILD-INFO.json"
+          cp "$CYRENE_PORTABLE_BUNDLE/PORTABLE-ACCEPTANCE.json" "$GITHUB_WORKSPACE/release-linux/$name-ACCEPTANCE.json"
+          tar -C "$(dirname "$CYRENE_PORTABLE_BUNDLE")" -czf "$GITHUB_WORKSPACE/release-linux/$name.tar.gz" "$name"
+          cd "$GITHUB_WORKSPACE/release-linux"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+          ls -lh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cyrene-linux-x64-portable
+          path: release-linux/*
+          if-no-files-found: error
+          compression-level: 0

@@ -5,8 +5,11 @@
 //   2. latest.yml 的 version 与 package.json 一致，path 指向同一安装器，sha512 存在
 //   3. 安装器同名 .blockmap（差分更新指纹表）存在且非空
 //   4. win-unpacked/resources 内截图辅助程序、mpv、MinGit、skills 快照齐全
-// 用法：node scripts/verify/installer-artifacts.mjs [--expect-version x.y.z]
+// 用法：node scripts/verify/installer-artifacts.mjs [--expect-version x.y.z] [--artifact-name filename.exe]
 //   --expect-version：标签构建时传入标签版本，校验「产物版本与标签一致」
+//   --artifact-name：验证 fork 构建配置生成的独立安装器名称
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
@@ -26,16 +29,17 @@ const projectRoot = path.resolve(scriptDir, "..", "..");
 const MIN_INSTALLER_BYTES = 20 * 1024 * 1024;
 
 export async function verifyInstallerArtifacts(options = {}) {
-  const { expectVersion } = options;
+  const { expectVersion, artifactName: artifactNameOverride } = options;
 
   const pkg = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
   const builderConfig = parseYaml(
     await readFile(path.join(projectRoot, "electron-builder.yml"), "utf8"),
   );
   const outputDir = path.join(projectRoot, builderConfig.directories?.output ?? "release");
-  const artifactName = (builderConfig.nsis?.artifactName ?? "Cyrene-Setup-${version}.${ext}")
+  const artifactName = (artifactNameOverride ?? builderConfig.nsis?.artifactName ?? "Cyrene-Setup-${version}.${ext}")
     .replace("${version}", pkg.version)
     .replace("${ext}", "exe");
+  if (path.basename(artifactName) !== artifactName) throw new Error("安装器名称不能包含目录");
 
   if (expectVersion && expectVersion !== pkg.version) {
     throw new Error(`标签版本 ${expectVersion} 与 package.json 版本 ${pkg.version} 不一致`);
@@ -58,6 +62,13 @@ export async function verifyInstallerArtifacts(options = {}) {
   }
   if (!latest.sha512 || typeof latest.sha512 !== "string") {
     throw new Error("latest.yml 缺少 sha512 校验值");
+  }
+  const hash = createHash("sha512");
+  for await (const chunk of createReadStream(installerPath)) hash.update(chunk);
+  const sha512 = hash.digest("base64");
+  const entry = latest.files?.find((file) => file.url === artifactName);
+  if (latest.sha512 !== sha512 || entry?.sha512 !== sha512 || entry?.size !== installerStat.size) {
+    throw new Error("latest.yml 的 sha512 或文件大小与实际安装器不一致");
   }
 
   // 3. 差分更新指纹表：electron-updater 差分下载依据，缺失时升级会静默回退全量下载
@@ -97,7 +108,9 @@ const isDirectRun =
 if (isDirectRun) {
   const expectIndex = process.argv.indexOf("--expect-version");
   const expectVersion = expectIndex !== -1 ? process.argv[expectIndex + 1] : undefined;
-  verifyInstallerArtifacts({ expectVersion })
+  const artifactIndex = process.argv.indexOf("--artifact-name");
+  const artifactName = artifactIndex !== -1 ? process.argv[artifactIndex + 1] : undefined;
+  verifyInstallerArtifacts({ expectVersion, artifactName })
     .then((result) => {
       console.log(
         `[installer] verified ${result.installerPath} (${result.installerSize} bytes) — v${result.version}`,
