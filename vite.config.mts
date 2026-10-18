@@ -50,7 +50,9 @@ function reactRendererCsp(isDev: boolean): string {
     "default-src 'self'",
     "script-src 'self'",
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-    "img-src 'self' data: blob: https:",
+    // local-sticker / moment-media 是贴图与动态配图的本地自定义协议，
+    // 必须显式放行，否则动态里 user_attachment 图片和贴图都会被 CSP 拦截
+    "img-src 'self' data: blob: https: local-sticker: moment-media:",
     "font-src 'self' data: https://fonts.gstatic.com",
     `connect-src ${connectSrc}`,
     "media-src 'self' data: blob: https:",

@@ -36,7 +36,7 @@ export interface OneBotListeningInfo {
 export function resolveOneBotListenHost(
   mode: QqListenMode,
   customHost?: string,
-  interfaces = networkInterfaces(),
+  interfaces?: ReturnType<typeof networkInterfaces>,
 ): { host: string; resolvedMode: QqListenMode } {
   if (mode === "loopback") return { host: "127.0.0.1", resolvedMode: "loopback" };
   if (mode === "custom") {
@@ -45,7 +45,11 @@ export function resolveOneBotListenHost(
     return { host, resolvedMode: "custom" };
   }
 
-  const wslAddress = Object.entries(interfaces)
+  // 网卡枚举（uv_interface_addresses）在受限环境（部分 Linux 容器/沙箱）会抛
+  // ERR_SYSTEM_ERROR，而 loopback/custom 不依赖网卡——枚举必须停留在只有
+  // wsl/auto 才会到达的位置，不能作为参数默认值提前求值（#218）。
+  const available = interfaces ?? networkInterfaces();
+  const wslAddress = Object.entries(available)
     .filter(([name]) => /wsl/i.test(name))
     .flatMap(([, addresses]) => addresses ?? [])
     .find((item) => item.family === "IPv4" && !item.internal)?.address;

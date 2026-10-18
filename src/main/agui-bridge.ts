@@ -172,7 +172,7 @@ export interface AguiRunInput {
    */
   sessionModelSettings?: import("./orchestrator/build-options").ModelSettingsLite;
   /** 桌面 edit / regenerate 的轨迹回退锚点（主进程写 turn_rewind；渲染端只传锚点元数据）。 */
-  transcriptRewind?: TranscriptRewindRequest;
+  transcriptRewind?: TranscriptRewindRequest & { expectedAssistantMessageId: string };
 }
 
 /** 调用方（index.ts）注入：把输入转成 agent 需要的 options（含 system prompt 拼接）。 */

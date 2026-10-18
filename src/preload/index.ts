@@ -178,7 +178,7 @@ const aguiApi = {
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
     recoveryContext?: string;
     takeoverFromRunId?: string;
-    transcriptRewind?: { anchorUserTurnId: string; disposition: "keep_user" | "replace_user" };
+    transcriptRewind?: { anchorUserTurnId: string; expectedAssistantMessageId: string; disposition: "keep_user" | "replace_user" };
   }) =>
     // 返回 AguiRunAck，渲染端可立即拿到 canonical runId。
     // ack.runId 与后续 RUN_STARTED.runId 强一致（由 bridge 注入 options.runId 保证）。

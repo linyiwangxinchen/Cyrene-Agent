@@ -27,6 +27,14 @@ export const GEMINI_REGISTRY = defineVendor({
   },
   models: [
     {
+      model: "gemini-4-argon",
+      recommendedFor: ["chat"],
+      note: "2026-09-30 发布的旗舰推理模型（Stable）；固定型号名，无日期后缀。",
+      unknownCapabilities: [
+        { feature: "sampling", transport: "openai", note: "官方文档未说明 temperature/top_p 取值约束；未加采样白名单即不注入采样参数。" },
+      ],
+    },
+    {
       model: "gemini-3.8-flash",
       recommendedFor: ["chat"],
       unknownCapabilities: [
@@ -65,6 +73,27 @@ export const GEMINI_REGISTRY = defineVendor({
     },
   ],
   shortName: "Gemini",
+  structuredOutputRules: [
+    // 官方模型页列出 Structured outputs 为已支持；OpenAI 兼容层文档以 response_format（parse）示例说明。
+    // 只覆盖已核实的完整型号名，其余 Gemini 型号仍走提示词 JSON 回退。
+    {
+      id: "gemini-4-argon-structured-output",
+      transport: "openai",
+      modelPattern: /^gemini-4-argon$/i,
+      tier: "A",
+      mode: "provider_json_schema",
+      verification: "official",
+      metadata: {
+        status: "supported",
+        evidence: {
+          kind: "official",
+          url: "https://ai.google.dev/gemini-api/docs/models/gemini-4-argon",
+          checkedAt: "2026-10-18",
+          transports: ["openai"],
+        },
+      },
+    },
+  ],
   reasoningRules: [
     // ── gemini（Google）──
     // 官方兼容文档：reasoning_effort 仅 low/medium/high 三档（映射 thinking_level）。
@@ -78,6 +107,25 @@ export const GEMINI_REGISTRY = defineVendor({
       supportsDisable: false,
     } },
     { modelPattern: /^gemini-2\.5-pro/i, modelInferencePattern: /^gemini-2\.5-pro/i, metadata: legacyMetadata("迁自 src/shared/vendor-registry/entries/gemini.ts"), capability: {
+      control: "effort",
+      supportedEfforts: ["low", "medium", "high"],
+      defaultEffort: "medium",
+      requestStyle: "openai-effort",
+      supportsDisable: false,
+    } },
+    // Gemini 4 Argon：thinking_level 仅 low/medium/high，默认 medium（思考文档与模型页）。
+    // 兼容层把 reasoning_effort:"minimal" 映射为 low；"none" 关闭思考只写明适用于 2.5，
+    // 思考文档也未给 Argon 列出 Off 档 → supportsDisable=false。
+    // 跨厂商推断：Vertex AI 等托管端点使用同一型号名。
+    { modelPattern: /^gemini-4-argon/i, modelInferencePattern: /^gemini-4-argon/i, metadata: {
+      status: "supported",
+      evidence: {
+        kind: "official",
+        url: "https://ai.google.dev/gemini-api/docs/openai",
+        checkedAt: "2026-10-18",
+        transports: ["openai"],
+      },
+    }, capability: {
       control: "effort",
       supportedEfforts: ["low", "medium", "high"],
       defaultEffort: "medium",

@@ -197,6 +197,8 @@ export function App() {
   const [neteasePlaylists, setNeteasePlaylists] = useState<Playlist[]>([]);
   const [cacheTracks, setCacheTracks] = useState<Track[]>([]);
   const [activePlaylistId, setActivePlaylistId] = useState("");
+  const playlistLoadSeq = useRef(0);
+  const [failedPlaylist, setFailedPlaylist] = useState<Playlist | null>(null);
   // 同步网易云歌单最新值给 onStateChanged 回调用，避免闭包陷阱导致重复拉取
   const neteasePlaylistsRef = useRef<Playlist[]>([]);
   const [searchResults, setSearchResults] = useState<Track[]>([]);
@@ -482,7 +484,6 @@ export function App() {
         setNeteasePlaylists(pls);
         neteasePlaylistsRef.current = pls;
         if (pls.length > 0 && !activePlaylistId) {
-          setActivePlaylistId(pls[0].id);
           // 自动加载第一个歌单的 tracks 作为初始 queue
           void loadPlaylistTracks(pls[0]);
         }
@@ -538,11 +539,22 @@ export function App() {
     });
   }, [activePlaylistId, cacheTracks]);
 
+  // ── 切歌单时模式随歌单类型切换 ──────────────────────────────
+  const applyModeForPlaylist = useCallback((playlistId: string) => {
+    const mode =
+      playlistId === LOCAL_CACHE_PLAYLIST_ID ? persistedCacheRef.current : persistedOnlineRef.current;
+    setState((s) => (s.playbackMode === mode ? s : { ...s, playbackMode: mode }));
+  }, []);
+
   const loadPlaylistTracks = useCallback(
     async (playlist: Playlist) => {
       if (!api) return;
+      const seq = ++playlistLoadSeq.current;
+      setFailedPlaylist(null);
       // 缓存歌单：tracks 已在内存（cacheTracks 快照），不调 API
       if (playlist.id === LOCAL_CACHE_PLAYLIST_ID) {
+        setActivePlaylistId(playlist.id);
+        applyModeForPlaylist(playlist.id);
         setState((s) => ({
           ...s,
           queue: playlist.tracks,
@@ -557,9 +569,12 @@ export function App() {
       }
       try {
         const r = await api.getPlaylistDetail(playlist.id);
+        if (seq !== playlistLoadSeq.current) return;
         if (r.ok && r.data) {
           const detail = r.data as BackendPlaylist;
           const tracks = (detail.tracks ?? []).map(normalizeTrack);
+          setActivePlaylistId(playlist.id);
+          applyModeForPlaylist(playlist.id);
           setState((s) => ({
             ...s,
             queue: tracks,
@@ -570,17 +585,23 @@ export function App() {
             isPlaying: false,
             error: undefined,
           }));
+        } else {
+          setFailedPlaylist(playlist);
         }
       } catch (err) {
+        if (seq !== playlistLoadSeq.current) return;
         console.warn("[music] getPlaylistDetail failed", err);
+        setFailedPlaylist(playlist);
       }
     },
-    [api],
+    [api, applyModeForPlaylist],
   );
 
   // ── 播放指定歌曲（本地 queue 管理 + IPC 派发） ──────────────
   const playTrack = useCallback(
     (track: Track) => {
+      // 新的主动播放操作优先于此前失败的歌单加载；后台播放事件不清除此提示。
+      setFailedPlaylist(null);
       endedRef.current = false;
       if (!track.visible) {
         patch({ error: `「${track.name}」暂时无法播放` });
@@ -642,13 +663,6 @@ export function App() {
     if (s.queue.length === 0) return -1;
     if (s.queueIndex <= 0) return s.playbackMode === "all" ? s.queue.length - 1 : 0;
     return s.queueIndex - 1;
-  }, []);
-
-  // ── 切歌单时模式随歌单类型切换 ──────────────────────────────
-  const applyModeForPlaylist = useCallback((playlistId: string) => {
-    const mode =
-      playlistId === LOCAL_CACHE_PLAYLIST_ID ? persistedCacheRef.current : persistedOnlineRef.current;
-    setState((s) => (s.playbackMode === mode ? s : { ...s, playbackMode: mode }));
   }, []);
 
   // ── actions（MusicPlayer 组件消费） ──────────────────────────
@@ -756,8 +770,6 @@ export function App() {
         });
       },
       loadPlaylist(playlist) {
-        applyModeForPlaylist(playlist.id);
-        setActivePlaylistId(playlist.id);
         void loadPlaylistTracks(playlist);
       },
       cycleMode() {
@@ -797,7 +809,7 @@ export function App() {
         void api.toggleFavorite(track.encryptedId, newFav).catch(() => { /* ignore */ });
       },
     }),
-    [api, state, patch, playTrack, computeNextIndex, computePrevIndex, loadPlaylistTracks, activePlaylistId, applyModeForPlaylist],
+    [api, state, patch, playTrack, computeNextIndex, computePrevIndex, loadPlaylistTracks, activePlaylistId],
   );
 
   // ── 搜索（250ms 防抖） ──────────────────────────────────────
@@ -908,6 +920,10 @@ export function App() {
       {kernelMissing && <MpvKernelWarning />}
       <MusicPlayer
         state={state}
+        playlistLoadError={failedPlaylist ? {
+          message: "歌单加载失败，请稍后重试",
+          onRetry: () => { void loadPlaylistTracks(failedPlaylist); },
+        } : undefined}
         actions={actions}
         playlists={playlists}
         activePlaylistId={activePlaylistId}

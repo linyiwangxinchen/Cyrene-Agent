@@ -180,6 +180,15 @@ async function execute(method: string, args: any[]): Promise<unknown> {
           const rewind = facts.transcriptRewind;
           const entries = database.entries(id);
           const projection = reduceTranscriptProjection(database.entries(id, true));
+          if (facts.mode === 'chat') {
+            const activeUser = projection.state?.nodes.slice().reverse().find(node => node.kind === 'user');
+            const [lastUser, lastAssistant] = projection.messages.slice(-2);
+            // 桌面 Chat 只允许回退末轮；展示补丁不构成冲突，校验与写入同事务提交。
+            if (!rewind.expectedAssistantMessageId || lastAssistant?.role !== 'model' || lastAssistant.compaction
+              || lastAssistant.id !== rewind.expectedAssistantMessageId || activeUser?.turnId !== rewind.anchorUserTurnId
+              || lastUser?.id !== activeUser?.messageId)
+              throw new ConversationStoreError('TRANSCRIPT_REWIND_STALE');
+          }
           if (!projection.state?.nodes.some(node => node.kind === 'user' && node.turnId === rewind.anchorUserTurnId))
             throw new ConversationStoreError('TRANSCRIPT_REWIND_ANCHOR_NOT_FOUND');
           if (!isUserTurnRewindableInModelView(entries, rewind.anchorUserTurnId))

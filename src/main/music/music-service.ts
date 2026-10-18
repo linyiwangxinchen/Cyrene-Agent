@@ -176,7 +176,7 @@ export class MusicService {
           return { state: "client_unavailable", resourceType: resource.kind, resourceId: "", errorCode: "E_MPV_NOT_STARTED" };
         }
         await this.mpv.load(resource.playUrl, "replace");
-        const track = resource.kind === "song" ? resource.track : resource.tracks[0];
+        const track = resource.kind === "song" ? resource.track : resource.selectedTrack;
         if (track) {
           this.currentPlayback = {
             encryptedId: track.id,

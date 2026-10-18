@@ -13,6 +13,74 @@ describe("conversation SQLite transactions", () => {
   beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'cyrene-sqlite-')); client = new ConversationDatabaseClient(root); });
   afterEach(async () => { await client.close(); fs.rmSync(root, { recursive: true, force: true }); });
   const user = (text = 'hello') => ({ id: 'user:u1:r1', kind: 'user', turnId: 'u1', revision: 1, at: 1, payload: { text } });
+  it.each(["keep_user", "replace_user"] as const)("rejects a stale %s without hiding a committed proactive message or reserving a run", async (disposition) => {
+    const session = await client.call<{ id: string }>('chats.createSession', { mode: 'chat', purpose: 'proactive-chat' });
+    const id = session.id;
+    await client.call('transcript.append', id, user());
+    await client.call('transcript.append', id, { id: 'answer-entry', kind: 'assistant', turnId: 'a1', at: 2, payload: { role: 'assistant', content: 'answer' } });
+    await client.call('chats.getSession', id); // 窗口快照的最后一轮为 u1 → a1。
+    await client.call('transcript.append', id, { id: 'proactive', kind: 'assistant', runId: 'proactive-intent-1', at: 3, payload: { role: 'assistant', content: 'keep proactive' } });
+    const before = await client.call('transcript.audit', id);
+    await expect(client.call('runs.admit', id, 'retry', {
+      mode: 'chat',
+      currentUser: { turnId: 'u1', text: disposition === 'replace_user' ? 'edited' : 'hello', visibleContent: 'fixture' },
+      transcriptRewind: { anchorUserTurnId: 'u1', expectedAssistantMessageId: 'a1', disposition },
+    }, 'retry-run')).rejects.toMatchObject({ code: 'TRANSCRIPT_REWIND_STALE' });
+    expect(await client.call('transcript.audit', id)).toEqual(before);
+    expect(withConversationDatabase(root, db => db.prepare('SELECT count(*) AS n FROM runs').get()?.n)).toBe(0);
+    expect(withConversationDatabase(root, db => db.prepare('SELECT count(*) AS n FROM conversation_requests').get()?.n)).toBe(0);
+    await client.close();
+    expect(await client.call('chats.getSession', id)).toMatchObject({ messages: expect.arrayContaining([expect.objectContaining({ content: 'keep proactive' })]) });
+    expect(await client.call('transcript.audit', id)).toEqual(before);
+  });
+
+  it.each((["chat", "work"] as const).flatMap(mode =>
+    (["keep_user", "replace_user"] as const).map(disposition => ({ mode, disposition })),
+  ))("rejects $mode $disposition when compaction commits after the renderer snapshot", async ({ mode, disposition }) => {
+    await client.call('transcript.append', 'c1', user());
+    await client.call('transcript.append', 'c1', { id: 'answer-entry', kind: 'assistant', turnId: 'a1', at: 2, payload: { role: 'assistant', content: 'answer' } });
+    const entries = await client.call<TranscriptEntry[]>('transcript.audit', 'c1');
+    await client.call('transcript.compaction', 'c1', { id: 'compact', kind: 'compaction_checkpoint', at: 3, payload: {
+      baseThroughSeq: 0, sourceThroughSeq: entries.at(-1)!.seq,
+      sourceDigest: createHash('sha256').update(JSON.stringify(entries)).digest('hex'),
+      replacement: { role: 'system', content: 'summary' }, trigger: 'manual',
+    } });
+    const before = await client.call('transcript.audit', 'c1');
+    await expect(client.call('runs.admit', 'c1', 'retry', {
+      mode, currentUser: { turnId: 'u1', text: 'hello', visibleContent: 'hello' },
+      transcriptRewind: { anchorUserTurnId: 'u1', expectedAssistantMessageId: 'a1', disposition },
+    }, 'retry-run')).rejects.toMatchObject({ code: mode === 'chat' ? 'TRANSCRIPT_REWIND_STALE' : 'TRANSCRIPT_REWIND_ACROSS_COMPACTION' });
+    expect(await client.call('transcript.audit', 'c1')).toEqual(before);
+    expect(withConversationDatabase(root, db => db.prepare('SELECT count(*) AS n FROM runs').get()?.n)).toBe(0);
+    expect(withConversationDatabase(root, db => db.prepare('SELECT count(*) AS n FROM conversation_requests').get()?.n)).toBe(0);
+  });
+
+  it.each(["keep_user", "replace_user"] as const)("accepts an unchanged %s after a TTS patch and replays its receipt idempotently", async (disposition) => {
+    await client.call('transcript.append', 'c1', user());
+    await client.call('transcript.append', 'c1', { id: 'answer-entry', kind: 'assistant', turnId: 'a1', at: 2, payload: { role: 'assistant', content: 'answer' } });
+    await client.call('transcript.presentation', 'c1', 'a1', 'tts:1', { ttsCacheKey: 'cache' }, 3);
+    const facts = { mode: 'chat', currentUser: { turnId: 'u1', text: 'hello', visibleContent: 'hello' }, transcriptRewind: { anchorUserTurnId: 'u1', expectedAssistantMessageId: 'a1', disposition } };
+    const receipt = await client.call('runs.admit', 'c1', 'retry', facts, 'retry-run');
+    expect(receipt).toMatchObject({ status: 'prepared', duplicate: false });
+    await client.call('runs.terminal', 'retry-run', 'completed');
+    await client.call('transcript.append', 'c1', { id: 'later-proactive', kind: 'assistant', at: 4, payload: { role: 'assistant', content: 'later' } });
+    expect(await client.call('runs.admit', 'c1', 'retry', facts, 'another-run')).toMatchObject({ runId: 'retry-run', duplicate: true });
+    expect((await client.call<TranscriptEntry[]>('transcript.audit', 'c1')).filter(entry => entry.kind === 'turn_rewind')).toHaveLength(1);
+  });
+
+  it.each(['missing-identity', 'wrong-assistant', 'new-user', 'replaced-answer'])("rejects rewind with %s", async (change) => {
+    await client.call('transcript.append', 'c1', user());
+    await client.call('transcript.append', 'c1', { id: 'answer-entry', kind: 'assistant', turnId: 'a1', at: 2, payload: { role: 'assistant', content: 'answer' } });
+    if (change === 'new-user') await client.call('transcript.append', 'c1', { ...user('next'), id: 'user:u2:r1', turnId: 'u2' });
+    if (change === 'replaced-answer') await client.call('transcript.append', 'c1', { id: 'new-answer', kind: 'assistant', turnId: 'a2', at: 3, payload: { role: 'assistant', content: 'new answer' } });
+    const before = await client.call('transcript.audit', 'c1');
+    await expect(client.call('runs.admit', 'c1', 'retry', {
+      mode: 'chat',
+      currentUser: { turnId: 'u1', text: 'hello', visibleContent: 'hello' },
+      transcriptRewind: { anchorUserTurnId: 'u1', disposition: 'keep_user', ...(change === 'missing-identity' ? {} : { expectedAssistantMessageId: change === 'wrong-assistant' ? 'wrong' : 'a1' }) },
+    }, 'retry-run')).rejects.toMatchObject({ code: 'TRANSCRIPT_REWIND_STALE' });
+    expect(await client.call('transcript.audit', 'c1')).toEqual(before);
+  });
   it("returns the original user after retry and restart", async () => {
     const first = await client.call('transcript.append', 'c1', user());
     expect(await client.call('transcript.append', 'c1', { ...user(), at: 10 })).toEqual(first);

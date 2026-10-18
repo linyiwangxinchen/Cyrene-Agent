@@ -534,6 +534,100 @@ describe("MusicService (M3 OpenAPI)", () => {
     expect(await s.getMySubscriptions("artists")).toEqual([]);
   });
 
+  it("loads later playlist pages through the real provider before playback", async () => {
+    const records = Array.from({ length: 61 }, (_, index) => ({
+      ...songRec(), id: (index + 1).toString(16).padStart(32, "0"), visible: index >= 30,
+    }));
+    mocks.getPlaylistDetail.mockResolvedValue({ id: "a".repeat(32), name: "list", trackCount: 61 });
+    mocks.getPlaylistSongs.mockImplementation((_id, limit, offset) => Promise.resolve(records.slice(offset, offset + limit)));
+    mocks.getSongDetail.mockResolvedValue({ name: "later song", playUrl: "https://example.test/later.mp3" });
+    const s = makeService();
+    await s.start();
+    (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
+
+    expect((await s.getPlaylistDetail("a".repeat(32))).tracks.map((track) => track.id)).toEqual(records.slice(30).map((record) => record.id));
+    mocks.getPlaylistSongs.mockClear();
+    expect((await s.playPlaylist("a".repeat(32))).state).toBe("dispatched");
+    expect(mocks.getPlaylistSongs.mock.calls.map((args) => args[2])).toEqual([0, 30, 60]);
+    expect(mocks.getSongDetail).toHaveBeenCalledWith(records[30].id);
+    expect(mpvMocks.load).toHaveBeenCalledWith("https://example.test/later.mp3", "replace");
+  });
+
+  it.each([[false, false], [true, false], [false, true], [true, true]])("playlist playback preserves cache identity across restart (first cached: %s, selected cached: %s)", async (firstCached, selectedCached) => {
+    const { CacheDownloader } = await vi.importActual<typeof import("./cache-downloader")>("./cache-downloader");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "playlist-identity-"));
+    const downloader = new CacheDownloader(dir);
+    const fetchMock = vi.fn(async (url: string) => new Response(url.endsWith("first.mp3") ? "first audio" : "selected audio"));
+    vi.stubGlobal("fetch", fetchMock);
+    const s = makeService();
+    try {
+      await downloader.initialize();
+      if (firstCached) {
+        await downloader.download({ id: ENC, name: "first", artists: ["first artist"] }, "https://example.test/first.mp3");
+      }
+      if (selectedCached) {
+        await downloader.download({ id: ENC2, name: "selected", artists: ["selected artist"] }, "https://example.test/selected.mp3");
+      }
+      fetchMock.mockClear();
+      const download = vi.spyOn(downloader, "download");
+      (s as unknown as { cacheDownloader: typeof downloader }).cacheDownloader = downloader;
+      mocks.getPlaylistSongs.mockResolvedValue([
+        songRec({ name: "first" }),
+        songRec({ id: ENC2, name: "selected", artists: [{ name: "selected artist" }], coverImgUrl: "https://example.test/selected.jpg" }),
+      ]);
+      mocks.getSongDetail.mockImplementation(async (id: string) => ({
+        playUrl: id === ENC2 ? "https://example.test/selected.mp3" : "",
+      }));
+      await s.start();
+
+      expect((await s.playPlaylist("playlist")).state).toBe("dispatched");
+      expect(mpvMocks.load).toHaveBeenCalledWith("https://example.test/selected.mp3", "replace");
+      expect(mpvMocks.setTrack).toHaveBeenCalledWith(expect.objectContaining({
+        encryptedId: ENC2, name: "selected", artists: ["selected artist"], coverUrl: "https://example.test/selected.jpg",
+      }));
+      expect((s as unknown as { currentPlayback: unknown }).currentPlayback).toMatchObject({
+        encryptedId: ENC2, name: "selected", artists: ["selected artist"], coverUrl: "https://example.test/selected.jpg",
+      });
+      expect(download).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ id: ENC2, name: "selected" }), "https://example.test/selected.mp3");
+      await downloader.getDownloadPromise(ENC2);
+      if (selectedCached) expect(fetchMock).not.toHaveBeenCalled();
+      else expect(fetchMock).toHaveBeenCalledExactlyOnceWith("https://example.test/selected.mp3");
+
+      const reopened = new CacheDownloader(dir);
+      await reopened.initialize();
+      expect(reopened.getTrack(ENC2)).toMatchObject({ encryptedId: ENC2, name: "selected", artists: ["selected artist"], fileName: `${ENC2}.mp3` });
+      expect(await fs.readFile(reopened.getFilePath(ENC2)!, "utf8")).toBe("selected audio");
+      expect(reopened.isCached(ENC)).toBe(firstCached);
+      if (firstCached) {
+        expect(reopened.getTrack(ENC)?.name).toBe("first");
+        expect(await fs.readFile(reopened.getFilePath(ENC)!, "utf8")).toBe("first audio");
+      }
+    } finally {
+      await Promise.all([downloader.getDownloadPromise(ENC), downloader.getDownloadPromise(ENC2)]);
+      await s.shutdown();
+      vi.unstubAllGlobals();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("playlist load failure does not publish metadata or cache the selected song", async () => {
+    const s = makeService();
+    mocks.getPlaylistSongs.mockResolvedValue([songRec(), songRec({ id: ENC2 })]);
+    mocks.getSongDetail.mockImplementation(async (id: string) => ({
+      playUrl: id === ENC2 ? "https://example.test/selected.mp3" : "",
+    }));
+    await s.start();
+    const downloader = (s as unknown as { cacheDownloader: { download: ReturnType<typeof vi.fn> } }).cacheDownloader;
+    mpvMocks.load.mockRejectedValueOnce(new Error("load failed"));
+    try {
+      await expect(s.playPlaylist("playlist")).rejects.toThrow("load failed");
+      expect(mpvMocks.setTrack).not.toHaveBeenCalled();
+      expect(downloader.download).not.toHaveBeenCalled();
+    } finally {
+      await s.shutdown();
+    }
+  });
+
   it("removeFromPlaylist delegates to provider and validates input", async () => {
     mocks.removeSongsFromPlaylist.mockResolvedValue({ count: 1 });
     const s = makeService();

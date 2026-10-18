@@ -96,7 +96,7 @@ export function normalizePlaylistDetail(
     trackCount: base?.trackCount ?? 0,
     creator: base?.creator,
     description: typeof pl?.describe === "string" ? pl.describe : undefined,
-    tracks: normalizeSongRecords(tracks),
+    tracks: normalizeSongRecords(tracks, tracks.length),
   };
 }
 

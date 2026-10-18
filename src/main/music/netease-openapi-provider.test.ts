@@ -91,6 +91,50 @@ describe("NeteaseOpenapiProvider", () => {
     );
   });
 
+  it.each([0, 1, 2])("playPlaylist: binds the URL to playable track %i without reordering the queue", async (selected) => {
+    const c = makeClient();
+    const records = [ENC, ENC2, "C".repeat(32)].map((id, index) => ({
+      ...songRec, id, name: `song ${index}`,
+    }));
+    c.getPlaylistSongs.mockResolvedValue(records);
+    c.getSongDetail.mockImplementation(async (id: string) => ({
+      playUrl: id === records[selected].id ? "https://example.test/selected.mp3" : "",
+    }));
+    const dispatch = vi.fn().mockResolvedValue({ state: "dispatched" });
+    const p = new NeteaseOpenapiProvider(c as unknown as NeteaseOpenapiClient, dispatch);
+
+    await p.playPlaylist("pl");
+
+    expect(c.getSongDetail.mock.calls.map(([id]) => id)).toEqual(records.slice(0, selected + 1).map(({ id }) => id));
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({
+      kind: "playlist",
+      playUrl: "https://example.test/selected.mp3",
+      selectedTrack: expect.objectContaining({ id: records[selected].id, name: records[selected].name }),
+      tracks: records.map(({ id }) => expect.objectContaining({ id })),
+    });
+  });
+
+  it("playPlaylist: no playable URL never dispatches", async () => {
+    const c = makeClient();
+    c.getPlaylistSongs.mockResolvedValue([songRec, { ...songRec, id: ENC2 }]);
+    c.getSongDetail.mockResolvedValue({ playUrl: "" });
+    const dispatch = vi.fn();
+    const p = new NeteaseOpenapiProvider(c as unknown as NeteaseOpenapiClient, dispatch);
+    await expect(p.playPlaylist("pl")).rejects.toThrow("E_PLAYLIST_NOT_PLAYABLE");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("playPlaylist: URL lookup failure never dispatches a mismatched fallback", async () => {
+    const c = makeClient();
+    c.getPlaylistSongs.mockResolvedValue([songRec, { ...songRec, id: ENC2 }]);
+    c.getSongDetail.mockResolvedValueOnce({ playUrl: "" }).mockRejectedValueOnce(new Error("detail unavailable"));
+    const dispatch = vi.fn();
+    const p = new NeteaseOpenapiProvider(c as unknown as NeteaseOpenapiClient, dispatch);
+    await expect(p.playPlaylist("pl")).rejects.toThrow("detail unavailable");
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("playPlaylist: empty playlist → E_PLAYLIST_EMPTY", async () => {
     const c = makeClient();
     c.getPlaylistSongs.mockResolvedValue([]);
@@ -154,5 +198,145 @@ describe("NeteaseOpenapiProvider", () => {
     const dispatch = vi.fn().mockResolvedValue({ state: "launch_failed", resourceType: "song", resourceId: ENC } as PlaybackDispatchResult);
     const p = new NeteaseOpenapiProvider(c as unknown as NeteaseOpenapiClient, dispatch);
     expect((await p.playTrack(ENC)).state).toBe("launch_failed");
+  });
+});
+
+describe("playlist song pagination", () => {
+  const songs = (count: number) => Array.from({ length: count }, (_, i) => ({
+    ...songRec, id: (i + 1).toString(16).padStart(32, "0"), name: `song ${i + 1}`, visible: true,
+  }));
+  function setup(records: ReturnType<typeof songs>) {
+    const client = makeClient();
+    client.getPlaylistDetail.mockResolvedValue({ id: "playlist", name: "list", trackCount: records.length });
+    client.getPlaylistSongs.mockImplementation((_id, limit, offset) => Promise.resolve(records.slice(offset, offset + limit)));
+    client.getSongDetail.mockResolvedValue({ playUrl: "https://example.test/song.mp3" });
+    const dispatch = vi.fn().mockResolvedValue({ state: "dispatched", resourceType: "playlist" });
+    return { client, dispatch, provider: new NeteaseOpenapiProvider(client as unknown as NeteaseOpenapiClient, dispatch) };
+  }
+
+  it.each([0, 20, 30, 60, 100])("loads all %i songs including exact page boundaries", async (count) => {
+    const { client, provider } = setup(songs(count));
+    const detail = await provider.getPlaylistDetail("playlist");
+    expect(detail.tracks.map((t) => t.id)).toEqual(songs(count).map((s) => s.id));
+    expect(client.getPlaylistSongs.mock.calls).toEqual(
+      Array.from({ length: Math.floor(count / 30) + 1 }, (_, page) => ["playlist", 30, page * 30]),
+    );
+  });
+
+  it.each([0, 3, 30])("keeps later playable songs when only %i songs on the first page are visible", async (visible) => {
+    const records = songs(100).map((song, i) => ({ ...song, visible: i >= 30 || i < visible }));
+    const { client, dispatch, provider } = setup(records);
+    const detail = await provider.getPlaylistDetail("playlist");
+    expect(detail.tracks).toHaveLength(70 + visible);
+    client.getPlaylistSongs.mockClear();
+    await provider.playPlaylist("playlist");
+    expect(dispatch).toHaveBeenCalledWith({ kind: "playlist", playUrl: "https://example.test/song.mp3", tracks: detail.tracks, selectedTrack: detail.tracks[0] });
+    expect(client.getPlaylistSongs.mock.calls.map((args) => args[2])).toEqual([0, 30, 60, 90]);
+    expect(client.getSongDetail).toHaveBeenCalledWith(detail.tracks[0].id);
+  });
+
+  it("does not use filtered length or missing ids to advance pagination", async () => {
+    const records = songs(61).map((song, i) => ({ ...song, id: i < 30 ? "" : song.id }));
+    const { client, provider } = setup(records);
+    expect((await provider.getPlaylistDetail("playlist")).tracks).toHaveLength(31);
+    expect(client.getPlaylistSongs.mock.calls.map((args) => args[2])).toEqual([0, 30, 60]);
+  });
+
+  it.each(["", undefined])("loads later valid songs after two full pages with missing encrypted IDs (%s)", async (id) => {
+    const records = songs(61).map((song, i) => ({ ...song, originalId: i + 1, id: i < 60 ? id : song.id }));
+    const { client, dispatch, provider } = setup([]);
+    client.getPlaylistSongs.mockImplementation((_id, limit, offset) => Promise.resolve(records.slice(offset, offset + limit)));
+    const detail = await provider.getPlaylistDetail("playlist");
+    expect(detail.tracks.map((track) => track.id)).toEqual([records[60].id]);
+    expect(client.getPlaylistSongs.mock.calls.map((args) => args[2])).toEqual([0, 30, 60]);
+    await provider.playPlaylist("playlist");
+    expect(dispatch).toHaveBeenCalledWith({ kind: "playlist", playUrl: "https://example.test/song.mp3", tracks: detail.tracks, selectedTrack: detail.tracks[0] });
+  });
+
+  it("does not treat pages without reliable identities as proof of a repeated page", async () => {
+    const records = songs(61).map((song, i) => i < 60 ? { ...song, id: "", originalId: 0 } : song);
+    const { client, provider } = setup(records);
+    expect((await provider.getPlaylistDetail("playlist")).tracks).toHaveLength(1);
+    expect(client.getPlaylistSongs.mock.calls.map((args) => args[2])).toEqual([0, 30, 60]);
+  });
+
+  it("still rejects repeated pages identified by original IDs", async () => {
+    const { client, provider } = setup([]);
+    client.getPlaylistSongs.mockResolvedValue(songs(30).map((song, i) => ({ ...song, id: "", originalId: i + 1 })));
+    await expect(provider.getPlaylistDetail("playlist")).rejects.toThrow("repeated page");
+    expect(client.getPlaylistSongs).toHaveBeenCalledTimes(2);
+  });
+
+  it("bounds pages without reliable identities when the endpoint never terminates", async () => {
+    const { client, provider } = setup([]);
+    client.getPlaylistSongs.mockResolvedValue(songs(30).map((song) => ({ ...song, id: "", originalId: 0 })));
+    await expect(provider.getPlaylistDetail("playlist")).rejects.toThrow("pagination limit reached");
+    expect(client.getPlaylistSongs).toHaveBeenCalledTimes(1000);
+  });
+
+  it.each([undefined, 0, 1, 999])("does not trust stale playlist trackCount %s as a pagination boundary", async (trackCount) => {
+    const { client, provider } = setup(songs(61));
+    client.getPlaylistDetail.mockResolvedValue({ id: "playlist", trackCount });
+    expect((await provider.getPlaylistDetail("playlist")).tracks).toHaveLength(61);
+  });
+
+  it("fully checks invisible playlists before reporting empty playback", async () => {
+    const { client, dispatch, provider } = setup(songs(61).map((song) => ({ ...song, visible: false })));
+    await expect(provider.playPlaylist("playlist")).rejects.toThrow("E_PLAYLIST_EMPTY");
+    expect(client.getPlaylistSongs).toHaveBeenCalledTimes(3);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each(["getPlaylistDetail", "playPlaylist"] as const)("%s propagates later page failure without dispatching a partial queue", async (method) => {
+    const { client, dispatch, provider } = setup(songs(61));
+    client.getPlaylistSongs.mockReset().mockResolvedValueOnce(songs(30)).mockRejectedValueOnce(new Error("page unavailable"));
+    await expect(provider[method]("playlist")).rejects.toThrow("page unavailable");
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(client.getSongDetail).not.toHaveBeenCalled();
+  });
+
+  it("rejects repeated pages instead of returning duplicate partial results", async () => {
+    const { client, dispatch, provider } = setup(songs(60));
+    client.getPlaylistSongs.mockResolvedValue(songs(30));
+    await expect(provider.playPlaylist("playlist")).rejects.toThrow("E_PLAYLIST_LOAD_INCOMPLETE");
+    expect(client.getPlaylistSongs).toHaveBeenCalledTimes(2);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed pages rather than treating them as an empty playlist", async () => {
+    const { client, provider } = setup([]);
+    client.getPlaylistSongs.mockResolvedValue(undefined);
+    await expect(provider.getPlaylistDetail("playlist")).rejects.toThrow("E_PLAYLIST_LOAD_INCOMPLETE");
+  });
+
+  it("bounds non-terminating pagination with an explicit failure", async () => {
+    const { client, dispatch, provider } = setup([]);
+    client.getPlaylistSongs.mockImplementation((_id, _limit, offset) => Promise.resolve(songs(30).map((song) => ({ ...song, id: `${offset}-${song.id}` }))));
+    await expect(provider.playPlaylist("playlist")).rejects.toThrow("pagination limit reached");
+    expect(client.getPlaylistSongs).toHaveBeenCalledTimes(1000);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("preserves the search and daily recommendation limit", async () => {
+    const { client, provider } = setup([]);
+    client.searchSongs.mockResolvedValue({ records: songs(100) });
+    client.getDailyRecommendations.mockResolvedValue(songs(100));
+    expect(await provider.searchTracks("songs")).toHaveLength(30);
+    expect(await provider.getDailyRecommendations()).toHaveLength(30);
+  });
+});
+
+describe("concurrent playlist loading", () => {
+  it("keeps offsets and repeat detection local to each request", async () => {
+    const client = makeClient();
+    const records = Array.from({ length: 31 }, (_, i) => ({ ...songRec, id: String(i) }));
+    client.getPlaylistDetail.mockImplementation(async (id) => ({ id }));
+    client.getPlaylistSongs.mockImplementation(async (_id, limit, offset) => records.slice(offset, offset + limit));
+    const provider = new NeteaseOpenapiProvider(client as unknown as NeteaseOpenapiClient);
+    const results = await Promise.all([provider.getPlaylistDetail("a"), provider.getPlaylistDetail("b")]);
+    expect(results.map((result) => result.tracks.length)).toEqual([31, 31]);
+    for (const id of ["a", "b"]) {
+      expect(client.getPlaylistSongs.mock.calls.filter((args) => args[0] === id).map((args) => args[2])).toEqual([0, 30]);
+    }
   });
 });

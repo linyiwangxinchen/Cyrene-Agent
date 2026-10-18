@@ -24,7 +24,7 @@ describe("ChatPage 轨迹回退派发（CTA Phase 1）", () => {
     expect(chatPageSource).toMatch(/restartLastChatTurn\(\s*[\w.]+,\s*[\w.]+,\s*"replace_user"/);
     expect(chatPageSource).toMatch(/restartLastChatTurn\(\s*[\w.]+,\s*[\w.]+,\s*"keep_user"/);
     // 派发 input 携带轨迹回退元数据：锚点 = 通过校验的原 user 消息 ID
-    expect(chatPageSource).toMatch(/transcriptRewind:\s*\{\s*anchorUserTurnId:\s*expectedUserMessageId,\s*disposition,?\s*\}/);
+    expect(chatPageSource).toMatch(/transcriptRewind:\s*\{\s*anchorUserTurnId:\s*expectedUserMessageId,\s*expectedAssistantMessageId,\s*disposition,?\s*\}/);
   });
 
   it("桌面四模式的 run 入口只允许结构化 currentUser，不把完整 UI 历史作为输入", () => {

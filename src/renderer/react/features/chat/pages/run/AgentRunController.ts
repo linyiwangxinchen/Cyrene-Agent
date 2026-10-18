@@ -77,6 +77,7 @@ export interface AgentRunInput {
   /** 桌面 edit / regenerate 的轨迹回退锚点（主进程写 turn_rewind；渲染端只传元数据）。 */
   transcriptRewind?: {
     anchorUserTurnId: string;
+    expectedAssistantMessageId: string;
     disposition: "keep_user" | "replace_user";
   };
 }
@@ -92,6 +93,8 @@ export type PlanReviewUpdate =
  * 新增成员前优先考虑合并语义相近的通知。
  */
 export interface AgentRunHost {
+  /** 回退请求过期时恢复权威会话，移除本地编辑结果及未被接受的助手占位。 */
+  restoreSession(sessionId: string, session: ChatSession): void;
   /** 插话边界补用户消息与新的助手消息段；沿用当前 run。 */
   appendMessages?(sessionId: string, messages: ChatMessageItem[]): void;
   onAssistantSegment?(previousId: string, nextId: string): void;
@@ -130,7 +133,7 @@ export interface AgentRunHost {
   /**
    * run 结束（含成功、失败、取消、接管冲突等所有路径）。
    * 宿主据此刷新会话列表并消费该会话的待发消息队列。
-   * queuePaused=true 表示 run 未被主进程接受（启动失败/守卫冲突挂起接管），
+   * queuePaused=true 表示 run 未被主进程接受且不能安全恢复队列（启动失败/守卫冲突挂起接管），
    * 该会话的队列消费必须停住：认领的消息尚未派发成功，先恢复它再说。
    */
   onRunFinished(input: { mode: ConversationMode; sessionId: string; queuePaused: boolean }): void;
@@ -301,7 +304,7 @@ export class AgentRunController {
   private toolExecutions: ToolExecutionRecord[] = [];
   private emailDraftCards: MailDraftCardData[] = [];
   private runStarted = false;
-  /** run 已被主进程接受（ack 成功）：false 时 onRunFinished 携带 queuePaused 暂停队列消费。 */
+  /** run 已被主进程接受（ack 成功）。 */
   private runAccepted = false;
   private runActivity: RunActivityRecord | undefined;
   private currentTodos: TodoItem[] = [];
@@ -369,6 +372,7 @@ export class AgentRunController {
     });
     this.deps.registries.eventUnsubscribers.current.add(off);
 
+    let staleRewindRestored = false;
     try {
       const general = await window.chat?.getGeneralSettings?.();
       const splitMode = resolveEarlyTtsSplitMode(
@@ -528,9 +532,32 @@ export class AgentRunController {
       } else this.earlyTtsQueue?.cancel();
     } catch (error) {
       this.earlyTtsQueue?.cancel();
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (!this.runAccepted && this.input.transcriptRewind && errorMessage.includes("TRANSCRIPT_REWIND_STALE")) {
+        // 未被接受的回退不能留下展示检查点；先恢复旧回复及并发到达的消息。
+        try {
+          const session = await store.get(this.input.sessionId);
+          if (session) {
+            this.deps.host.restoreSession(this.input.sessionId, session);
+            staleRewindRestored = true;
+            return;
+          }
+        } catch (refreshError) {
+          console.error("[AgentRunController] stale rewind refresh failed:", refreshError);
+        }
+        // 回读失败也要结束占位；错误仅展示，不能为未准入的运行写检查点。
+        this.deps.host.patchMessage(this.input.sessionId, this.input.assistantId, {
+          content: t("chatPage.lastTurnRefreshFailed"),
+          loading: false,
+          waitingForFirstEvent: false,
+          streaming: false,
+          reasoningStreaming: false,
+          responseStarted: true,
+        });
+        return;
+      }
       this.terminalStatus = this.terminalStatus ?? "runtime_error";
       this.completeRunActivity(true);
-      const errorMessage = error instanceof Error ? error.message : String(error);
       // 会话守卫冲突：主进程拒绝了并发 run（典型场景：F5 后立即发消息）。
       // 不走通用错误文案，改为挂起操作卡等用户决定是否终止旧 run 并重开本轮。
       const conflictRunId = parseSessionRunActiveError(errorMessage);
@@ -608,12 +635,11 @@ export class AgentRunController {
         this.deps.registries.activeRuns.current = nextActive;
       }
       this.deps.host.setModeBusy(this.input.targetMode, false);
-      // queuePaused：run 从未被主进程接受（启动失败/守卫冲突挂起接管），
-      // 该会话的认领消息尚未派发成功——宿主必须暂停队列消费，先恢复认领再说。
+      // 未准入时暂停队列；过期回退已恢复且没有待确认认领时，可以继续消费新消息。
       this.deps.host.onRunFinished({
         mode: this.input.targetMode,
         sessionId: this.input.sessionId,
-        queuePaused: !this.runAccepted,
+        queuePaused: !this.runAccepted && (!staleRewindRestored || !!this.input.claimedPendingMessageId),
       });
     }
   }

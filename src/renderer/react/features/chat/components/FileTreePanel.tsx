@@ -215,7 +215,7 @@ export function FilePreviewContent({
   displayPath?: string;
   /** 从消息文件链接跳转过来时定位到该行（居中滚动）；缺省不做定位 */
   scrollToLine?: number;
-  /** 定位序号：同标签换行号时靠它变化触发重新滚动 */
+  /** 定位序号：每次行号链接点击时变化，同一行也能重新定位 */
   lineSeq?: number;
 }) {
   const { t } = useTranslation();
@@ -296,7 +296,12 @@ export function FilePreviewContent({
     };
   }, [state, relPath, uiTheme]);
 
-  // 行号定位：文件内容就绪后把目标行滚到视口中间；lineSeq 变化（同标签换行号）时重滚
+  // 已打开的 Markdown 预览收到新的定位请求时，先切到带行号的源码视图。
+  useEffect(() => {
+    if (isMarkdown && scrollToLine !== undefined) setMdView("source");
+  }, [isMarkdown, scrollToLine, lineSeq]);
+
+  // 行号定位：文件内容就绪后把目标行滚到视口中间；lineSeq 变化时重滚
   useEffect(() => {
     if (state.phase !== "ok" || scrollToLine === undefined) return;
     const host = scrollHostRef.current;

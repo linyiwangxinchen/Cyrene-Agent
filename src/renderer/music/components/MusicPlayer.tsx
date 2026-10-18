@@ -40,6 +40,7 @@ const MODE_META: Record<
 
 export default function MusicPlayer({
   state,
+  playlistLoadError,
   actions,
   playlists,
   activePlaylistId,
@@ -264,14 +265,14 @@ export default function MusicPlayer({
         </aside>
       </div>
 
-      {state.error && (
+      {(playlistLoadError || state.error) && (
         <div className="mp-error" role="alert">
           <AlertCircle size={14} />
-          <span>{state.error}</span>
+          <span>{playlistLoadError?.message ?? state.error}</span>
           <button
             type="button"
             className="mp-error-retry"
-            onClick={() => track && actions.playTrack(track)}
+            onClick={() => playlistLoadError ? playlistLoadError.onRetry() : track && actions.playTrack(track)}
           >
             重试
           </button>

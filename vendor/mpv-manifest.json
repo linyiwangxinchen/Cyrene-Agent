@@ -1,13 +1,13 @@
 {
   "name": "mpv player (Windows x86_64)",
-  "version": "20260813",
-  "assetName": "mpv-x86_64-20260813-git-f4d13e1c2c.7z",
-  "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260813/mpv-x86_64-20260813-git-f4d13e1c2c.7z",
+  "version": "20261018",
+  "assetName": "mpv-x86_64-20261018-git-01e2533f31.7z",
+  "url": "https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261018/mpv-x86_64-20261018-git-01e2533f31.7z",
   "mirrors": [
-    "https://ghproxy.net/https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260813/mpv-x86_64-20260813-git-f4d13e1c2c.7z",
-    "https://gh-proxy.com/https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260813/mpv-x86_64-20260813-git-f4d13e1c2c.7z",
-    "https://github.moeyy.xyz/https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20260813/mpv-x86_64-20260813-git-f4d13e1c2c.7z"
+    "https://ghproxy.net/https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261018/mpv-x86_64-20261018-git-01e2533f31.7z",
+    "https://gh-proxy.com/https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261018/mpv-x86_64-20261018-git-01e2533f31.7z",
+    "https://github.moeyy.xyz/https://github.com/shinchiro/mpv-winbuild-cmake/releases/download/20261018/mpv-x86_64-20261018-git-01e2533f31.7z"
   ],
-  "sha256": "abc4397bd206375f6cbedd19c624dc2e44b44e0eee60e7337e92e50daab5641d",
+  "sha256": "d7157567a2fd88e46f739d2e8b8e6c02d2ad812db04547b45c59a2800821991f",
   "binaryPath": "mpv.exe"
 }

@@ -45,6 +45,20 @@ const claudeCap: ProviderCapability = {
   disabled: true,
 };
 
+const geminiCap: ProviderCapability = {
+  id: "gemini",
+  displayName: "Gemini（Google）",
+  transport: "openai",
+  baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+  authStyle: "bearer",
+  defaultModel: "gemini-3.8-flash",
+  supportsTools: true,
+  supportsThinking: true,
+  thinkingField: "reasoning_content",
+  cacheStrategy: "auto",
+  testStrategy: "text",
+};
+
 const mimoCap: ProviderCapability = {
   id: "mimo",
   displayName: "MiMo（小米）",
@@ -198,6 +212,37 @@ describe("G2 Claude + reasoning 透传", () => {
     const body = haikuBody({ mode: "off" });
     expect(body.thinking).toEqual({ type: "disabled" });
     expect((body.output_config as Record<string, unknown> | undefined)?.effort).toBeUndefined();
+  });
+});
+
+describe("gemini-4-argon 请求体", () => {
+  const adapter = new OpenAICompatAdapter("gemini", geminiCap);
+  // 官方：thinking_level 仅 low/medium/high，默认 medium；兼容层 reasoning_effort 映射 thinking_level，
+  // "none" 关闭思考只写明适用于 2.5 系。下面验证实际请求体不越出这些档位、也不发送采样参数。
+  const argonBody = (reasoning?: ReasoningPreference) => {
+    const http = adapter.buildRequest(
+      { model: "gemini-4-argon", messages: [{ role: "user", content: "hi" }] },
+      cfgOf(geminiCap, { model: "gemini-4-argon", ...(reasoning ? { reasoning } : {}) }),
+    );
+    return JSON.parse(http.body) as Record<string, unknown>;
+  };
+
+  test("gemini-4-argon + {mode:'on', effort:'high'} → reasoning_effort=high", () => {
+    expect(argonBody({ mode: "on", effort: "high" }).reasoning_effort).toBe("high");
+  });
+
+  test("gemini-4-argon 未设置档位 → reasoning_effort=medium，且不发 temperature", () => {
+    const body = argonBody();
+    expect(body.reasoning_effort).toBe("medium");
+    expect("temperature" in body).toBe(false);
+  });
+
+  test("gemini-4-argon + off → 不发送 none（Gemini 4 未写明可关闭），回到默认 medium", () => {
+    expect(argonBody({ mode: "off" }).reasoning_effort).toBe("medium");
+  });
+
+  test("gemini-4-argon + 不支持的 max → 收敛到默认 medium", () => {
+    expect(argonBody({ mode: "on", effort: "max" }).reasoning_effort).toBe("medium");
   });
 });
 

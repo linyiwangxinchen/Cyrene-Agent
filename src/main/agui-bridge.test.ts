@@ -1607,6 +1607,37 @@ describe("agui-bridge transcript dispatch", () => {
     return { bridge, runHandler, seenInputs };
   }
 
+  it.each(["keep_user", "replace_user"] as const)("rejects stale %s before model startup and releases the session guard", async (disposition) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-stale-"));
+    roots.push(root);
+    mocks.userDataRoot = root;
+    const { bridge, runHandler, seenInputs } = await setupBridge();
+    const record = { id: "stale-session", title: "fixture", identityId: null, createdAt: 1, updatedAt: 1, schemaVersion: 2, messageCount: 3, mode: "chat" };
+    mocks.getSessionRecord.mockReturnValue(record);
+    mocks.composeSession.mockImplementation((_record: unknown, messages: unknown[]) => ({ ...record, messages }));
+    const { getConversationTranscriptStore } = await import("./orchestrator/conversation-transcript-store");
+    const { ConversationJournalService } = await import("./orchestrator/conversation-journal-service");
+    const { getConversationDatabase } = await import("./storage/conversation-database-client");
+    const store = getConversationTranscriptStore(root);
+    const journal = new ConversationJournalService(store);
+    await journal.appendUser(record.id, { id: "u1", turnId: "u1", text: "old", at: 1 });
+    await journal.createRunSink({ conversationId: record.id, runId: "old", assistantTurnId: "old-answer" })
+      .appendAssistant({ message: { role: "assistant", content: "old answer" }, roundId: "reply" });
+    await journal.createRunSink({ conversationId: record.id, runId: "proactive-intent-1" })
+      .appendAssistant({ message: { role: "assistant", content: "keep proactive" }, roundId: "proactive" });
+    const before = await store.readAuditEntries(record.id);
+    await expect(runHandler({ sender: makeSender() }, {
+      sessionId: record.id, assistantTurnId: "retry-assistant",
+      currentUser: { turnId: "u1", text: "edited", visibleContent: "edited" },
+      transcriptRewind: { anchorUserTurnId: "u1", expectedAssistantMessageId: "old-answer", disposition },
+    })).rejects.toThrow("TRANSCRIPT_REWIND_STALE");
+    expect(await store.readAuditEntries(record.id)).toEqual(before);
+    expect(bridge.__getSessionActiveRunForTest(record.id)).toBeUndefined();
+    expect(await getConversationDatabase(root).call("runs.all")).toEqual([]);
+    expect(seenInputs).toEqual([]);
+    expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
+  });
+
   it("commits the turn to the transcript and flags transcript context before build options", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-dispatch-"));
     roots.push(root);
@@ -1850,6 +1881,8 @@ describe("agui-bridge transcript dispatch", () => {
     const { ConversationJournalService } = await import("./orchestrator/conversation-journal-service");
     const journal = new ConversationJournalService(getConversationTranscriptStore(root));
     await journal.appendUser("rewind-session", { id: "u1", turnId: "u1", text: "old", at: 1, revision: 1 });
+    await journal.createRunSink({ conversationId: "rewind-session", runId: "old", assistantTurnId: "old-answer" })
+      .appendAssistant({ message: { role: "assistant", content: "old answer" }, roundId: "reply" });
     const { runHandler } = await setupBridge(async (input: any) => ({
       options: {
         settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
@@ -1863,7 +1896,7 @@ describe("agui-bridge transcript dispatch", () => {
     await runHandler({ sender: makeSender() }, { assistantTurnId: "fixture-72493",
       sessionId: "rewind-session",
       currentUser: { turnId: "u1", text: "edited", visibleContent: "展示编辑" },
-      transcriptRewind: { anchorUserTurnId: "u1", disposition: "replace_user" },
+      transcriptRewind: { anchorUserTurnId: "u1", expectedAssistantMessageId: "old-answer", disposition: "replace_user" },
     });
     const transcript = await getConversationTranscriptStore(root).read("rewind-session");
     expect(transcript.entries.filter((entry) => entry.kind === "user")).toHaveLength(1);
@@ -1895,10 +1928,12 @@ describe("agui-bridge transcript dispatch", () => {
     const { ConversationJournalService } = await import("./orchestrator/conversation-journal-service");
     const journal = new ConversationJournalService(getConversationTranscriptStore(root));
     await journal.appendUser("keep-session", { id: "u1", turnId: "u1", text: "old", at: 1, revision: 1 });
+    await journal.createRunSink({ conversationId: "keep-session", runId: "old", assistantTurnId: "old-answer" })
+      .appendAssistant({ message: { role: "assistant", content: "old answer" }, roundId: "reply" });
     await runHandler({ sender: makeSender() }, { assistantTurnId: "fixture-74598",
       sessionId: "keep-session",
       currentUser: { turnId: "u1", text: "old", visibleContent: "new visible", sticker: "wave" },
-      transcriptRewind: { anchorUserTurnId: "u1", disposition: "keep_user" },
+      transcriptRewind: { anchorUserTurnId: "u1", expectedAssistantMessageId: "old-answer", disposition: "keep_user" },
     });
     const transcript = await getConversationTranscriptStore(root).read("keep-session");
     expect(transcript.entries.filter((entry) => entry.kind === "user")).toHaveLength(1);

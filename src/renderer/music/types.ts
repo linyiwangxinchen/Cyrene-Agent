@@ -72,6 +72,8 @@ export interface PlaybackActions {
 
 export interface MusicPlayerProps {
   state: PlaybackState;
+  /** 歌单加载错误独立重试，避免误触发当前歌曲播放。 */
+  playlistLoadError?: { message: string; onRetry(): void };
   actions: PlaybackActions;
   /** 用户歌单列表，顶部 chips + 侧栏下拉共用 */
   playlists: Playlist[];

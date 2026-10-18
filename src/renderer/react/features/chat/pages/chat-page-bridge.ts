@@ -177,6 +177,7 @@ export interface AguiApi {
     /** 桌面 edit / regenerate 的轨迹回退锚点（主进程写 turn_rewind；渲染端只传元数据）。 */
     transcriptRewind?: {
       anchorUserTurnId: string;
+      expectedAssistantMessageId: string;
       disposition: "keep_user" | "replace_user";
     };
   }) => Promise<import("../../../../../shared/run-terminal").AguiRunAck>;

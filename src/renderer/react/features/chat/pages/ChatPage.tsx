@@ -977,6 +977,10 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       api: aguiApi(),
       store: chatStore(),
       host: {
+        restoreSession: (sessionId, session) => {
+          replaceSessionMessages(sessionId, toUiMessages(session));
+          feedback.notice({ tone: "info", message: t("chatPage.lastTurnChanged") });
+        },
         appendMessages,
         onAssistantSegment: (previousId, nextId) => {
           if (activeMailDraftControllersRef.current[previousId] === controller) {
@@ -1159,7 +1163,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
         attachments: (nextUserMessage.attachments ?? []).map((attachment) => ({ ...attachment })),
         visibleContent: nextUserMessage.content,
         // 轨迹回退锚点：主进程据此写 turn_rewind（edit=replace_user / regenerate=keep_user）
-        transcriptRewind: { anchorUserTurnId: expectedUserMessageId, disposition },
+        transcriptRewind: { anchorUserTurnId: expectedUserMessageId, expectedAssistantMessageId, disposition },
       });
       return true;
     } catch (error) {
