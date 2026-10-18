@@ -14,7 +14,18 @@ vi.mock("../channels/settings-store", () => ({ loadChannelsSettings: () => ({ we
 vi.mock("../orchestrator", () => ({ buildAlwaysOnContext: async () => "", buildMemoryInjection: async () => "" }));
 vi.mock("../prompts/prompt-loader", () => ({ loadPromptFile: () => "你是昔涟，自然地关心用户。" }));
 vi.mock("../settings-store", () => ({ loadUserProfile: () => ({ timezone: "Asia/Shanghai" }) }));
-vi.mock("../settings/model-settings", () => ({ loadModelSettings: () => ({ provider: "ChatGPT（OpenAI）", explicitTransport: "responses", apiKey: "fixture-model-key", baseUrl: "https://fixture-model.invalid/v1", model: "gpt-6.1-sol", reasoning: { mode: "on", effort: "high" } }) }));
+vi.mock("../settings/model-settings", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../settings/model-settings")>(),
+  loadModelSettings: () => ({
+    // Web 迁移后顶层镜像可能为空；真实 resolver 必须恢复已保存的默认档案。
+    provider: "旧顶层空壳", baseUrl: "", model: "", apiKey: "",
+    defaultModelProfileId: "saved-default",
+    modelProfiles: [
+      { id: "other-profile", provider: "ChatGPT（OpenAI）", baseUrl: "https://wrong-profile.invalid/v1", model: "wrong-model", apiKey: "wrong-key" },
+      { id: "saved-default", provider: "ChatGPT（OpenAI）", explicitTransport: "responses", apiKey: "fixture-model-key", baseUrl: "https://fixture-model.invalid/v1", model: "gpt-6.1-sol", reasoning: { mode: "on", effort: "high" } },
+    ],
+  }),
+}));
 vi.mock("../logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, LogTag: { Wechat: "wechat" } }));
 vi.mock("../token-usage-store", () => ({ recordRequest: vi.fn(), recordUsage: vi.fn() }));
 
@@ -55,6 +66,7 @@ describe("assembled proactive WeChat delivery", () => {
       }
       if (String(url).endsWith("/sendmessage")) { sent.push(JSON.parse(String(init.body))); return new Response('{"ret":0}'); }
       if (String(url).includes("fixture-model.invalid")) {
+        expect(new Headers(init.headers).get("authorization")).toBe("Bearer fixture-model-key");
         modelRequests.push(JSON.parse(String(init.body)));
         return new Response(JSON.stringify({ id: "fixture-response", status: "completed", output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: '{"decision":"send","text":"考试准备得怎么样啦？紧张的话，我们可以一起理一理♪"}' }] }], usage: { input_tokens: 100, output_tokens: 30 } }));
       }
@@ -69,6 +81,7 @@ describe("assembled proactive WeChat delivery", () => {
     const candidate = { sceneId: "conversation_followup", score: 80, sceneCooldownMs: 24 * 60 * 60 * 1000 };
     await lifecycle.getProactiveChatService()!.evaluateCandidate(candidate);
     expect(modelRequests).toHaveLength(1);
+    expect(modelRequests[0].model).toBe("gpt-6.1-sol");
     expect(JSON.stringify(modelRequests[0])).toContain("我今天准备考试");
     expect(modelRequests[0].max_output_tokens).toBe(4096);
     expect(sent).toHaveLength(1);
