@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   linux-web:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
@@ -40,20 +40,38 @@ jobs:
       - name: Test Linux and channel boundaries
         run: >-
           pnpm exec vitest run src/server
+          src/main/index.test.ts
           src/main/browser/address-input.test.ts
           src/main/browser/browser-panel-ipc.test.ts
           src/main/channels/adapters/qq/onebot-reverse-ws.test.ts
           src/main/channels/bootstrap.test.ts
           src/main/channels/dispatcher.test.ts
           src/main/channels/outgoing-composer.test.ts
+          src/main/proactive/proactive-wechat.integration.test.ts
           src/main/orchestrator/build-options.test.ts
           src/main/orchestrator/conversation-transcript-projection.test.ts
+          src/main/orchestrator/conversation-transcript-compactor.test.ts
+          src/main/orchestrator/conversation-transcript-validation.test.ts
           src/main/orchestrator/vendors/model-factory.test.ts
           src/main/orchestrator/vendors/model-runtime.test.ts
           src/main/orchestrator/shell-runtime.test.ts
           src/main/orchestrator/tools/builtin-tools/run-shell-platform.test.ts
       - run: pnpm run build:web
-      - run: pnpm exec playwright install --with-deps chromium
+      - name: Install Chromium for Web and bundled Playwright MCP
+        run: |
+          pnpm exec playwright install --with-deps chromium
+          # MCP pins its own Playwright version and may require another revision.
+          node --input-type=module <<'NODE'
+          import { createRequire } from 'node:module';
+          import { spawnSync } from 'node:child_process';
+          import path from 'node:path';
+          const require = createRequire(import.meta.url);
+          const mcpRequire = createRequire(require.resolve('@playwright/mcp/package.json'));
+          const cli = path.join(path.dirname(mcpRequire.resolve('playwright/package.json')), 'cli.js');
+          const result = spawnSync(process.execPath, [cli, 'install', '--with-deps', 'chromium'], { stdio: 'inherit' });
+          if (result.error) throw result.error;
+          process.exit(result.status ?? 1);
+          NODE
       - name: Verify authenticated Web business and voice MCP paths
         run: |
           pnpm run verify:shared-core
