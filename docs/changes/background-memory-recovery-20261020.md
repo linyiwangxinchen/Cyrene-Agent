@@ -19,10 +19,12 @@ Linux 日志中的 `MemoryLlmProtocolError: Memory LLM [wiki] ... MODEL_REQUEST_
 - Main、Preload、Server、Renderer 四套类型检查与 `pnpm run build:web` 通过。
 - 34 个测试文件、370 项测试通过，覆盖记忆、结构化输出、共享模型客户端、SDK、上下文压缩及主动聊天。
 - `memory-background-schedulers.test.ts` 使用 `--unhandled-rejections=strict` 的独立 Node 子进程、真实 SQLite 与摘要文件；注入旧 Wiki 和 Summary 队尾行为均可复现退出，修复后失败保留进度，重开后可重试，取消后不落盘，关闭后旧回填不重开数据库。
-- `node scripts/verify/shared-core-memory.mjs` 的 3 项验收通过：认证后的真实 Web/共享核心在 Wiki 401 失败后仍可用；重启后经仅支持流式的 Responses 模拟服务补写有来源的记忆；再重启不重复请求、不丢会话。
+- `node scripts/verify/shared-core-memory.mjs` 的 4 项验收通过：认证后的真实 Web/共享核心在 Wiki 401 失败后仍可用；外部检查遇到真实 SQLite 短暂锁时等待恢复；重启后经仅支持流式的 Responses 模拟服务补写有来源的记忆；再重启不重复请求、不丢会话。
 - 既有共享核心 34 项业务验收、上下文压缩 9 项验收全部通过。新增记忆回归已纳入 Ubuntu CI。
 
 验收使用独立临时数据和本机模拟模型，不访问用户模型账号，也不替代用户运行实例的部署验证。
+
+Ubuntu 首次回归还发现验收脚本的只读连接会与 Wiki 重启初始化争锁。脚本现只在轮询进度时对 `SQLITE_BUSY` / `SQLITE_LOCKED` 做有限等待；其他数据库错误和超时仍使验收失败。生产数据库及业务处理未为通过测试而放宽。
 
 ## 如何恢复
 

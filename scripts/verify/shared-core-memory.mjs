@@ -120,15 +120,33 @@ async function close() {
   if (current) await current.close();
 }
 
-function progress() {
-  const database = new DatabaseSync(path.join(dataDir, 'memory', 'wiki', 'wiki.sqlite'), { readOnly: true });
-  try { return database.prepare('SELECT through_seq FROM progress WHERE conversation_id=?').get(sessionId)?.through_seq ?? 0; }
-  finally { database.close(); }
+function isSqliteBusy(error) {
+  return error && typeof error === 'object' && (
+    error.code === 'SQLITE_BUSY' || error.code === 'SQLITE_LOCKED'
+    || (typeof error.errcode === 'number' && [5, 6].includes(error.errcode & 0xff))
+  );
+}
+
+function progress({ poll = false, databasePath = path.join(dataDir, 'memory', 'wiki', 'wiki.sqlite') } = {}) {
+  let database;
+  try {
+    database = new DatabaseSync(databasePath, { readOnly: true });
+    database.exec('PRAGMA busy_timeout=50');
+    return database.prepare('SELECT through_seq FROM progress WHERE conversation_id=?').get(sessionId)?.through_seq ?? 0;
+  } catch (error) {
+    // Wiki uses DELETE journaling: a legitimate startup writer can briefly hold
+    // the database lock. Only a polling observer treats that as not ready yet.
+    if (poll && isSqliteBusy(error)) return undefined;
+    throw error;
+  } finally { database?.close(); }
 }
 
 function transcript() {
   const database = new DatabaseSync(path.join(dataDir, 'cyrene.sqlite'), { readOnly: true });
-  try { return database.prepare('SELECT seq,entry_json FROM transcript_entries WHERE conversation_id=? ORDER BY seq').all(sessionId); }
+  try {
+    database.exec('PRAGMA busy_timeout=100');
+    return database.prepare('SELECT seq,entry_json FROM transcript_entries WHERE conversation_id=? ORDER BY seq').all(sessionId);
+  }
   finally { database.close(); }
 }
 
@@ -171,9 +189,26 @@ try {
     assert.equal(requests.length, 1, 'permanent authentication failure must not trigger a retry loop');
   });
 
+  await check('Wiki progress observer retries a real temporary SQLite lock without hiding non-lock failures', async () => {
+    const writer = new DatabaseSync(path.join(dataDir, 'memory', 'wiki', 'wiki.sqlite'));
+    let locked = false, releaseTimer;
+    try {
+      writer.exec('PRAGMA busy_timeout=100; BEGIN EXCLUSIVE'); locked = true;
+      assert.equal(progress({ poll: true }), undefined, 'an exclusively locked progress database is not ready');
+      assert.throws(() => progress(), isSqliteBusy, 'non-polling reads must report contention');
+      releaseTimer = setTimeout(() => { writer.exec('ROLLBACK'); locked = false; }, 100);
+      await waitFor(() => progress({ poll: true }) === 0, 'progress read recovers after the writer releases its lock');
+      assert.equal(locked, false);
+      const invalidDatabase = path.join(dataDir, 'invalid-observer.sqlite');
+      await writeFile(invalidDatabase, 'This fixture is deliberately not a SQLite database.');
+      assert.throws(() => progress({ poll: true, databasePath: invalidDatabase }), error => error?.errcode === 26,
+        'polling must still reject a corrupt/non-database file');
+    } finally { clearTimeout(releaseTimer); if (locked) writer.exec('ROLLBACK'); writer.close(); }
+  });
+
   await check('Restart recovers the pending Wiki batch through a stream-only Responses relay and records source-grounded knowledge', async () => {
     await close(); mode = 'success'; await launch();
-    await waitFor(() => progress() === 2, 'successful background extraction after restart');
+    await waitFor(() => progress({ poll: true }) === 2, 'successful background extraction after restart');
     const pages = await invoke('memory-wiki:list-pages', {});
     assert.equal(pages.total, 1);
     const page = await invoke('memory-wiki:read-page', 'global/self');
