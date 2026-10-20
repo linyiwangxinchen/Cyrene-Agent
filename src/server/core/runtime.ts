@@ -183,7 +183,7 @@ export async function startHeadlessCore() {
   const transcriptCompactor = createModelBackedConversationTranscriptCompactor({
     store: getConversationTranscriptStore(root),
     runReader: getHarnessRunStore(root),
-    onPhase: (phase, id) => broadcastCompactionPhase(id, phase),
+    onPhase: (phase, id, usage) => broadcastCompactionPhase(id, phase, usage),
   });
   const lifecycle = createLifecyclePublisher({ publish: (event, payload) => plugins ? plugins.publishHostEvent(event, payload) : Promise.resolve() });
   const pending = createPendingTurnLifecycle({ publisher: lifecycle });

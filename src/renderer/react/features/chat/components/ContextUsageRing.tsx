@@ -26,6 +26,7 @@ export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 interface CompactConversationResult {
   ok: boolean;
   error?: string;
+  detail?: string;
   before?: number;
   after?: number;
 }
@@ -120,6 +121,7 @@ export function ContextUsageRing({ usage, sessionId, busy, onCompactPhaseChange 
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const [compactPhase, setCompactPhase] = useState<ContextCompactPhase>("idle");
+  const [compactErrorDetail, setCompactErrorDetail] = useState<string | undefined>();
   if (!usage) return null;
 
   const ratio = computeUsageRatio(usage.totalTokens, usage.contextWindowTokens);
@@ -140,6 +142,7 @@ export function ContextUsageRing({ usage, sessionId, busy, onCompactPhaseChange 
   };
   const handleCompactClick = (): void => {
     if (!canCompact || compactPhase === "running" || !sessionId) return;
+    setCompactErrorDetail(undefined);
     const invoke = compactApi()?.compactConversation;
     // API 接线缺失时进入 error 态给用户反馈，避免静默无反应难排查。
     if (!invoke) {
@@ -148,7 +151,10 @@ export function ContextUsageRing({ usage, sessionId, busy, onCompactPhaseChange 
     }
     enterPhase("running");
     void invoke(sessionId)
-      .then((result) => enterPhase(result?.ok ? "done" : "error"))
+      .then((result) => {
+        setCompactErrorDetail(result?.ok ? undefined : result?.detail);
+        enterPhase(result?.ok ? "done" : "error");
+      })
       .catch(() => enterPhase("error"));
   };
 
@@ -159,7 +165,7 @@ export function ContextUsageRing({ usage, sessionId, busy, onCompactPhaseChange 
     : compactPhase === "done"
       ? t("contextRing.compactDone")
       : compactPhase === "error"
-        ? t("contextRing.compactError")
+        ? compactErrorDetail || t("contextRing.compactError")
         : moodMeta[tone].text;
 
   // 明细行按 token 从大到小排队，大头一眼置顶。

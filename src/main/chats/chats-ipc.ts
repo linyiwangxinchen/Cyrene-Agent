@@ -41,6 +41,7 @@ import {
   TRANSCRIPT_COMPACTION_REQUIRED,
 } from "../orchestrator/conversation-transcript-compactor";
 import { buildCompactionContextUsageSnapshot } from "../orchestrator/context-usage";
+import { getTranscriptCompactionDisplayMessage } from "../../shared/transcript-compaction-error";
 import type { ContextUsageSnapshot } from "../../shared/context-usage";
 import { getRunReviewTracker } from "../orchestrator/review/run-review-tracker";
 import { activeChatTargetRegistry } from "../plugin-host/active-chat-target";
@@ -318,11 +319,11 @@ export async function registerChatsIpc(
       broadcastChanged();
       return { ok: true as const, ...result };
     } catch (error) {
+      const failure = createTranscriptCompactionRequiredError(error);
       return {
         ok: false as const,
-        error: error instanceof Error && error.message === TRANSCRIPT_COMPACTION_REQUIRED
-          ? error.message
-          : createTranscriptCompactionRequiredError(error).message,
+        error: failure.message,
+        detail: getTranscriptCompactionDisplayMessage(failure),
       };
     }
   });

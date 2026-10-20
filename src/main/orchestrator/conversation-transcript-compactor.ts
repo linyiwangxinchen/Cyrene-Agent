@@ -13,6 +13,8 @@ import { callSummarizeModel } from "./context-manager";
 import { getAdapterForConfig } from "./vendors";
 import { buildCompactionContextUsageSnapshot } from "./context-usage";
 import type { ContextUsageSnapshot } from "../../shared/context-usage";
+import { createTranscriptCompactionRequiredError } from "../../shared/transcript-compaction-error";
+export { TRANSCRIPT_COMPACTION_REQUIRED, createTranscriptCompactionRequiredError } from "../../shared/transcript-compaction-error";
 import {
   compressForAgentLoop,
   findSafeCutPointForRetainedTokens,
@@ -61,14 +63,6 @@ export interface TranscriptCompactionModelSettings {
   contextWindowTokens?: number;
 }
 
-export const TRANSCRIPT_COMPACTION_REQUIRED = "TRANSCRIPT_COMPACTION_REQUIRED";
-
-export function createTranscriptCompactionRequiredError(cause?: unknown): Error {
-  const error = new Error(TRANSCRIPT_COMPACTION_REQUIRED);
-  if (cause !== undefined) Object.assign(error, { cause });
-  return error;
-}
-
 /** Composition-root factory: the existing context-manager summarizer is the only provider path. */
 export function createModelBackedConversationTranscriptCompactor(input: {
   store: ConversationTranscriptStore;
@@ -80,7 +74,10 @@ export function createModelBackedConversationTranscriptCompactor(input: {
     runReader: input.runReader,
     onPhase: input.onPhase,
     summarize: async (history, settings, signal) => {
-      if (!settings) throw createTranscriptCompactionRequiredError();
+      // 本地兼容服务允许空 API Key；认证有效性仍交给实际 provider 校验。
+      if (!settings || !settings.baseUrl || !settings.model) {
+        throw createTranscriptCompactionRequiredError(undefined, "model_unconfigured");
+      }
       return callSummarizeModel(
         history,
         getAdapterForConfig({
@@ -127,10 +124,10 @@ export class ConversationTranscriptCompactor {
     // previousReplacement 用于识别压缩器未产出新摘要的失败路径。
     const full = buildCompactionSourceView(before.entries, this.runReader);
     const cutIndex = findSafeCutPointForRetainedTokens(full.messages, retainTokens);
-    if (cutIndex <= 0) throw createTranscriptCompactionRequiredError();
+    if (cutIndex <= 0) throw createTranscriptCompactionRequiredError(undefined, "no_safe_boundary");
 
     const sourceThroughSeq = Math.max(...full.sourceSeqs.slice(0, cutIndex), 0);
-    if (sourceThroughSeq <= 0) throw createTranscriptCompactionRequiredError();
+    if (sourceThroughSeq <= 0) throw createTranscriptCompactionRequiredError(undefined, "no_safe_boundary");
     const sourceEntries = before.entries.filter((entry) => entry.seq <= sourceThroughSeq);
     const sourceDigest = digest(sourceEntries);
     const previousUsage = before.entries.reduce<ContextUsageSnapshot | undefined>((latest, entry) => {
@@ -165,14 +162,15 @@ export class ConversationTranscriptCompactor {
       });
       request.signal?.throwIfAborted();
       if (summaryError) {
-        console.error("[ConversationTranscriptCompactor] summary failed", summaryError);
-        throw createTranscriptCompactionRequiredError(summaryError);
+        const failure = createTranscriptCompactionRequiredError(summaryError, "model_request_failed");
+        console.error("[ConversationTranscriptCompactor] summary failed", failure.displayMessage);
+        throw failure;
       }
       const replacement = compacted[0];
       if (!replacement || replacement.role !== "system" || !isCompactionReplacement(replacement)
         // 无法产出更小摘要时首条可能是旧摘要，不能提交新检查点吞掉后缀历史。
         || replacement === full.previousReplacement) {
-        throw createTranscriptCompactionRequiredError();
+        throw createTranscriptCompactionRequiredError(undefined, "invalid_summary");
       }
 
       // 撤回或其它检查点会使摘要来源失效；新追加的消息则留作后缀。
@@ -182,7 +180,7 @@ export class ConversationTranscriptCompactor {
         entry.seq > before.throughSeq
         && (entry.kind === "compaction_checkpoint" || entry.kind === "turn_rewind" || entry.kind === "turn_tombstone")
       ))) {
-        throw createTranscriptCompactionRequiredError();
+        throw createTranscriptCompactionRequiredError(undefined, "history_changed");
       }
 
       const recentUserImages = selectCompactionImageReference(afterSummary.entries, sourceThroughSeq);
@@ -200,7 +198,14 @@ export class ConversationTranscriptCompactor {
         },
       };
       request.signal?.throwIfAborted();
-      const checkpoint = await this.store.appendCompactionCheckpoint(request.conversationId, checkpointInput);
+      let checkpoint: TranscriptEntry;
+      try {
+        checkpoint = await this.store.appendCompactionCheckpoint(request.conversationId, checkpointInput);
+      } catch (error) {
+        // 数据库 CAS 使用同一机器码拒绝失效前缀，不能将冲突误报为磁盘故障。
+        const historyChanged = error instanceof Error && error.message === "TRANSCRIPT_COMPACTION_REQUIRED";
+        throw createTranscriptCompactionRequiredError(error, historyChanged ? "history_changed" : "checkpoint_write_failed");
+      }
       // 先提交检查点再归档；归档失败不会撤销已持久化的摘要。
       try {
         await this.archive.archiveThrough(request.conversationId, sourceThroughSeq);

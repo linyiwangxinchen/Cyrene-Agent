@@ -220,7 +220,23 @@ describe("chats IPC mode filtering", () => {
     if (!compact) throw new Error("compaction IPC handler was not registered");
     await expect(compact({ sender: {} }, { sessionId: "c1" })).resolves.toEqual({
       ok: false, error: "TRANSCRIPT_COMPACTION_REQUIRED",
+      detail: expect.stringContaining("原始会话记录已保留"),
     });
+  });
+
+  it("manual compaction returns safe actionable details without exposing provider credentials", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    const { createTranscriptCompactionRequiredError } = await import("../../shared/transcript-compaction-error");
+    (await registerChatsIpc(undefined, {
+      transcriptCompactor: { compact: vi.fn(async () => {
+        throw createTranscriptCompactionRequiredError(new Error("apiKey=sk-test-secret"), "invalid_summary");
+      }) } as any,
+    }));
+    const session = await mocks.handlers.get(IPC.CHATS_CREATE)!({ sender: {} }, { mode: "chat" }) as { id: string };
+    const result = await mocks.handlers.get(IPC.CHATS_COMPACT)!({ sender: {} }, { sessionId: session.id }) as { error: string; detail: string };
+    expect(result.error).toBe("TRANSCRIPT_COMPACTION_REQUIRED");
+    expect(result.detail).toContain("没有返回有效且更短的摘要");
+    expect(JSON.stringify(result)).not.toContain("sk-test-secret");
   });
 
   it("dev 演示入口生成独立会话并走真实自动压缩链路", async () => {

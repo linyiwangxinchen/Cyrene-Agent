@@ -3,12 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConversationTranscriptCompactor } from "./conversation-transcript-compactor";
+import { ConversationTranscriptCompactor, createModelBackedConversationTranscriptCompactor } from "./conversation-transcript-compactor";
 import { ConversationTranscriptArchive } from "./conversation-transcript-archive";
 import { ConversationJournalService } from "./conversation-journal-service";
 import { ConversationTranscriptStore } from "./conversation-transcript-store";
 import type { ChatMessage } from "./vendors/types";
 import { buildCompactionSourceView } from "./conversation-transcript-projection";
+import {
+  createTranscriptCompactionRequiredError,
+  getTranscriptCompactionDisplayMessage,
+} from "../../shared/transcript-compaction-error";
+import { AgentRuntimeError } from "./agent-runtime-error";
 
 function assertNoOrphanToolPairs(messages: ChatMessage[]): boolean {
   const calls = new Set(messages.flatMap((message) =>
@@ -159,10 +164,11 @@ describe("ConversationTranscriptCompactor", () => {
     const fixture = createFixture();
     await seed(fixture);
     const original = (await fixture.store.read("c1")).entries;
-    fixture.reject(new Error("provider down"));
+    fixture.reject();
     const pending = fixture.compactor.compact({ conversationId: "c1", trigger: "manual", retainTokens: 1 });
 
     await expect(pending).rejects.toThrow("TRANSCRIPT_COMPACTION_REQUIRED");
+    await expect(pending).rejects.toMatchObject({ reason: "model_request_failed", cause: expect.objectContaining({ message: "provider down" }) });
     const entries = (await fixture.store.read("c1")).entries;
     expect(entries).toEqual(original);
     expect(entries.some((entry) => entry.kind === "compaction_checkpoint")).toBe(false);
@@ -173,9 +179,10 @@ describe("ConversationTranscriptCompactor", () => {
     await seed(fixture);
     const original = (await fixture.store.read("c1")).entries;
 
-    await expect(fixture.compactor.compact({
+    const pending = fixture.compactor.compact({
       conversationId: "c1", trigger: "automatic", retainTokens: 1_000_000,
-    })).rejects.toThrow("TRANSCRIPT_COMPACTION_REQUIRED");
+    });
+    await expect(pending).rejects.toMatchObject({ message: "TRANSCRIPT_COMPACTION_REQUIRED", reason: "no_safe_boundary" });
     expect((await fixture.store.read("c1")).entries).toEqual(original);
   });
 
@@ -193,9 +200,54 @@ describe("ConversationTranscriptCompactor", () => {
     const results = await Promise.allSettled([a, b]);
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
     expect(results.find((result) => result.status === "rejected")).toEqual(
-      expect.objectContaining({ reason: expect.objectContaining({ message: "TRANSCRIPT_COMPACTION_REQUIRED" }) }),
+      expect.objectContaining({ reason: expect.objectContaining({ message: "TRANSCRIPT_COMPACTION_REQUIRED", reason: "history_changed" }) }),
     );
     expect((await fixture.store.read("c1")).entries.filter((entry) => entry.kind === "compaction_checkpoint")).toHaveLength(1);
+  });
+
+  it.each(["", "不会更短".repeat(1_000)])("空白或更大的摘要不写检查点且保留全部历史", async (summary) => {
+    const fixture = createFixture();
+    await seed(fixture);
+    const original = (await fixture.store.read("c1")).entries;
+    const compactor = new ConversationTranscriptCompactor({ store: fixture.store, summarize: async () => summary });
+    await expect(compactor.compact({ conversationId: "c1", trigger: "manual", retainTokens: 1 }))
+      .rejects.toMatchObject({ message: "TRANSCRIPT_COMPACTION_REQUIRED", reason: "invalid_summary" });
+    expect((await fixture.store.read("c1")).entries).toEqual(original);
+  });
+
+  it("摘要期间历史撤回会拒绝失效检查点，给出重试原因", async () => {
+    const fixture = createFixture();
+    await seed(fixture);
+    fixture.pause();
+    const pending = fixture.compactor.compact({ conversationId: "c1", trigger: "manual", retainTokens: 1 });
+    const rejection = expect(pending).rejects.toMatchObject({ message: "TRANSCRIPT_COMPACTION_REQUIRED", reason: "history_changed" });
+    await fixture.summaryStarted;
+    await fixture.store.append("c1", { id: "withdraw", kind: "turn_tombstone", at: 100,
+      payload: { targetUserTurnId: "u1", reason: "pending_withdrawn" } });
+    const original = (await fixture.store.read("c1")).entries;
+    fixture.resume("新摘要");
+    await rejection;
+    expect((await fixture.store.read("c1")).entries).toEqual(original);
+  });
+
+  it("检查点存储失败会保留历史并区别于摘要模型错误", async () => {
+    const fixture = createFixture();
+    await seed(fixture);
+    const original = (await fixture.store.read("c1")).entries;
+    vi.spyOn(fixture.store, "appendCompactionCheckpoint").mockRejectedValue(new Error("SQLITE_FULL"));
+    await expect(fixture.compactor.compact({ conversationId: "c1", trigger: "manual", retainTokens: 1 }))
+      .rejects.toMatchObject({ message: "TRANSCRIPT_COMPACTION_REQUIRED", reason: "checkpoint_write_failed" });
+    expect((await fixture.store.read("c1")).entries).toEqual(original);
+  });
+
+  it("未提供当前会话模型时保留具体配置原因，不被外层请求错误覆盖", async () => {
+    const fixture = createFixture();
+    await seed(fixture);
+    const original = (await fixture.store.read("c1")).entries;
+    const compactor = createModelBackedConversationTranscriptCompactor({ store: fixture.store });
+    await expect(compactor.compact({ conversationId: "c1", trigger: "manual", retainTokens: 1 }))
+      .rejects.toMatchObject({ message: "TRANSCRIPT_COMPACTION_REQUIRED", reason: "model_unconfigured" });
+    expect((await fixture.store.read("c1")).entries).toEqual(original);
   });
 
   it("按活动分支 source seq 压缩同文本 replace_user，且模型上下文命中 checkpoint", async () => {
@@ -317,5 +369,31 @@ describe("ConversationTranscriptCompactor", () => {
     const finalContext = await fixture.journal.buildModelContext("c1");
     expect(finalContext.messages[0]?.content).toContain("<cyrene_compaction_checkpoint>");
     expect(finalContext.messages[0]?.content).toContain("二次摘要");
+  });
+});
+
+describe("压缩失败诊断", () => {
+  it("重复归一化保留原始失败原因与 cause，界面不显示含密钥的供应商正文", () => {
+    const secret = "sk-compaction-test-secret";
+    const cause = new AgentRuntimeError("E_MODEL_HTTP_ERROR", `HTTP 401 apiKey=${secret}`, {
+      modelFailure: { provider: "relay", model: "fixture", category: "AUTH", status: 401 },
+    });
+    const error = createTranscriptCompactionRequiredError(cause, "model_request_failed");
+    expect(error.message).toBe("TRANSCRIPT_COMPACTION_REQUIRED");
+    expect(error.cause).toBe(cause);
+    expect(createTranscriptCompactionRequiredError(error)).toBe(error);
+    const display = getTranscriptCompactionDisplayMessage(error);
+    expect(display).toContain("认证或权限");
+    expect(display).toContain("原始会话记录已保留");
+    expect(display).not.toContain(secret);
+    expect(display).not.toContain("apiKey=");
+  });
+
+  it("未知供应商错误与旧版机器码也只显示安全文案", () => {
+    const error = createTranscriptCompactionRequiredError(new Error("Authorization: Bearer sk-secret"), "model_request_failed");
+    expect(getTranscriptCompactionDisplayMessage(error)).toContain("摘要模型请求失败");
+    expect(getTranscriptCompactionDisplayMessage(error)).not.toContain("sk-secret");
+    expect(getTranscriptCompactionDisplayMessage(new Error("TRANSCRIPT_COMPACTION_REQUIRED"))).toContain("请重试");
+    expect(getTranscriptCompactionDisplayMessage(new Error("other failure"))).toBeUndefined();
   });
 });

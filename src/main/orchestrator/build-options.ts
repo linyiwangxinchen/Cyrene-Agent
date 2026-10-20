@@ -75,6 +75,7 @@ import {
 } from "./conversation-transcript-compactor";
 import { MAX_PARALLEL_TOOL_CALLS } from "../../shared/task-session";
 import { normalizeMemoryMode } from "../memory/memory-mode";
+import { getTranscriptCompactionDisplayMessage } from "../../shared/transcript-compaction-error";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -636,8 +637,12 @@ export async function buildAgentRunOptions(
           modelSettings: settings,
         });
       } catch (error) {
-        console.error("[BuildOptions] transcript compaction failed", error);
-        throw createTranscriptCompactionRequiredError(error);
+        const failure = createTranscriptCompactionRequiredError(error);
+        console.error("[BuildOptions] transcript compaction failed", {
+          reason: failure.reason,
+          detail: getTranscriptCompactionDisplayMessage(failure),
+        });
+        throw failure;
       }
       transcriptContext = await requireBuildModelContext(deps)(input.sessionId, retainTokens);
       if (estimateMessageTokens(transcriptContext.messages) >= compactionTriggerTokens) {

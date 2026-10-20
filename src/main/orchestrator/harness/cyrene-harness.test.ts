@@ -774,6 +774,79 @@ describe("CyreneHarness completion", () => {
     }
   });
 
+  it("固定上下文触发压缩且历史短于默认尾窗时，仍压缩旧前缀并保留临时环境", async () => {
+    const old = { role: "user" as const, content: "a".repeat(3_984) };
+    const latest = { role: "user" as const, content: "b".repeat(1_184) };
+    const compactTranscript = vi.fn(async () => [{ role: "system" as const, content: "旧任务摘要" }, latest]);
+    const { fn: fetchMock } = fakeFetchSequencer([assistantResponse({ text: "继续完成" })]);
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await runCyreneHarness({
+      systemPrompt: "s".repeat(64_000), messages: [old, latest], tools: [], vendorConfig,
+      allowedBuiltinToolIds: new Set(), transcriptSink: fakeSink(), compactTranscript,
+      initialInternalContext: { kind: "run_start", content: "t".repeat(3_984) },
+      config: { contextWindowTokens: 20_000, reservedOutputTokens: 500, safetyMarginTokens: 0 },
+    });
+    expect(result.finalAnswer).toBe("继续完成");
+    expect(compactTranscript).toHaveBeenCalledWith(expect.objectContaining({ retainTokens: 300 }));
+    const request = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string) as { messages: ChatMessage[] };
+    expect(request.messages.some(message => String(message.content).includes("t".repeat(3_984)))).toBe(true);
+    expect(request.messages.some(message => message.content === old.content)).toBe(false);
+  });
+
+  it("最新完整消息已超硬预算时不调用摘要或模型，并保留原历史", async () => {
+    const messages: ChatMessage[] = [{ role: "user", content: "旧任务".repeat(100) },
+      { role: "user", content: "a".repeat(7_984) }];
+    const original = structuredClone(messages);
+    const compactTranscript = vi.fn(async () => []);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await runCyreneHarness({
+      systemPrompt: "s".repeat(72_000), messages, tools: [], vendorConfig,
+      allowedBuiltinToolIds: new Set(), transcriptSink: fakeSink(), compactTranscript,
+      config: { contextWindowTokens: 20_000, reservedOutputTokens: 500, safetyMarginTokens: 0 },
+    });
+    expect(result.finalAnswer).toContain("最新一组消息或工具结果已占满");
+    expect(result.finalAnswer).not.toContain("TRANSCRIPT_COMPACTION_REQUIRED");
+    expect(compactTranscript).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(messages).toEqual(original);
+  });
+
+  it.each([{ summaryTokens: 1_500, allowed: true }, { summaryTokens: 4_000, allowed: false }])(
+    "压缩后的硬预算决定是否请求模型，超过软阈值但仍可用时允许继续：$allowed", async ({ summaryTokens, allowed }) => {
+      const latest = { role: "user" as const, content: "b".repeat(1_984) };
+      const compactTranscript = vi.fn(async () => [
+        { role: "system" as const, content: "c".repeat((summaryTokens - 4) * 4) }, latest,
+      ]);
+      const { fn: fetchMock } = fakeFetchSequencer([assistantResponse({ text: "继续完成" })]);
+      vi.stubGlobal("fetch", fetchMock);
+      const result = await runCyreneHarness({
+        systemPrompt: "s".repeat(64_000),
+        messages: [{ role: "user", content: "a".repeat(19_984) }, latest], tools: [], vendorConfig,
+        allowedBuiltinToolIds: new Set(), transcriptSink: fakeSink(), compactTranscript,
+        config: { contextWindowTokens: 20_000, reservedOutputTokens: 500, safetyMarginTokens: 0 },
+      });
+      expect(compactTranscript).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      expect(result.finalAnswer).toContain(allowed ? "继续完成" : "最新消息仍超过模型输入容量");
+    },
+  );
+
+  it("旧压缩错误码也转换为安全说明，不向用户暴露内部 sentinel", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await runCyreneHarness({
+      systemPrompt: "s".repeat(64_000),
+      messages: [{ role: "user", content: "a".repeat(19_984) }, { role: "user", content: "继续" }],
+      tools: [], vendorConfig, allowedBuiltinToolIds: new Set(), transcriptSink: fakeSink(),
+      compactTranscript: async () => { throw new Error("TRANSCRIPT_COMPACTION_REQUIRED"); },
+      config: { contextWindowTokens: 20_000, reservedOutputTokens: 500, safetyMarginTokens: 0 },
+    });
+    expect(result.finalAnswer).toContain("上下文压缩失败：未能完成会话摘要");
+    expect(result.finalAnswer).not.toContain("TRANSCRIPT_COMPACTION_REQUIRED");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("routes a tool round failure to a unified error terminal settlement", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ toolCalls: [mutationToolCall("boom-call")] }),

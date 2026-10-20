@@ -1358,6 +1358,25 @@ describe("agui-bridge session run guard", () => {
     expect(bridge.__getSessionActiveRunForTest("guard-8")).toBeUndefined();
   });
 
+  it("运行前压缩失败向用户显示安全原因，数据库仍保留机器码并释放守卫", async () => {
+    mocks.getSession.mockReturnValue({ id: "compact-failure", mode: "chat" });
+    const { bridge, runHandler } = await setupBridge(async () => {
+      const { createTranscriptCompactionRequiredError } = await import("../shared/transcript-compaction-error");
+      throw createTranscriptCompactionRequiredError(new Error("apiKey=sk-secret"), "invalid_summary");
+    });
+    const sender = makeSender();
+    const input = { assistantTurnId: "compact-assistant", sessionId: "compact-failure" };
+    const failure = await runHandler({ sender }, input).then(() => undefined, (error: Error & { code: string }) => error);
+    expect(failure?.message).toContain("上下文压缩失败：摘要模型没有返回有效且更短的摘要");
+    expect(failure?.message).not.toContain("sk-secret");
+    expect(failure?.code).toBe("TRANSCRIPT_COMPACTION_REQUIRED");
+    expect(bridge.__getSessionActiveRunForTest("compact-failure")).toBeUndefined();
+    const { getConversationDatabase } = await import("./storage/conversation-database-client");
+    const receipt = await getConversationDatabase(mocks.userDataRoot).call("runs.lookup", input.sessionId, input.assistantTurnId,
+      { mode: "chat", assistantTurnId: input.assistantTurnId });
+    expect(receipt).toMatchObject({ duplicate: true, status: "failed", error: "TRANSCRIPT_COMPACTION_REQUIRED" });
+  });
+
   it("same-tick concurrent runs on one session: exactly one registers", async () => {
     mocks.getSession.mockReturnValue({ id: "guard-9", mode: "chat" });
     mocks.skipDefaultRunFinished = true;

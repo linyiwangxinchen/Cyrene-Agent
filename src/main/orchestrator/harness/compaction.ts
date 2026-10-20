@@ -160,6 +160,50 @@ export function findSafeCutPointForRetainedTokens(
   return cutIndex;
 }
 
+/**
+ * 持久化压缩只缩短历史，不能缩短固定提示词或本轮临时环境。
+ * 在硬输入预算内保留尽可能接近默认尾窗的完整消息组，并给摘要留出空间。
+ */
+export function resolveCompactionRetainTokens(input: {
+  messages: ChatMessage[];
+  defaultRetainTokens: number;
+  usableInputBudget: number;
+  fixedInputTokens: number;
+  transientTokens: number;
+}): number {
+  const availableHistoryTokens = Math.floor(input.usableInputBudget - input.fixedInputTokens - input.transientTokens);
+  if (availableHistoryTokens <= 0) {
+    throw new Error("系统提示词、工具定义和本轮运行环境已占满模型输入容量，请减少启用的工具或缩短运行环境，或选择上下文更大的模型。原会话历史已保留。");
+  }
+
+  // 只保留最后一条消息时仍需把跨边界的工具调用及结果整组保留。
+  const latestGroupCut = findSafeCutPointForRetainedTokens(input.messages, 1);
+  if (latestGroupCut <= 0) {
+    throw new Error("当前历史只有一组不可拆分的最新消息或工具调用，无法安全压缩。请缩短该消息或工具输出，或选择上下文更大的模型。原会话历史已保留。");
+  }
+  const minimumTailTokens = estimateMessageTokens(input.messages.slice(latestGroupCut));
+  if (minimumTailTokens >= availableHistoryTokens) {
+    throw new Error("最新一组消息或工具结果已占满可用输入容量，压缩更早历史也无法继续。请缩短最新消息或工具输出，或选择上下文更大的模型。原会话历史已保留。");
+  }
+
+  const summaryReserve = Math.min(1_024, availableHistoryTokens - minimumTailTokens);
+  const maximumTailTokens = availableHistoryTokens - summaryReserve;
+  // 默认尾窗比整段历史更长时，至少留出一个完整旧前缀供摘要，而不是永久返回 cut=0。
+  let firstSafeCut = 1;
+  while (firstSafeCut < latestGroupCut && !isToolPairSafeBoundary(input.messages, firstSafeCut)) firstSafeCut++;
+  const maximumRetainableTokens = estimateMessageTokens(input.messages.slice(firstSafeCut));
+  const requestedTailTokens = Math.max(1, Math.min(
+    input.defaultRetainTokens, maximumTailTokens, maximumRetainableTokens,
+  ));
+  let cut = findSafeCutPointForRetainedTokens(input.messages, requestedTailTokens);
+  // token 尾窗允许最后一条消息越界；这里改用下一个完整边界以满足真实硬预算。
+  while (cut < latestGroupCut && (
+    !isToolPairSafeBoundary(input.messages, cut)
+    || estimateMessageTokens(input.messages.slice(cut)) > maximumTailTokens
+  )) cut++;
+  return estimateMessageTokens(input.messages.slice(cut));
+}
+
 // ── Agent 导向压缩 prompt ────────────────────────────────
 
 export const AGENT_COMPACTION_PROMPT = `你正在为 CyreneHarness 生成可恢复的执行历史检查点。请将上方较早的对话历史压缩为以下固定 Markdown 结构；每个标题都必须保留，没有内容时写“无”。

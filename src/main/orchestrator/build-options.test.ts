@@ -1602,12 +1602,18 @@ describe("权威轨迹上下文源（CTA Phase 1）", () => {
     deps.buildModelContext = vi.fn(async () => ({
       messages: [{ role: "user" as const, content: "历史".repeat(300) }], uncertainEffects: [], throughSeq: 8,
     }))
-    deps.compactTranscript = vi.fn(async () => { throw new Error("provider down") })
+    deps.compactTranscript = vi.fn(async () => { throw new Error("provider down apiKey=sk-test-secret") })
+    const log = vi.spyOn(console, "error").mockImplementation(() => {})
 
     await expect(buildAgentRunOptions({
       sessionId: "auto-compact-failure",
       currentUser: { turnId: "turn-1", text: "继续", visibleContent: "继续" },
     } as never, deps)).rejects.toThrow("TRANSCRIPT_COMPACTION_REQUIRED")
+    expect(log).toHaveBeenCalledWith("[BuildOptions] transcript compaction failed", expect.objectContaining({
+      reason: "unknown", detail: expect.stringContaining("原始会话记录已保留"),
+    }))
+    expect(JSON.stringify(log.mock.calls)).not.toContain("sk-test-secret")
+    log.mockRestore()
   })
 
   it("轮次内压缩入口绑定当前会话模型并重读已提交摘要", async () => {

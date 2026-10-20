@@ -741,6 +741,7 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_COMPACT, { sessionId }) as Promise<{
       ok: boolean;
       error?: string;
+      detail?: string;
       before?: number;
       after?: number;
     }>,

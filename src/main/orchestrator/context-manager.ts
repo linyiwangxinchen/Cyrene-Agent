@@ -4,6 +4,10 @@ import { generateChatWithAiSdk } from "./vendors/model-runtime";
 import { getTimeoutSettings } from "../timeout-manager";
 import { recoverPortableMessage } from "./vendors/model-history";
 import { recordRequest, recordUsage } from "../token-usage-store";
+import { setTimeout as sleep } from "node:timers/promises";
+import { isModelFailureInfo } from "../../shared/model-error";
+import { createTranscriptCompactionRequiredError } from "../../shared/transcript-compaction-error";
+import { nextModelRetryDelayMs, readRetryAfterMs } from "./vendors/model-retry-policy";
 
 const COMPRESSION_PROMPT = `你正在帮"昔涟"整理对话记忆。请把下面这段较早的对话历史总结成一段简洁的摘要，供后续回复参考。
 
@@ -63,15 +67,55 @@ export function estimateMessageTokens(messages: ChatMessage[]): number {
   }, 0);
 }
 
+function withoutImageData(text: string): string {
+  return text.replace(/data:image\/[^\s;,"'<>]+;base64,[A-Za-z0-9+/=_-]+/g, "[图片编码省略，原图保留在会话附件中]");
+}
+
+/** 摘要只消费可移植语义；图片保留引用，不把编码当成数十万 token 的正文。 */
 function formatConversation(messages: ChatMessage[]): string {
   return messages
     .map(recoverPortableMessage)
     .map((m) => {
       const prefix = m.role === "user" ? "用户" : m.role === "assistant" ? "昔涟" : m.role;
-      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-      return `--- ${prefix} ---\n${text}`;
+      const text = typeof m.content === "string" ? m.content : (m.content ?? []).map(block =>
+        block.type === "text" ? block.text : "[图片：内容由原会话及附件引用保留，不从编码推断图像细节]").join("\n");
+      const calls = (m.toolCalls ?? []).map(call => `工具调用 ${call.name}（${call.id}）：${call.arguments}`);
+      const result = m.role === "tool" ? `工具结果 ${m.name ?? ""}（${m.toolCallId ?? ""}）` : "";
+      const files = [...(m.userAttachments ?? []), ...(m.attachments ?? [])]
+        .map(file => `附件 ${file.name}：${file.filePath}`);
+      return withoutImageData(`--- ${prefix} ---\n${[result, text, ...calls, ...files].filter(Boolean).join("\n")}`);
     })
     .join("\n\n");
+}
+
+/** 单条超长工具输出也可分片；按同一 token 口径遍历，不截掉历史尾部。 */
+function splitSummaryInput(text: string, maxTokens: number): string[] {
+  const chunks: string[] = [];
+  const maxUnits = maxTokens * 12;
+  let start = 0;
+  let offset = 0;
+  let units = 0;
+  for (const char of text) {
+    const weight = char.charCodeAt(0) > 127 ? 8 : 3;
+    if (units + weight > maxUnits && offset > start) {
+      chunks.push(text.slice(start, offset));
+      start = offset;
+      units = 0;
+    }
+    units += weight;
+    offset += char.length;
+  }
+  if (start < text.length) chunks.push(text.slice(start));
+  return chunks;
+}
+
+function retryableSummaryFailure(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const failure = (error as { modelFailure?: unknown }).modelFailure;
+  if (!isModelFailureInfo(failure)) return false;
+  if (failure.retryable === false) return false;
+  return ["RATE_LIMIT", "TIMEOUT", "NETWORK", "OVERLOADED", "SERVER_ERROR", "UNAVAILABLE"].includes(failure.category)
+    || failure.status === 408 || failure.status === 429 || (failure.status !== undefined && failure.status >= 500);
 }
 
 /**
@@ -84,16 +128,6 @@ export async function callSummarizeModel(
   settings: AgentLoopSettings,
   signal?: AbortSignal,
 ): Promise<string> {
-  const prompt = COMPRESSION_PROMPT.replace("{history}", formatConversation(messages));
-  const request: ChatRequest = {
-    model: settings.model,
-    messages: [
-      { role: "system", content: prompt },
-      { role: "user", content: "请总结上面的对话历史。" },
-    ],
-    stream: false,
-  };
-
   const vendorConfig = {
     provider: settings.provider,
     baseUrl: settings.baseUrl,
@@ -105,12 +139,66 @@ export async function callSummarizeModel(
     manualReasoning: settings.manualReasoning,
   };
 
-  const effectiveRequest = adapter.applyCacheHints?.(request, vendorConfig) ?? request;
-  const parsed = await generateChatWithAiSdk({ adapter, request: effectiveRequest, config: vendorConfig,
-    signal, timeoutMs: getTimeoutSettings().chatRequestTimeout });
-  recordRequest(settings.model);
-  if (parsed.usage) {
-    recordUsage(parsed.usage.input, parsed.usage.output, 1, parsed.usage.cachedInput, settings.model, parsed.usage.cacheCreation);
+  const contextWindow = settings.contextWindowTokens ?? 256_000;
+  // 输出预留包含推理 token。限制每次摘要输入，避免长历史在临近窗口上限时再次溢出。
+  const maxTokens = Math.min(16_384, Math.max(256, Math.floor(contextWindow * 0.2)));
+  const safetyMargin = Math.min(1024, Math.max(64, Math.floor(contextWindow * 0.05)));
+  const instruction = "请总结上面的对话历史。保留本段里的精确事实；如果是分段摘要，合并已有摘要。";
+  const overhead = estimateTokens(COMPRESSION_PROMPT.replace("{history}", "")) + estimateTokens(instruction) + 16;
+  const inputBudget = Math.min(48_000, Math.floor(contextWindow - maxTokens - safetyMargin - overhead));
+  if (!Number.isFinite(inputBudget) || inputBudget < 1) {
+    throw createTranscriptCompactionRequiredError(undefined, "no_safe_boundary");
   }
-  return parsed.text.trim() || "[压缩结果为空]";
+
+  const summarizeChunk = async (history: string): Promise<string> => {
+    const request: ChatRequest = {
+      model: settings.model,
+      messages: [
+        { role: "system", content: COMPRESSION_PROMPT.replace("{history}", () => history) },
+        { role: "user", content: instruction },
+      ],
+      maxTokens,
+      stream: false,
+    };
+    for (let attempt = 0; ; attempt++) {
+      signal?.throwIfAborted();
+      let parsed;
+      try {
+        parsed = await generateChatWithAiSdk({ adapter, request, config: vendorConfig,
+          signal, timeoutMs: getTimeoutSettings().chatRequestTimeout });
+      } catch (error) {
+        if (signal?.aborted || attempt >= 2 || !retryableSummaryFailure(error)) throw error;
+        const delay = nextModelRetryDelayMs(attempt + 1, readRetryAfterMs(error));
+        if (delay === undefined) throw error;
+        await sleep(delay, undefined, { signal });
+        continue;
+      }
+      recordRequest(settings.model);
+      if (parsed.usage) {
+        recordUsage(parsed.usage.input, parsed.usage.output, 1, parsed.usage.cachedInput, settings.model, parsed.usage.cacheCreation);
+      }
+      // 空正文/仅推理/拒答/截断不能成为可持久化的摘要，更不能归档掉原记录。
+      const summary = parsed.text.trim();
+      if (!summary || parsed.refusal || ["length", "max_tokens", "content_filter"].includes(parsed.finishReason)) {
+        throw createTranscriptCompactionRequiredError(undefined, "invalid_summary");
+      }
+      return summary;
+    }
+  };
+
+  let history = formatConversation(messages);
+  if (!history.trim()) throw createTranscriptCompactionRequiredError(undefined, "invalid_summary");
+  // 先逐片摘要，再合并为一个检查点；任意片失败都会保留整段原轨迹供重试。
+  for (let level = 0; level < 8; level++) {
+    const chunks = splitSummaryInput(history, inputBudget);
+    if (chunks.length === 1) return summarizeChunk(chunks[0]!);
+    const summaries: string[] = [];
+    for (const chunk of chunks) summaries.push(await summarizeChunk(chunk));
+    const reduced = summaries.map((summary, index) => `【第 ${index + 1} 段摘要】\n${summary}`).join("\n\n");
+    if (estimateTokens(reduced) >= estimateTokens(history)) {
+      throw createTranscriptCompactionRequiredError(undefined, "invalid_summary");
+    }
+    history = reduced;
+  }
+  throw createTranscriptCompactionRequiredError(undefined, "invalid_summary");
 }

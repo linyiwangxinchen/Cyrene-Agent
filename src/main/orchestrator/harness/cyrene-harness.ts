@@ -41,7 +41,9 @@ import type { ToolOutputRef } from "./tool-output/tool-output-store";
 import { INITIAL_HARNESS_CACHE_STATE, DEFAULT_HARNESS_CONFIG } from "./types";
 import { getHarnessBuiltinToolSpecs } from "./builtin-tools";
 import type { ToolDispatchContext } from "./tool-dispatcher";
-import { computeTokenBudget, compressForAgentLoop, type TokenBudget } from "./compaction";
+import { computeTokenBudget, compressForAgentLoop, resolveCompactionRetainTokens, type TokenBudget } from "./compaction";
+import { estimateMessageTokens } from "../context-manager";
+import { getTranscriptCompactionDisplayMessage } from "../../../shared/transcript-compaction-error";
 import { emitContextUsage, emitCacheDiagnostic } from "./harness-observability";
 import { StreamController } from "./stream-controller";
 import { TimeoutClock } from "./timeout-clock";
@@ -149,7 +151,8 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         await compaction;
       } catch (error) {
         if (input.signal?.aborted) return cancelledResult(run);
-        return finishRun(run, `上下文压缩失败：${errorMessage(error)}`, true, "error");
+        return finishRun(run, getTranscriptCompactionDisplayMessage(error)
+          ?? `上下文压缩失败：${errorMessage(error)}`, true, "error");
       }
       // 会话摘要已提交检查点，运行历史与后续轮次从同一压缩视图继续。
     }
@@ -547,13 +550,23 @@ async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget:
   const messageCountBefore = run.messages.length;
   emitContextUsage(run, "preCompaction");
   input.onCompactionLifecycle?.({ status: "started", messageCountBefore });
-  const retainTokens = Math.floor(config.contextWindowTokens * config.compactionRetainRatio);
+  let retainTokens = Math.floor(config.contextWindowTokens * config.compactionRetainRatio);
   // 运行时环境等内部事实不属于会话历史；压缩后继续供本轮使用。
   const transientMessages = run.messages.filter((message) => message.visibility === "internal"
     && message.role === "user"
     && message.internal?.runId === (input.runId ?? "harness-run"));
-  const compactedMessages = input.compactTranscript && input.transcriptSink
-    ? [...await input.compactTranscript({ retainTokens, transientMessages, signal: input.signal }), ...transientMessages]
+  const durableCompaction = Boolean(input.compactTranscript && input.transcriptSink);
+  if (durableCompaction) {
+    retainTokens = resolveCompactionRetainTokens({
+      messages: run.messages.filter((message) => !transientMessages.includes(message)),
+      defaultRetainTokens: retainTokens,
+      usableInputBudget: budget.usableInputBudget,
+      fixedInputTokens: budget.estimatedInput - estimateMessageTokens(run.messages),
+      transientTokens: estimateMessageTokens(transientMessages),
+    });
+  }
+  const compactedMessages = durableCompaction
+    ? [...await input.compactTranscript!({ retainTokens, transientMessages, signal: input.signal }), ...transientMessages]
     : await compressForAgentLoop({
       messages: run.messages,
       retainTokens,
@@ -570,6 +583,13 @@ async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget:
         },
       ),
     });
+  if (durableCompaction) {
+    const after = computeTokenBudget(roundSystemPrompt, run.allToolSpecs, compactedMessages,
+      config.contextWindowTokens, config.reservedOutputTokens, config.safetyMarginTokens, config.compactionThreshold);
+    if (after.estimatedInput > after.usableInputBudget) {
+      throw new Error("摘要生成后，系统提示词、工具定义与最新消息仍超过模型输入容量。请减少启用的工具或缩短最新消息，或选择上下文更大的模型。原会话记录已保留。");
+    }
+  }
   if (compactedMessages !== run.messages) {
     run.cache = { cacheEpoch: run.cache.cacheEpoch + 1, epochReason: "compaction" };
     run.messages = compactedMessages;

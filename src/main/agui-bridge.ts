@@ -41,6 +41,7 @@ import { loadModelSettings, resolveSessionModelSettings } from "./settings/model
 import type { ChatMessage, ConversationMode, PendingChatAttachment } from "../shared/chat-types";
 import { normalizeBrowserElementSelection } from "../shared/browser-panel-types";
 import { isModelFailureInfo } from "../shared/model-error";
+import { getTranscriptCompactionDisplayMessage, TRANSCRIPT_COMPACTION_REQUIRED } from "../shared/transcript-compaction-error";
 import { type TranscriptRewindRequest } from "./orchestrator/conversation-transcript-coordinator";
 import { getConversationTranscriptStore } from "./orchestrator/conversation-transcript-store";
 import { createConversationSessionMigration } from "./orchestrator/conversation-session-migration";
@@ -1071,6 +1072,9 @@ export function registerAgUiIpc(
       endConversation();
       const requestId = input.transcriptRewind ? input.assistantTurnId : input.currentUser?.turnId ?? input.userTurnId ?? input.assistantTurnId;
       if (input.sessionId && requestId) await getConversationDatabase(app.getPath("userData")).call("runs.failRequest", input.sessionId, requestId, (error as Error).message).catch(failure => console.error("[AgUiBridge] 接纳准备失败回执写入失败:", failure));
+      // 数据库保留机器错误码以维持幂等回执；仅在 IPC 出口转换用户可读文案。
+      const compactionDetail = getTranscriptCompactionDisplayMessage(error);
+      if (compactionDetail) throw Object.assign(new Error(compactionDetail), { code: TRANSCRIPT_COMPACTION_REQUIRED });
       throw error;
     }
   });

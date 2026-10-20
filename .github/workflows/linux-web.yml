@@ -49,9 +49,12 @@ jobs:
           src/main/channels/outgoing-composer.test.ts
           src/main/proactive/proactive-wechat.integration.test.ts
           src/main/orchestrator/build-options.test.ts
+          src/main/orchestrator/context-manager.summarize.test.ts
           src/main/orchestrator/conversation-transcript-projection.test.ts
           src/main/orchestrator/conversation-transcript-compactor.test.ts
           src/main/orchestrator/conversation-transcript-validation.test.ts
+          src/main/orchestrator/harness/compaction.test.ts
+          src/main/orchestrator/harness/cyrene-harness.test.ts
           src/main/orchestrator/vendors/model-factory.test.ts
           src/main/orchestrator/vendors/model-runtime.test.ts
           src/main/orchestrator/shell-runtime.test.ts
@@ -76,3 +79,4 @@ jobs:
         run: |
           pnpm run verify:shared-core
           pnpm run verify:voice-mcp
+          node scripts/verify/shared-core-compaction.mjs

@@ -5,11 +5,63 @@ import {
   compressForAgentLoop,
   findSafeCutPointForRetainedTokens,
   isToolPairSafeBoundary,
+  resolveCompactionRetainTokens,
 } from "./compaction";
 
 function message(role: ChatMessage["role"], content: string): ChatMessage {
   return { role, content };
 }
+
+function tokenMessage(tokens: number): ChatMessage {
+  return message("user", "a".repeat((tokens - 4) * 4));
+}
+
+describe("durable compaction tail budget", () => {
+  const base = { defaultRetainTokens: 1_600, usableInputBudget: 10_000, fixedInputTokens: 1_000, transientTokens: 0 };
+
+  it("预算充足时保持默认尾窗并原样保留完整消息", () => {
+    const messages = Array.from({ length: 10 }, () => tokenMessage(1_000));
+    expect(resolveCompactionRetainTokens({ ...base, messages })).toBe(2_000);
+  });
+
+  it("固定提示词和临时环境挤占容量时只缩小到可容纳的完整尾部", () => {
+    const messages = Array.from({ length: 10 }, () => tokenMessage(1_000));
+    expect(resolveCompactionRetainTokens({ ...base, messages, fixedInputTokens: 6_500, transientTokens: 1_000 })).toBe(1_000);
+  });
+
+  it("整段历史短于默认尾窗时仍能压缩旧前缀，而不会永久 cut=0", () => {
+    const messages = [tokenMessage(1_000), tokenMessage(200)];
+    const retain = resolveCompactionRetainTokens({ ...base, messages, defaultRetainTokens: 40_960 });
+    expect(retain).toBe(200);
+    expect(findSafeCutPointForRetainedTokens(messages, retain)).toBe(1);
+  });
+
+  it("缩小尾窗也完整保留最新的工具调用和结果", () => {
+    const messages: ChatMessage[] = [tokenMessage(2_000),
+      { ...tokenMessage(100), role: "assistant", toolCalls: [{ id: "read", name: "read_file", arguments: "{}" }] },
+      { ...tokenMessage(400), role: "tool", toolCallId: "read", name: "read_file" }];
+    const retain = resolveCompactionRetainTokens({ ...base, messages, defaultRetainTokens: 100 });
+    expect(retain).toBe(500);
+    expect(findSafeCutPointForRetainedTokens(messages, retain)).toBe(1);
+  });
+
+  it("固定上下文或最新完整组已占满预算时给出明确错误，不改消息", () => {
+    const messages = [tokenMessage(2_000), tokenMessage(2_000)];
+    const original = structuredClone(messages);
+    expect(() => resolveCompactionRetainTokens({ ...base, messages, fixedInputTokens: 10_000 }))
+      .toThrow("系统提示词、工具定义和本轮运行环境已占满");
+    expect(() => resolveCompactionRetainTokens({ ...base, messages, fixedInputTokens: 8_500 }))
+      .toThrow("最新一组消息或工具结果已占满");
+    expect(messages).toEqual(original);
+  });
+
+  it("仅有一个不可拆分工具组时不会为生成摘要拆开配对", () => {
+    const messages: ChatMessage[] = [
+      { ...tokenMessage(100), role: "assistant", toolCalls: [{ id: "read", name: "read_file", arguments: "{}" }] },
+      { ...tokenMessage(400), role: "tool", toolCallId: "read", name: "read_file" }];
+    expect(() => resolveCompactionRetainTokens({ ...base, messages })).toThrow("只有一组不可拆分");
+  });
+});
 
 describe("compaction trigger budget", () => {
   it.each([
