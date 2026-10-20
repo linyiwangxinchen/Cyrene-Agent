@@ -47,6 +47,11 @@ jobs:
           src/main/channels/bootstrap.test.ts
           src/main/channels/dispatcher.test.ts
           src/main/channels/outgoing-composer.test.ts
+          src/main/memory/memory-background-schedulers.test.ts
+          src/main/memory/memory-llm-client.test.ts
+          src/main/memory/memory-llm-client.responses.test.ts
+          src/main/orchestrator/structured-output/runner.test.ts
+          src/main/services/llm/llm-client.test.ts
           src/main/proactive/proactive-wechat.integration.test.ts
           src/main/orchestrator/build-options.test.ts
           src/main/orchestrator/context-manager.summarize.test.ts
@@ -82,3 +87,4 @@ jobs:
           pnpm run verify:shared-core
           pnpm run verify:voice-mcp
           node scripts/verify/shared-core-compaction.mjs
+          node scripts/verify/shared-core-memory.mjs

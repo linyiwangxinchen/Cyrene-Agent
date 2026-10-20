@@ -44,6 +44,21 @@ function responsesRefusalBody(refusal = "不能提供该内容"): Record<string,
   }] };
 }
 
+function responsesSseBody(body: Record<string, unknown>): Response {
+  const output = body.output as Array<Record<string, unknown>>;
+  return sseResponse([
+    { type: "response.created", response: { id: body.id, model: body.model, created_at: 1 } },
+    ...output.flatMap((item, output_index) => [
+      { type: "response.output_item.added", output_index, item: { ...item, content: [] } },
+      ...(Array.isArray(item.content) ? (item.content as Array<Record<string, unknown>>).map((part, content_index) =>
+        part.type === "refusal" ? { type: "response.refusal.delta", item_id: item.id, output_index, content_index, delta: part.refusal }
+          : { type: "response.output_text.delta", item_id: item.id, output_index, content_index, delta: part.text }) : []),
+      { type: "response.output_item.done", output_index, item },
+    ]),
+    { type: "response.completed", response: body },
+  ]);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -84,7 +99,8 @@ describe("统一模型客户端的 SDK 集成", () => {
   });
 
   it.each(transports)("%s 非流式返回正文、推理和结束原因", async transport => {
-    installFetch(() => jsonResponse(responseBody(transport, { reasoning: true })));
+    installFetch(() => transport === "responses" ? sseResponse(streamEvents(transport, { reasoning: true }))
+      : jsonResponse(responseBody(transport, { reasoning: true })));
     const result = await createLlmClient().chatNonStream(settings(transport), messages, undefined, 2000, "非流式测试");
     expect(result).toMatchObject({ text: "answer", thinking: "reason", finishReason: "stop" });
     expect(result.refusal).toBeUndefined();
@@ -108,7 +124,8 @@ describe("统一模型客户端的 SDK 集成", () => {
   });
 
   it.each(transports)("%s 非流式透传结构化输出、预算和额外参数", async transport => {
-    const network = installFetch(() => jsonResponse(responseBody(transport, { text: '{"title":"标题"}' })));
+    const network = installFetch(() => transport === "responses" ? sseResponse(streamEvents(transport, { text: '{"title":"标题"}' }))
+      : jsonResponse(responseBody(transport, { text: '{"title":"标题"}' })));
     const schema = { type: "object", properties: { title: { type: "string" } }, required: ["title"], additionalProperties: false };
     const result = await createLlmClient().chatNonStream(settings(transport), messages, 0.1, 2000, "结构化测试", undefined, {
       structuredOutput: { mode: "json_schema", name: "title", schema, strict: true },
@@ -118,7 +135,8 @@ describe("统一模型客户端的 SDK 集成", () => {
     const body = requestBody(network);
     expect(result.text).toBe('{"title":"标题"}');
     expect(body).toMatchObject({ custom_flag: "透传", temperature: 0.1 });
-    expect(body.stream).not.toBe(true);
+    if (transport === "responses") expect(body.stream).toBe(true);
+    else expect(body.stream).not.toBe(true);
     if (transport === "responses") {
       expect(body.max_output_tokens).toBe(321);
       expect(body.text).toMatchObject({ format: { type: "json_schema", name: "title", schema, strict: true } });
@@ -143,14 +161,14 @@ describe("统一模型客户端的 SDK 集成", () => {
     const body = mode === "responses" ? responsesRefusalBody() : {
       ...responseBody("openai"), choices: [{ index: 0, message: { role: "assistant", content: null, refusal: "不能提供该内容" }, finish_reason: "stop" }],
     };
-    installFetch(() => jsonResponse(body));
+    installFetch(() => mode === "responses" ? responsesSseBody(body) : jsonResponse(body));
     const result = await createLlmClient().chatNonStream(config, messages, undefined, 2000, "拒答测试");
     expect(result).toMatchObject({ text: "", refusal: "不能提供该内容", finishReason: "stop" });
     expect(recordRequest).toHaveBeenCalledTimes(1);
   });
 
   it("Responses 拒答兼容仍交由 SDK 校验其余字段", async () => {
-    installFetch(() => jsonResponse({ ...responsesRefusalBody(), usage: { input_tokens: "非法用量", output_tokens: 2 } }));
+    installFetch(() => responsesSseBody({ ...responsesRefusalBody(), usage: { input_tokens: "非法用量", output_tokens: 2 } }));
     await expect(createLlmClient().chatNonStream(settings("responses"), messages, undefined, 2000, "无效拒答响应"))
       .rejects.toMatchObject({ code: "E_MODEL_REQUEST_FAILED" });
     expect(recordRequest).not.toHaveBeenCalled();
@@ -192,17 +210,17 @@ describe("统一模型客户端的 SDK 集成", () => {
       { type: "refusal", refusal: "不能提供" },
       { type: "refusal", refusal: "该内容" },
     ] }];
-    installFetch(() => jsonResponse({ ...responseBody("responses"), output }));
+    installFetch(() => responsesSseBody({ ...responseBody("responses"), output }));
     expect(await createLlmClient().chatNonStream(settings("responses"), messages, undefined, 2000, "混合拒答"))
       .toMatchObject({ text: "可提供的部分", refusal: "不能提供该内容", finishReason: "stop" });
   });
 
   it("Responses 无效拒答块不会被兼容层吞掉", async () => {
-    installFetch(() => jsonResponse({ ...responseBody("responses"), output: [{
+    installFetch(() => responsesSseBody({ ...responseBody("responses"), output: [{
       id: "msg_test", type: "message", role: "assistant", status: "completed", content: [{ type: "refusal", refusal: 123 }],
     }] }));
     await expect(createLlmClient().chatNonStream(settings("responses"), messages, undefined, 2000, "无效拒答块"))
-      .rejects.toMatchObject({ code: "E_MODEL_REQUEST_FAILED" });
+      .rejects.toMatchObject({ code: "E_MODEL_RESPONSE_PARSE_FAILED" });
     expect(recordRequest).not.toHaveBeenCalled();
   });
 

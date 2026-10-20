@@ -12,6 +12,7 @@ import type {
 } from "./types";
 import { getTimeoutSettings } from "../../timeout-manager";
 import { resolveModelRequestTimeoutMs, resolveTotalBudgetMs } from "../config/model-timeout";
+import { getModelRequestDiagnostics, type ModelRequestDiagnostics } from "../../../shared/model-request-diagnostics";
 
 export interface StructuredGenerationResponse {
   text: string;
@@ -59,6 +60,7 @@ export type StructuredOutputRunResult<T> =
         disposition: StructuredErrorDisposition;
         attempts: number;
         toolExecuted: false;
+        requestFailure?: ModelRequestDiagnostics;
       };
     };
 
@@ -130,6 +132,7 @@ export async function runStructuredOutput<T, TRequest>(
   const fail = (
     code: string,
     disposition: StructuredErrorDisposition,
+    requestFailure?: ModelRequestDiagnostics,
   ): StructuredOutputRunResult<T> => finish({
     outcome: "failure",
     failure: {
@@ -138,6 +141,7 @@ export async function runStructuredOutput<T, TRequest>(
       disposition,
       attempts,
       toolExecuted: false,
+      ...(requestFailure ? { requestFailure } : {}),
     },
   }, code);
 
@@ -173,15 +177,16 @@ export async function runStructuredOutput<T, TRequest>(
       ]);
     } catch (err) {
       const elapsedMs = now() - attemptStart;
-      const errorName = err instanceof Error ? err.name : typeof err;
-      const errorMessage = err instanceof Error ? err.message : String(err);
+      const requestFailure = getModelRequestDiagnostics(err);
       const isAborted = controller.signal.aborted;
 
       // 基于明确异常类型分类，不靠文本模糊匹配
       let errorCode = "MODEL_REQUEST_FAILED";
 
       // 1. 超时：我们自己抛的 STRUCTURED_OUTPUT_TIMEOUT，或 AbortError
-      if (err instanceof Error && err.message === "STRUCTURED_OUTPUT_TIMEOUT") {
+      if (input.signal?.aborted) {
+        errorCode = "CANCELLED";
+      } else if (err instanceof Error && err.message === "STRUCTURED_OUTPUT_TIMEOUT") {
         errorCode = "MODEL_REQUEST_TIMEOUT";
       } else if (err instanceof Error && err.name === "AbortError") {
         errorCode = "MODEL_REQUEST_TIMEOUT";
@@ -201,18 +206,22 @@ export async function runStructuredOutput<T, TRequest>(
       else if (err instanceof SyntaxError) {
         errorCode = "MODEL_RESPONSE_PARSE_FAILED";
       }
+      if (errorCode !== "CANCELLED") {
+        if (requestFailure.runtimeCode === "E_MODEL_RESPONSE_PARSE_FAILED") errorCode = "MODEL_RESPONSE_PARSE_FAILED";
+        else if (requestFailure.category === "TIMEOUT") errorCode = "MODEL_REQUEST_TIMEOUT";
+        else if (requestFailure.httpStatus !== undefined) errorCode = "MODEL_HTTP_ERROR";
+      }
 
       console.error("[StructuredOutput] request failed", {
         stage: input.stage,
         errorCode,
-        errorName,
-        errorMessage: errorMessage.slice(0, 200),
+        ...requestFailure,
         elapsedMs,
         timeoutMs,
         aborted: isAborted,
         attempt: attempts,
       });
-      return fail(errorCode, "fail_closed");
+      return fail(errorCode, "fail_closed", requestFailure);
     } finally {
       if (timer) clearTimeout(timer);
       input.signal?.removeEventListener("abort", abort);

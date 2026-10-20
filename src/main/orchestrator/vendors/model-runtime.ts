@@ -86,7 +86,8 @@ async function runModel(input: ModelRunInput, streaming: boolean): Promise<ChatR
     let generatedImages: GeneratedImageOutput[] = [];
     let responsesTerminal: Record<string, unknown> | undefined;
     if (streaming) {
-      const result = streamText({ ...common, streamRetries: 0, includeRawChunks: true });
+      // SDK 默认 onError 会输出含请求体/供应商正文的异常；统一由下方 error 事件抛出并安全分类。
+      const result = streamText({ ...common, streamRetries: 0, includeRawChunks: true, onError: () => {} });
       const toolIndices = new Map<string, number>();
       const toolIndex = (id: string): number => {
         if (!toolIndices.has(id)) toolIndices.set(id, toolIndices.size);
@@ -270,6 +271,9 @@ function providerRefusal(body: Record<string, unknown> | undefined): string | un
     if (item?.type !== "message" || !Array.isArray(item.content)) continue;
     for (const value of item.content) {
       const part = asRecord(value);
+      if (part?.type === "refusal" && typeof part.refusal !== "string") {
+        throw new AgentRuntimeError("E_MODEL_RESPONSE_PARSE_FAILED", "模型拒答标记格式无效");
+      }
       if (part?.type === "refusal" && typeof part.refusal === "string") parts.push(part.refusal);
     }
   }

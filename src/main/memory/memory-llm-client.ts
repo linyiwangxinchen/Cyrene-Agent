@@ -10,7 +10,8 @@
  * <think> 清理、JSON 候选提取、Repair、reasoning 关闭、temperature 兼容等。
  */
 
-import { getAdapterForConfig } from "../orchestrator/vendors";
+import { getAdapterForConfig, resolveTransport } from "../orchestrator/vendors";
+import { streamChatWithAiSdk } from "../orchestrator/vendors/model-runtime";
 import type { VendorConfig, ChatMessage, ChatRequest } from "../orchestrator/vendors";
 import { recordUsage, recordRequest } from "../token-usage-store";
 import { resolveTimeoutPolicy, resolveMaxOutputTokens } from "../runtime-policy";
@@ -132,7 +133,7 @@ function resolveMemoryProfile(config: MemoryModelConfig): StructuredOutputProfil
   return resolveStructuredOutputProfile({
     provider: cap?.id ?? config.provider,
     model: config.model,
-    transport: cap?.transport ?? "openai",
+    transport: resolveTransport(config),
     endpointKind,
   });
 }
@@ -182,13 +183,27 @@ export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStruc
       return {
         model: cfg.model,
         messages,
-        stream: false,
+        stream: adapter.transport === "responses",
         maxTokens: maxOutputTokens,
         structuredOutput,
         ...(profile.requestHints.reasoningSplit ? { extraBody: { reasoning_split: true } } : {}),
       };
     },
     generate: async (request, generateSignal) => {
+      if (adapter.transport === "responses") {
+        // 与主会话一样消费完整 SSE；不向外流出片段，截断流也不能变成可保存的记忆。
+        const parsed = await streamChatWithAiSdk({
+          adapter, config: cfg, request, signal: generateSignal,
+          timeoutMs: resolveTimeoutPolicy({ stage: "memory-llm" }).totalMs,
+        });
+        recordRequest(cfg.model);
+        if (parsed.usage) {
+          try {
+            recordUsage(parsed.usage.input, parsed.usage.output, 1, parsed.usage.cachedInput, cfg.model, parsed.usage.cacheCreation);
+          } catch { /* ignore */ }
+        }
+        return parsed;
+      }
       const http = adapter.buildRequest(request, cfg);
 
       const timeoutMs = resolveTimeoutPolicy({ stage: "memory-llm" }).totalMs;
@@ -263,6 +278,7 @@ export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStruc
     throw new MemoryLlmProtocolError(
       operation,
       `structured output failed: ${result.failure.code} (stage: ${result.failure.stage})`,
+      { diagnostics: result.failure.requestFailure, failureCode: result.failure.code },
     );
   }
 
@@ -308,6 +324,25 @@ export async function invokeMemoryLlm(request: MemoryLlmRequest): Promise<Memory
 
   const cfg = buildVendorConfig(config);
   const adapter = getAdapterForConfig(cfg);
+  if (adapter.transport === "responses") {
+    const parsed = await streamChatWithAiSdk({
+      adapter, config: cfg, signal,
+      request: { model: cfg.model, messages: messages as ChatMessage[], maxTokens: maxOutputTokens, stream: true },
+      timeoutMs: resolveTimeoutPolicy({ stage: "memory-llm" }).totalMs,
+    });
+    if (parsed.finishReason !== "stop" || parsed.refusal) {
+      throw new MemoryLlmProtocolError(operation, "incomplete or refused response", {
+        failureCode: parsed.refusal ? "REFUSED" : "TRUNCATED_OUTPUT",
+      });
+    }
+    recordRequest(cfg.model);
+    if (parsed.usage) {
+      try {
+        recordUsage(parsed.usage.input, parsed.usage.output, 1, parsed.usage.cachedInput, cfg.model, parsed.usage.cacheCreation);
+      } catch { /* ignore */ }
+    }
+    return { text: stripThinkBlocks(parsed.text ?? ""), provider: config.provider, model: config.model };
+  }
   const http = adapter.buildRequest({
     model: cfg.model,
     messages: messages as ChatMessage[],

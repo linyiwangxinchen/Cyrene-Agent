@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 import { resolveStructuredOutputProfile } from "./profiles";
 import { runStructuredOutput, type StructuredOutputRunInput } from "./runner";
+import { AgentRuntimeError } from "../agent-runtime-error";
 
 interface Value {
   decision: string;
@@ -158,5 +159,25 @@ describe("runStructuredOutput", () => {
         toolExecuted: false,
       },
     });
+  });
+
+  test("preserves safe HTTP diagnostics without logging raw model errors", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await runStructuredOutput(baseInput([new AgentRuntimeError("E_MODEL_REQUEST_FAILED", "secret-body-and-key", {
+        modelFailure: { provider: "secret-provider", model: "secret-model", category: "AUTH", status: 401, vendorCode: "secret-key" },
+        cause: new Error("secret-prompt"),
+      })]));
+      expect(result).toMatchObject({ outcome: "failure", failure: { code: "MODEL_HTTP_ERROR", requestFailure: {
+        category: "AUTH", httpStatus: 401, runtimeCode: "E_MODEL_REQUEST_FAILED",
+      } } });
+      expect(JSON.stringify(log.mock.calls)).not.toContain("secret");
+    } finally { log.mockRestore(); }
+  });
+
+  test("recognizes the model runtime parse code without classifying it as HTTP failure", async () => {
+    const result = await runStructuredOutput(baseInput([new AgentRuntimeError("E_MODEL_RESPONSE_PARSE_FAILED", "missing terminal") ]));
+    expect(result).toMatchObject({ outcome: "failure", failure: { code: "MODEL_RESPONSE_PARSE_FAILED",
+      requestFailure: { runtimeCode: "E_MODEL_RESPONSE_PARSE_FAILED" } } });
   });
 });

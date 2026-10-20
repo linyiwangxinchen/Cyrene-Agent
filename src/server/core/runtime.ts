@@ -51,6 +51,7 @@ import { registerMemoryUserToolIpc } from "../../main/memory/memory-user-ipc";
 import { registerWikiMemoryIpc } from "../../main/memory/wiki-memory-ipc";
 import { initializeSummaryMemoryScheduler, enableSummaryMemoryScheduler, scheduleSummaryTurn, flushAllSummaryMemory } from "../../main/memory/summary-memory-scheduler";
 import { initializeWikiMemoryScheduler, enableWikiMemoryScheduler, scheduleWikiTurn } from "../../main/memory/wiki-memory-scheduler";
+import { formatMemoryLlmError } from "../../main/memory/memory-llm-errors";
 import { createWikiChatSourceReader } from "../../main/memory/wiki-source";
 import { createConversationSessionMigration } from "../../main/orchestrator/conversation-session-migration";
 import { loadSummaryMemoryContext } from "../../main/memory/summary-memory-context";
@@ -149,10 +150,10 @@ export async function startHeadlessCore() {
   }
   const knowledge = initializeKnowledgeBase(root);
   setMemoryMode(loadModelSettings().memoryMode);
-  initializeSummaryMemoryScheduler({ userDataRoot: root, sessions: chatsStore, onError: error => console.error("[SummaryMemory]", error) });
+  initializeSummaryMemoryScheduler({ userDataRoot: root, sessions: chatsStore, onError: (conversationId, error) => console.error("[SummaryMemory]", conversationId, formatMemoryLlmError(error)) });
   enableSummaryMemoryScheduler(isSummaryMemoryEnabled());
   const migration = createConversationSessionMigration(root);
-  initializeWikiMemoryScheduler({ userDataRoot: root, sourceReader: createWikiChatSourceReader({ transcriptStore: getConversationTranscriptStore(root), listSessions: chatsStore.listSessions, ensureConversationMigrated: id => migration.ensureConversationMigrated(id) }), onError: error => console.error("[WikiMemory]", error) });
+  initializeWikiMemoryScheduler({ userDataRoot: root, sourceReader: createWikiChatSourceReader({ transcriptStore: getConversationTranscriptStore(root), listSessions: chatsStore.listSessions, ensureConversationMigrated: id => migration.ensureConversationMigrated(id) }), onError: (conversationId, error) => console.error("[WikiMemory]", conversationId, formatMemoryLlmError(error)) });
   await enableWikiMemoryScheduler(loadModelSettings().memoryMode === "wiki");
   await initWorldbook();
   async function switchMemoryMode(mode: any) {

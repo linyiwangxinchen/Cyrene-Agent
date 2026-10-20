@@ -4,6 +4,7 @@ import {
   MemoryLlmHttpError,
   MemoryLlmProtocolError,
   MemoryLlmConfigurationError,
+  formatMemoryLlmError,
 } from "./memory-llm-errors";
 
 // ── Hoisted mock state ──
@@ -41,6 +42,7 @@ vi.mock("../token-usage-store", () => ({
 }));
 
 vi.mock("../orchestrator/vendors", () => ({
+  resolveTransport: () => "openai",
   getAdapterForConfig: () => ({
     buildRequest: (req: Record<string, unknown>, cfg: { model: string }) => {
       mockConfig.requests.push(req);
@@ -180,6 +182,19 @@ describe("MemoryLlmError types", () => {
     expect(new MemoryLlmHttpError(500, "c")).toBeInstanceOf(Error);
     expect(new MemoryLlmProtocolError("r", "d")).toBeInstanceOf(Error);
     expect(new MemoryLlmConfigurationError("d")).toBeInstanceOf(Error);
+  });
+
+  it("formats only safe memory error diagnostics, never arbitrary details or response bodies", () => {
+    const error = new MemoryLlmProtocolError("wiki", "sk-secret private prompt", {
+      failureCode: "MODEL_HTTP_ERROR", diagnostics: { category: "AUTH", httpStatus: 401, runtimeCode: "E_MODEL_REQUEST_FAILED" },
+    });
+    expect(formatMemoryLlmError(error)).toBe("后台记忆任务 [wiki] 失败：MODEL_HTTP_ERROR；AUTH；HTTP 401；E_MODEL_REQUEST_FAILED");
+    expect(formatMemoryLlmError(new MemoryLlmHttpError(500, "wiki", "secret-provider-body"))).not.toContain("secret");
+    expect(formatMemoryLlmError(new MemoryLlmConfigurationError("secret-provider-key"))).not.toContain("secret");
+    expect(formatMemoryLlmError(new Error("secret-provider-body"))).toBe("后台记忆任务失败（详见结构化请求诊断）");
+    expect(formatMemoryLlmError(new MemoryLlmProtocolError("secret", "secret", {
+      failureCode: "secret", diagnostics: { category: "secret" as never, httpStatus: NaN, runtimeCode: "secret" },
+    }))).not.toContain("secret");
   });
 });
 

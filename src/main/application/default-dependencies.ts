@@ -67,6 +67,7 @@ import { initializeSummaryMemoryScheduler, enableSummaryMemoryScheduler, flushAl
 import { createConversationSessionMigration } from "../orchestrator/conversation-session-migration";
 import { createWikiChatSourceReader } from "../memory/wiki-source";
 import { initializeWikiMemoryScheduler, enableWikiMemoryScheduler, scheduleWikiTurn } from "../memory/wiki-memory-scheduler";
+import { formatMemoryLlmError } from "../memory/memory-llm-errors";
 import { loadSummaryMemoryContext } from "../memory/summary-memory-context";
 import { clearLegacyStickerEmbeddingCache, loadStickerTextIndex } from "../sticker-text-matcher";
 import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
@@ -535,7 +536,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         initializeSummaryMemoryScheduler({
           userDataRoot: app.getPath("userData"),
           sessions: chatsStore,
-          onError: (conversationId, error) => logger.warn(LogTag.RAG, "summary memory update failed:", conversationId, error),
+          onError: (conversationId, error) => logger.warn(LogTag.RAG, "summary memory update failed:", conversationId, formatMemoryLlmError(error)),
         });
         enableSummaryMemoryScheduler(isSummaryMemoryEnabled());
         const wikiMigration = createConversationSessionMigration(app.getPath("userData"));
@@ -546,7 +547,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
             listSessions: chatsStore.listSessions,
             ensureConversationMigrated: (id) => wikiMigration.ensureConversationMigrated(id),
           }),
-          onError: (conversationId, error) => logger.warn(LogTag.RAG, "wiki memory update failed:", conversationId, error),
+          onError: (conversationId, error) => logger.warn(LogTag.RAG, "wiki memory update failed:", conversationId, formatMemoryLlmError(error)),
         });
         await enableWikiMemoryScheduler(modelSettings.memoryMode === "wiki");
         await initWorldbook();

@@ -6,6 +6,7 @@ import type {
   VendorConfig,
 } from "../../orchestrator/vendors";
 import { AgentRuntimeError } from "../../orchestrator/agent-runtime-error";
+import { streamChatWithAiSdk } from "../../orchestrator/vendors/model-runtime";
 import {
   createVisibleStreamFilter,
   stripThinkBlocks,
@@ -188,7 +189,7 @@ export function createLlmClient(): LlmClient {
       model: cfg.model,
       messages,
       ...(temperature !== undefined ? { temperature } : {}),
-      stream: false,
+      stream: adapter.transport === "responses",
       ...(options?.structuredOutput ? { structuredOutput: options.structuredOutput } : {}),
       ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
       ...(options?.extraBody ? { extraBody: options.extraBody } : {}),
@@ -200,7 +201,9 @@ export function createLlmClient(): LlmClient {
     );
 
     try {
-      const parsed = await generateChatWithAiSdk({
+      // 部分 Responses 服务仅支持流式传输；调用方仍一次拿到经过终态校验的完整结果。
+      const generate = adapter.transport === "responses" ? streamChatWithAiSdk : generateChatWithAiSdk;
+      const parsed = await generate({
         adapter,
         config: cfg,
         request: chatRequest,

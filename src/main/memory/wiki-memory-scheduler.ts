@@ -37,7 +37,7 @@ export class WikiMemoryScheduler {
       await this.store.close();
       return;
     }
-    void this.backfill().catch((error) => this.reportError("backfill", error));
+    void this.backfill(this.generation).catch((error) => this.reportError("backfill", error));
   }
 
   scheduleTurn(input: { conversationId: string; userText?: string }): void {
@@ -94,21 +94,30 @@ export class WikiMemoryScheduler {
 
   async releaseSessionCancellation(conversationId: string): Promise<void> {
     this.cancelled.delete(conversationId);
-    if (!(await this.options.sourceReader.listConversationIds()).includes(conversationId)) markWikiSourcesFresh(conversationId);
+    try {
+      if (!(await this.options.sourceReader.listConversationIds()).includes(conversationId)) markWikiSourcesFresh(conversationId);
+    } catch (error) {
+      // The public release wrapper is fire-and-forget; report source-store I/O
+      // failures here rather than letting them reject an unobserved promise.
+      this.reportError(conversationId, error);
+    }
   }
 
-  private async backfill(): Promise<void> {
+  private async backfill(generation: number): Promise<void> {
     // Yield to startup and process old sessions one at a time. Progress is durable.
     await new Promise<void>((resolve) => setTimeout(resolve, 2000));
+    const isCurrent = () => this.enabled && isWikiMemoryEnabled() && generation === this.generation;
+    if (!isCurrent()) return;
     const liveIds = new Set((await this.options.sourceReader.listConversationIds()));
+    if (!isCurrent()) return;
     for (const id of await this.store.listTombstonedConversations()) {
-      if (!this.enabled || !isWikiMemoryEnabled()) return;
+      if (!isCurrent()) return;
       // A crash between tombstoning and chat deletion leaves a live session.
       // Keep its sources hidden until the deletion flow explicitly rolls back.
       if (!liveIds.has(id)) await this.store.reconcileConversationSources(id, []);
     }
     for (const id of liveIds) {
-      if (!this.enabled || !isWikiMemoryEnabled()) break;
+      if (!isCurrent()) break;
       try { await this.flushConversation(id, true); }
       catch (error) { this.reportError(id, error); }
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -196,9 +205,12 @@ export class WikiMemoryScheduler {
   private enqueue(conversationId: string, work: () => Promise<void>): Promise<void> {
     const previous = this.queues.get(conversationId) ?? Promise.resolve();
     const next = previous.catch(() => undefined).then(work);
-    const settled = next.finally(() => {
+    const cleanup = () => {
       if (this.queues.get(conversationId) === settled) this.queues.delete(conversationId);
-    });
+    };
+    // The tracked tail must settle successfully; finally() would create an
+    // unhandled rejected promise even when the caller catches next.
+    const settled = next.then(cleanup, cleanup);
     this.queues.set(conversationId, settled);
     return next;
   }
