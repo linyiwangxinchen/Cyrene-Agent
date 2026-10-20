@@ -1,6 +1,6 @@
 import type { ChatVendorAdapter, ChatMessage, ChatRequest, OpenAIContentBlock } from "./vendors/types";
 import type { AgentLoopSettings } from "./cyrene-agent";
-import { generateChatWithAiSdk } from "./vendors/model-runtime";
+import { generateChatWithAiSdk, streamChatWithAiSdk } from "./vendors/model-runtime";
 import { getTimeoutSettings } from "../timeout-manager";
 import { recoverPortableMessage } from "./vendors/model-history";
 import { recordRequest, recordUsage } from "../token-usage-store";
@@ -151,6 +151,9 @@ export async function callSummarizeModel(
   }
 
   const summarizeChunk = async (history: string): Promise<string> => {
+    // 与正常 Responses 聊天使用同一流式通道，在本地收集完整摘要。
+    // Codex 兼容中转可能仅接受 stream:true，或始终返回 SSE，不能交给 JSON-only generateText。
+    const streaming = adapter.transport === "responses";
     const request: ChatRequest = {
       model: settings.model,
       messages: [
@@ -158,13 +161,14 @@ export async function callSummarizeModel(
         { role: "user", content: instruction },
       ],
       maxTokens,
-      stream: false,
+      stream: streaming,
     };
     for (let attempt = 0; ; attempt++) {
       signal?.throwIfAborted();
       let parsed;
       try {
-        parsed = await generateChatWithAiSdk({ adapter, request, config: vendorConfig,
+        const runSummary = streaming ? streamChatWithAiSdk : generateChatWithAiSdk;
+        parsed = await runSummary({ adapter, request, config: vendorConfig,
           signal, timeoutMs: getTimeoutSettings().chatRequestTimeout });
       } catch (error) {
         if (signal?.aborted || attempt >= 2 || !retryableSummaryFailure(error)) throw error;

@@ -18,6 +18,7 @@ const model = 'session-summary-model';
 const contextWindow = 4096;
 const automaticModel = 'automatic-session-model';
 const automaticContextWindow = 32768;
+const responsesModel = 'gpt-6.1-sol';
 const markers = ['ORIGINAL_GOAL', 'TOOL_FACT', 'FINAL_CONSTRAINT'];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let providerMode = 'success', transientFailures = 0;
@@ -34,6 +35,42 @@ const provider = createServer(async (request, response) => {
     let raw = '';
     for await (const chunk of request) raw += chunk;
     const body = JSON.parse(raw);
+    if (request.url === '/v1/responses') {
+      const text = [body.instructions ?? '', JSON.stringify(body.input)].join('\n');
+      const item = { mode: providerMode, protocol: 'responses', model: body.model,
+        authorization: request.headers.authorization, kind: 'summary', stream: body.stream,
+        tokens: estimateTextTokens(text), maxOutputTokens: body.max_output_tokens,
+        bytes: Buffer.byteLength(raw), text };
+      requests.push(item);
+      assert.equal(item.model, responsesModel, 'Responses summary must use its conversation model');
+      assert.equal(item.authorization, 'Bearer fixture-responses-key');
+      // Codex-oriented relays may implement only streamed Responses requests.
+      if (body.stream !== true) {
+        response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'This relay requires stream:true' } }));
+        return;
+      }
+      assert.ok(!/data:image\/|BASE64_IMAGE_PAYLOAD/.test(text));
+      assert.ok(item.maxOutputTokens > 0, 'streamed summaries must retain max_output_tokens');
+      assert.ok(item.tokens + item.maxOutputTokens <= contextWindow, 'Responses summary input and output must fit the conversation window');
+      const incomplete = providerMode === 'responses-incomplete';
+      const content = `Responses 会话摘要：${markers.filter(marker => text.includes(marker)).join('、')}。保留 /storage/output.txt 与用户约束。`;
+      const output = { id: 'msg_summary', type: 'message', role: 'assistant', status: 'completed',
+        content: [{ type: 'output_text', text: content, annotations: [] }] };
+      const terminal = { id: 'resp_summary', model: body.model, created_at: 1,
+        status: incomplete ? 'incomplete' : 'completed', output: [output],
+        ...(incomplete ? { incomplete_details: { reason: 'max_output_tokens' } } : {}),
+        usage: { input_tokens: item.tokens, output_tokens: 35,
+          input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 5 } } };
+      response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      const event = (type, fields) => response.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`);
+      event('response.created', { response: { id: terminal.id, model: body.model, created_at: 1 } });
+      event('response.output_item.added', { output_index: 0, item: { ...output, status: 'in_progress', content: [] } });
+      event('response.output_text.delta', { item_id: output.id, output_index: 0, content_index: 0, delta: content });
+      event('response.output_item.done', { output_index: 0, item: output });
+      event(incomplete ? 'response.incomplete' : 'response.completed', { response: terminal });
+      response.end();
+      return;
+    }
     const text = body.messages.map(message => typeof message.content === 'string'
       ? message.content : JSON.stringify(message.content)).join('\n');
     const item = { mode: providerMode, model: body.model, authorization: request.headers.authorization,
@@ -107,9 +144,10 @@ function sourceEntries(long) {
   return entries;
 }
 
-async function seedSession(id, long = false, automatic = false) {
+async function seedSession(id, long = false, automatic = false, responses = false) {
   const session = { schemaVersion: 1, id, title: id, mode: automatic ? 'work' : 'chat', createdAt: 1, updatedAt: 2,
-    modelProfileId: 'session-profile', model: automatic ? automaticModel : model, messages: [] };
+    modelProfileId: responses ? 'responses-profile' : 'session-profile',
+    model: responses ? responsesModel : automatic ? automaticModel : model, messages: [] };
   const sessionDirectory = path.join(dataDir, 'cyrene-chats', 'sessions');
   const transcriptDirectory = path.join(dataDir, 'transcripts', id);
   await mkdir(sessionDirectory, { recursive: true });
@@ -194,10 +232,14 @@ try {
       { id: 'global-profile', provider: 'ChatGPT（OpenAI）', displayName: 'Must not use global profile', apiKey: 'wrong-global-key', baseUrl: providerUrl, explicitTransport: 'openai', model: 'global-default', models: ['global-default'] },
       { id: 'session-profile', provider: 'ChatGPT（OpenAI）', displayName: 'Conversation summary fixture', apiKey: 'fixture-compaction-key', baseUrl: providerUrl, explicitTransport: 'openai', model: 'profile-default', models: ['profile-default', model, automaticModel],
         contextWindowTokens: 256000, modelOptions: { [model]: { contextWindowTokens: contextWindow, multimodal: true }, [automaticModel]: { contextWindowTokens: automaticContextWindow } } },
+      { id: 'responses-profile', provider: 'ChatGPT（OpenAI）', displayName: 'Stream-only Responses relay fixture', apiKey: 'fixture-responses-key', baseUrl: providerUrl, explicitTransport: 'responses', model: 'responses-profile-default', models: ['responses-profile-default', responsesModel],
+        contextWindowTokens: 256000, modelOptions: { [responsesModel]: { contextWindowTokens: contextWindow, multimodal: true } } },
     ], defaultModelProfileId: 'global-profile',
   } }));
   for (const id of ['long-success', 'auth-failure', 'empty-failure', 'transient-retry']) await seedSession(id, id === 'long-success');
   await seedSession('automatic-run', true, true);
+  await seedSession('responses-success', true, false, true);
+  await seedSession('responses-incomplete', false, false, true);
   await launch(true);
 
   await check('Production Web core registers the manual transcript compaction handler', async () => {
@@ -251,6 +293,36 @@ try {
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.ok(transientFailures >= 2);
     assert.equal(databaseSnapshot('transient-retry').checkpoints.length, 1);
+  });
+
+  await check('Stream-only Responses relay compacts with session model and bounded output, preserving original history', async () => {
+    providerMode = 'success';
+    const before = await invoke('chats:get', 'responses-success'), requestStart = requests.length;
+    const result = await invoke('chats:compact', { sessionId: 'responses-success', retainTokens: 1 });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const summaryRequests = requests.slice(requestStart);
+    assert.ok(summaryRequests.length > 1, 'Responses long history must also split and merge');
+    assert.ok(summaryRequests.every(item => item.protocol === 'responses' && item.stream === true && item.model === responsesModel));
+    assert.ok(result.compactedMessages[0].content.includes('FINAL_CONSTRAINT'));
+    const snapshot = databaseSnapshot('responses-success');
+    assert.equal(snapshot.checkpoints.length, 1);
+    assert.ok(snapshot.archived_through > 0);
+    assert.equal(snapshot.checkpoints[0].payload.trigger, 'manual');
+    const after = await invoke('chats:get', 'responses-success');
+    for (const original of before.messages) assert.ok(after.messages.some(message => message.id === original.id && message.content === original.content), `Responses compaction lost historical message ${original.id}`);
+    assert.ok(after.currentContextUsage.totalTokens > 0);
+    assert.equal(after.currentContextUsage.contextWindowTokens, contextWindow);
+  });
+
+  await check('Incomplete Responses summary never archives or overwrites original transcript', async () => {
+    providerMode = 'responses-incomplete';
+    const before = await invoke('chats:get', 'responses-incomplete'), snapshot = databaseSnapshot('responses-incomplete');
+    const result = await invoke('chats:compact', { sessionId: 'responses-incomplete', retainTokens: 1 });
+    assert.equal(result.ok, false);
+    assert.equal(result.error, 'TRANSCRIPT_COMPACTION_REQUIRED');
+    assert.match(result.detail, /有效.*摘要/);
+    assert.deepEqual(databaseSnapshot('responses-incomplete'), snapshot);
+    assert.deepEqual((await invoke('chats:get', 'responses-incomplete')).messages, before.messages);
   });
 
   await check('Real AGUI Work run compacts inside Harness and continues to a successful streamed reply', async () => {

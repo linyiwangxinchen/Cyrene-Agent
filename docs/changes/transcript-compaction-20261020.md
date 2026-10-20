@@ -23,3 +23,16 @@ Linux Web 的 `上下文压缩失败：TRANSCRIPT_COMPACTION_REQUIRED` 是压缩
 ## 更新后恢复已有会话
 
 按 [Linux 更新说明](../deployment/linux-operations.md) 更新源码、重新构建并重启服务。原会话和附件无需删除，回到原会话重新发送或点击上下文面板中的主动压缩即可重试。若模型认证、余额、网络或实际上下文配置仍有问题，新版本会显示相应原因。
+
+## Responses 中转兼容补充
+
+用户更新后仍遇到“摘要模型请求失败”的通用提示。进一步检查确认：普通聊天使用流式 Responses，但摘要固定调用非流式 JSON 接口。仅接受 `stream:true` 的中转会返回 HTTP 400；始终返回 SSE 的中转则会触发 JSON 解析失败。上一轮共享核心验收使用 Chat Completions 模型，没有覆盖这两类 Responses 中转。
+
+- `context-manager.ts`：Responses 摘要改用现有流式 SDK，在内部收集完整正文；保持会话模型、输出预算、用量统计和终态校验。其他协议维持原调用方式。直接发送流式请求，避免先发一次不兼容请求再重发。
+- `transcript-compaction-error.ts`：补齐请求参数、接口地址、内容策略、冲突和解析失败的提示；页面显示数值 HTTP 状态及固定运行时错误码。`conversation-transcript-compactor.ts`、`build-options.ts` 的日志保留受限的分类元数据，不记录原始供应商正文、请求或凭证。
+- `context-manager.responses.test.ts`：使用真实适配器和 SDK 复现。原版 6 条测试中 5 条失败，修复后全部通过，覆盖仅流式中转、始终返回 SSE、空正文、缺终态、认证失败和截断输出。
+- `shared-core-compaction.mjs`：在原 7 项认证 Web 验收上新增 Responses 专属会话档案、仅流式中转、分片合并和截断时保留原记录的检查，合计 9 项。
+
+本轮四套类型检查、`build:web`、14 个文件的 381 项测试及 9 项认证 Web 隔离验收全部通过。Responses 验收使用会话模型 `gpt-6.1-sol`，8 个分片加 1 次合并；每次保留输出预算，输入与输出预算之和满足配置的 4096 token 窗口。
+
+以上兼容问题已通过本地模拟中转复现；未取得用户服务端本次原始日志，不能认定线上失败一定属于其中一种。若更新后仍失败，保留页面 HTTP/运行时错误码，并查看 `journalctl -u cyrene-web -n 100 --no-pager -l` 中的压缩失败分类。

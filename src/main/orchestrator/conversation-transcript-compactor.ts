@@ -13,7 +13,7 @@ import { callSummarizeModel } from "./context-manager";
 import { getAdapterForConfig } from "./vendors";
 import { buildCompactionContextUsageSnapshot } from "./context-usage";
 import type { ContextUsageSnapshot } from "../../shared/context-usage";
-import { createTranscriptCompactionRequiredError } from "../../shared/transcript-compaction-error";
+import { createTranscriptCompactionRequiredError, getTranscriptCompactionDiagnostics } from "../../shared/transcript-compaction-error";
 export { TRANSCRIPT_COMPACTION_REQUIRED, createTranscriptCompactionRequiredError } from "../../shared/transcript-compaction-error";
 import {
   compressForAgentLoop,
@@ -163,7 +163,11 @@ export class ConversationTranscriptCompactor {
       request.signal?.throwIfAborted();
       if (summaryError) {
         const failure = createTranscriptCompactionRequiredError(summaryError, "model_request_failed");
-        console.error("[ConversationTranscriptCompactor] summary failed", failure.displayMessage);
+        console.error("[ConversationTranscriptCompactor] summary failed", {
+          reason: failure.reason,
+          detail: failure.displayMessage,
+          ...getTranscriptCompactionDiagnostics(failure),
+        });
         throw failure;
       }
       const replacement = compacted[0];

@@ -50,6 +50,8 @@ jobs:
           src/main/proactive/proactive-wechat.integration.test.ts
           src/main/orchestrator/build-options.test.ts
           src/main/orchestrator/context-manager.summarize.test.ts
+          src/main/orchestrator/context-manager.responses.test.ts
+          src/shared/transcript-compaction-error.test.ts
           src/main/orchestrator/conversation-transcript-projection.test.ts
           src/main/orchestrator/conversation-transcript-compactor.test.ts
           src/main/orchestrator/conversation-transcript-validation.test.ts

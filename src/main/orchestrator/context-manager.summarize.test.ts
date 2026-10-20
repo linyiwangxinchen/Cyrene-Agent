@@ -4,7 +4,7 @@ import type { AgentLoopSettings } from "./cyrene-agent";
 import type { ChatRequest, ChatResponse, ChatVendorAdapter } from "./vendors/types";
 
 const mocks = vi.hoisted(() => ({ generate: vi.fn(), recordRequest: vi.fn(), recordUsage: vi.fn() }));
-vi.mock("./vendors/model-runtime", () => ({ generateChatWithAiSdk: mocks.generate }));
+vi.mock("./vendors/model-runtime", () => ({ generateChatWithAiSdk: mocks.generate, streamChatWithAiSdk: mocks.generate }));
 vi.mock("../timeout-manager", () => ({ getTimeoutSettings: () => ({ chatRequestTimeout: 60_000 }) }));
 vi.mock("../token-usage-store", () => ({ recordRequest: mocks.recordRequest, recordUsage: mocks.recordUsage }));
 
