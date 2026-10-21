@@ -1,6 +1,8 @@
-# Windows x64 修复版 1.3.5（2026-10-21）
+# Windows x64 修复版 1.3.4-2（2026-10-21）
 
-本次 Fork 发行在上游 `v1.3.4` 的基础上重新构建 Windows x64 安装包。实际应用版本提升至 `1.3.5`，独立标签为 `1.3.5+fork.20261021`；不移动或覆盖上游版本标签。版本增加使既有 1.3.4 安装能够识别新更新，安装器、界面及 `latest.yml` 使用相同版本。
+本次 Fork 发行在上游 `v1.3.4` 的基础上重新构建 Windows x64 安装包。按版本命名要求，将本次发行从 `1.3.5` 更正为 `1.3.4-2`，独立标签也使用 `1.3.4-2`；不移动或覆盖上游版本标签。应用、安装包文件名及更新元数据使用同一版本。
+
+`1.3.4-2` 按 SemVer 属于预发行版本，排序低于 `1.3.4` 和此前的 `1.3.5`。现有稳定版安装不会把它识别为升级；请从本次 Release 手动下载安装。保留原有稳定版自动更新策略，不自动降级用户安装。
 
 ## 相对上次安装包的修复
 
@@ -23,7 +25,7 @@ pnpm run build:screenshot-helper
 pnpm run prepare:mingit
 pnpm run prepare:mpv
 pnpm exec electron-builder --config electron-builder.fork.yml --win nsis --x64 --publish never
-node scripts/verify/installer-artifacts.mjs --expect-version 1.3.5 --artifact-name 'Cyrene-Windows-x64-Setup-${version}.exe'
+node scripts/verify/installer-artifacts.mjs --expect-version 1.3.4-2 --artifact-name 'Cyrene-Windows-x64-Setup-${version}.exe'
 ```
 
 更新源为本 Fork 的 `linyiwangxinchen/Cyrene-Agent`。安装包不提供模型 API Key、微信账号、会话数据库或本机配置。没有配置代码签名证书，产物为未签名安装包。
