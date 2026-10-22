@@ -11,9 +11,15 @@ import { createShutdownCoordinator } from "../../../application/shutdown";
 import { createStartupReadiness } from "../../../application/readiness";
 import { executeToolDefinition } from "../registry/tool-executor";
 
-const mocks = vi.hoisted(() => ({ root: "", spawn: vi.fn() }));
+const mocks = vi.hoisted(() => ({ root: "", spawn: vi.fn(), resolveShellExecutable: vi.fn() }));
 vi.mock("electron", () => ({ app: { getPath: () => mocks.root } }));
 vi.mock("child_process", () => ({ spawn: mocks.spawn }));
+// This suite owns mocked job processes, not interpreter discovery. Otherwise
+// Linux Bash probes receive the same never-finishing fake job and time out.
+vi.mock("../../shell-runtime", async importOriginal => ({
+  ...await importOriginal<typeof import("../../shell-runtime")>(),
+  resolveShellExecutable: mocks.resolveShellExecutable,
+}));
 vi.mock("../../../logger", () => ({ logger: { info: vi.fn(), warn: vi.fn() }, LogTag: { BuiltinTools: "tools" } }));
 
 let manager: typeof import("./shell-job-manager");
@@ -34,6 +40,9 @@ beforeEach(async () => {
   fs.mkdirSync(path.join(mocks.root, "shell-jobs"));
   child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
   mocks.spawn.mockReset().mockReturnValue(child);
+  mocks.resolveShellExecutable.mockReset().mockImplementation(async kind => ({
+    kind, executable: kind === "cmd" ? "fixture-cmd.exe" : "/fixture/bin/bash",
+  }));
   manager = await import("./shell-job-manager");
 });
 afterEach(async () => {
@@ -44,16 +53,29 @@ afterEach(async () => {
 });
 
 describe("shell job SQLite lifecycle (isolated data, mocked processes)", () => {
-  it("run_shell forwards the host completion callback and advertises automatic delivery only when supported", async () => {
-    const { runShellTool } = await import("./run-shell-tool");
-    const onShellJobComplete = vi.fn();
-    const output = JSON.parse(await runShellTool.execute({ command: "echo fixture", run_in_background: true },
-      { userQuery: "fixture", permissionMode: "allow_all", resolvedWorkspaceRoot: mocks.root, onShellJobComplete }));
-    expect(output.jobId).toBeTruthy();
-    expect(output.note).toContain("无需反复查询");
-    child.emit("close", 0);
-    await expect.poll(() => onShellJobComplete.mock.calls.length).toBe(1);
-    expect(onShellJobComplete.mock.calls[0][0]).toMatchObject({ jobId: output.jobId, exitCode: 0 });
+  it.each(["win32", "linux"])("run_shell forwards the host completion callback on %s and advertises automatic delivery only when supported", async platform => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { configurable: true, value: platform });
+    try {
+      const { runShellTool } = await import("./run-shell-tool");
+      const onShellJobComplete = vi.fn();
+      const output = JSON.parse(await runShellTool.execute({ command: "echo fixture", run_in_background: true },
+        { userQuery: "fixture", permissionMode: "allow_all", resolvedWorkspaceRoot: mocks.root, onShellJobComplete }));
+      expect(output.jobId).toBeTruthy();
+      const shell = platform === "win32" ? "cmd" : "bash";
+      expect(output.shell).toBe(shell);
+      expect(mocks.resolveShellExecutable).toHaveBeenCalledWith(shell);
+      expect(mocks.spawn).toHaveBeenCalledWith(
+        shell === "cmd" ? "fixture-cmd.exe" : "/fixture/bin/bash",
+        shell === "cmd" ? ["/d", "/s", "/c", "echo fixture"] : ["--noprofile", "--norc", "-lc", "echo fixture"],
+        expect.objectContaining({ shell: false }),
+      );
+      expect(mocks.spawn.mock.calls[0][2].windowsVerbatimArguments ?? false).toBe(shell === "cmd");
+      expect(output.note).toContain("无需反复查询");
+      child.emit("close", 0);
+      await expect.poll(() => onShellJobComplete.mock.calls.length).toBe(1);
+      expect(onShellJobComplete.mock.calls[0][0]).toMatchObject({ jobId: output.jobId, exitCode: 0 });
+    } finally { Object.defineProperty(process, "platform", platformDescriptor); }
   });
   it.each(["exited", "failed", "output-limit"])("notifies %s exactly once after log close, without a status waiter", async terminal => {
     const onComplete = vi.fn();
