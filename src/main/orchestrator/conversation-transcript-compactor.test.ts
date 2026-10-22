@@ -131,6 +131,42 @@ describe("ConversationTranscriptCompactor", () => {
     expect(source.messages).toEqual(context.messages);
   });
 
+  it("后台完成结果退役后重建摘要并继续保留归档原图和待投递事件", async () => {
+    const fixture = createFixture();
+    const conversationId = "photo-shell";
+    const original = path.join(roots.at(-1)!, "original.png");
+    await fixture.journal.appendUser(conversationId, { id: "photo", turnId: "photo-turn", text: "按这张照片处理".repeat(60),
+      attachments: [{ kind: "image", name: "original.png", filePath: original }] });
+    const event = await fixture.store.append(conversationId, { id: "shell-completed:old-job", kind: "background_event", at: 100,
+      payload: { jobId: "old-job", sourceWorkspace: "/old", sourceToolCallId: "old-call",
+        message: { role: "user", visibility: "internal", content: "OBSOLETE_SHELL_OUTPUT".repeat(40) } } });
+    await fixture.journal.appendUser(conversationId, { id: "latest", turnId: "latest-turn", text: "继续使用原照片" });
+    await fixture.compactor.compact({ conversationId, trigger: "manual", retainTokens: 1 });
+    expect((await fixture.journal.buildModelContext(conversationId)).messages
+      .flatMap(message => message.userAttachments ?? []).map(attachment => attachment.filePath)).toEqual([original]);
+    await fixture.store.append(conversationId, { id: "shell-retired:old-job", kind: "background_event_retired", at: 101,
+      payload: { jobId: "old-job", sourceSeq: event.seq } });
+    const pending = await fixture.store.append(conversationId, { id: "shell-pending:new-job", kind: "background_event_pending", at: 102,
+      payload: { jobId: "new-job", sourceWorkspace: "/new", sourceToolCallId: "new-call",
+        message: { role: "user", visibility: "internal", content: "PENDING_SHELL_OUTPUT" } } });
+    await fixture.journal.appendUser(conversationId, { id: "next", turnId: "next-turn", text: "请把原照片结果发给我" });
+    const summarize = vi.fn(async (history: ChatMessage[]) => {
+      expect(JSON.stringify(history)).not.toContain("OBSOLETE_SHELL_OUTPUT");
+      expect(JSON.stringify(history)).not.toContain("PENDING_SHELL_OUTPUT");
+      return "重新整理的图片处理摘要";
+    });
+    const result = await new ConversationTranscriptCompactor({ store: fixture.store, summarize })
+      .compact({ conversationId, trigger: "automatic", retainTokens: 1 });
+    expect(result.checkpointEntryId).toContain(":retired:");
+    expect(summarize).toHaveBeenCalledOnce();
+    await closeConversationDatabases();
+    const restarted = new ConversationJournalService(new ConversationTranscriptStore(roots.at(-1)!));
+    const context = await restarted.buildModelContext(conversationId);
+    expect(context.messages.flatMap(message => message.userAttachments ?? []).map(attachment => attachment.filePath)).toEqual([original]);
+    expect(JSON.stringify(context.messages)).not.toMatch(/OBSOLETE_SHELL_OUTPUT|PENDING_SHELL_OUTPUT/);
+    expect((await fixture.store.readAuditEntries(conversationId))).toContainEqual(pending);
+  });
+
   it("压缩边界不切断 assistant tool call 与 tool result", async () => {
     const fixture = createFixture();
     await seed(fixture);
@@ -143,6 +179,56 @@ describe("ConversationTranscriptCompactor", () => {
 
     expect(assertNoOrphanToolPairs(result.compactedMessages)).toBe(true);
     expect(result.checkpointEntryId).toBeTruthy();
+  });
+
+  it.each(["during-summary", "before-checkpoint", "before-archive", "after-archive"])("retires a completion %s without retaining its summary or losing unrelated history", async phase => {
+    const fixture = createFixture();
+    await seed(fixture);
+    const event = await fixture.store.append("c1", { kind: "background_event", id: "shell-completed:A", at: 1_000,
+      payload: { jobId: "A", sourceWorkspace: "A", message: { role: "user", visibility: "internal", content: "PRIVATE_A_OUTPUT".repeat(80) } } });
+    await fixture.journal.createRunSink({ conversationId: "c1", runId: "unrelated" })
+      .appendAssistant({ message: { role: "assistant", content: "independent historical note".repeat(40) } });
+    await fixture.journal.appendUser("c1", { turnId: "latest", text: "current question in B" });
+    const retire = () => fixture.store.append("c1", { kind: "background_event_retired", id: "shell-retired:A", at: 1_001,
+      payload: { jobId: "A", sourceSeq: event.seq } });
+    const commit = fixture.store.appendCompactionCheckpoint.bind(fixture.store);
+    const checkpointSpy = vi.spyOn(fixture.store, "appendCompactionCheckpoint").mockImplementation(async (id, input) => {
+      if (phase === "before-checkpoint") await retire();
+      return commit(id, input);
+    });
+    const archive = new ConversationTranscriptArchive(fixture.store);
+    const archiveThrough = archive.archiveThrough.bind(archive);
+    const spy = vi.spyOn(archive, "archiveThrough").mockImplementation(async (id, through) => {
+      if (phase === "before-archive") await retire();
+      await archiveThrough(id, through);
+      if (phase === "after-archive") {
+        expect((await fixture.store.read(id)).entries.some(entry => entry.id === event.id)).toBe(false);
+        await retire();
+      }
+    });
+    const summarize = vi.fn(async () => {
+      if (phase === "during-summary") await retire();
+      return "STALE_SUMMARY_WITH_A";
+    });
+    const compactor = new ConversationTranscriptCompactor({ store: fixture.store, summarize, archive });
+    try {
+      const compacting = compactor.compact({ conversationId: "c1", trigger: "automatic", retainTokens: 1 });
+      if (phase === "during-summary" || phase === "before-checkpoint") await expect(compacting).rejects.toThrow("TRANSCRIPT_COMPACTION_REQUIRED");
+      else expect(JSON.stringify((await compacting).compactedMessages)).not.toContain("STALE_SUMMARY_WITH_A");
+    } finally { spy.mockRestore(); checkpointSpy.mockRestore(); }
+    await closeConversationDatabases();
+    const context = await fixture.journal.buildModelContext("c1");
+    expect(JSON.stringify(context.messages)).not.toContain("PRIVATE_A_OUTPUT");
+    expect(JSON.stringify(context.messages)).not.toContain("STALE_SUMMARY_WITH_A");
+    expect(JSON.stringify(context.messages)).toContain("旧任务");
+    expect(JSON.stringify(context.messages)).toContain("independent historical note");
+    const audit = await fixture.store.readAuditEntries("c1");
+    expect(audit).toContainEqual(event);
+    const replacement = new ConversationTranscriptCompactor({ store: fixture.store, summarize: async () => "CLEAN_SUMMARY" });
+    const repaired = await replacement.compact({ conversationId: "c1", trigger: "automatic", retainTokens: 1 });
+    expect(JSON.stringify(repaired.compactedMessages)).toContain("CLEAN_SUMMARY");
+    expect(JSON.stringify(repaired.compactedMessages)).not.toContain("STALE_SUMMARY_WITH_A");
+    expect((await fixture.journal.buildModelContext("c1")).messages).toEqual(repaired.compactedMessages);
   });
 
   it("摘要期间的新后缀不进入 sourceThroughSeq 也不丢失", async () => {

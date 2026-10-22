@@ -283,8 +283,8 @@ describe("MODEL_REASONING_RULES — 9 家全部存在性", () => {
     expect(cap.requestStyle).toBe("anthropic-adaptive");
   });
 
-  test("minimax MiniMax-M3.1-Flash-Preview → toggle-effort + anthropic-adaptive + 强制思考（不可关闭）", () => {
-    const cap = resolveReasoningCapability("minimax", "MiniMax-M3.1-Flash-Preview");
+  test.each(["MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash-Preview"])("minimax %s → toggle-effort + anthropic-adaptive + 强制思考（不可关闭）", (model) => {
+    const cap = resolveReasoningCapability("minimax", model);
     expect(cap.control).toBe("toggle-effort");
     expect(cap.requestStyle).toBe("anthropic-adaptive");
     expect(cap.supportedEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);

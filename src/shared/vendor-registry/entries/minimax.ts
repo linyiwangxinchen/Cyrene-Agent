@@ -31,7 +31,7 @@ export const MINIMAX_REGISTRY = defineVendor({
   },
   models: [
     {
-      model: "MiniMax-M3.1-Flash-Preview",
+      model: "MiniMax-M3.1-Flash",
       recommendedFor: ["chat"],
       unknownCapabilities: [
         { feature: "sampling", transport: "anthropic", note: "现有采样白名单未覆盖该型号。" },
@@ -56,6 +56,17 @@ export const MINIMAX_REGISTRY = defineVendor({
       model: "MiniMax-M2.5",
       recommendedFor: ["chat"],
       unknownCapabilities: [
+        { feature: "structuredOutput", transport: "anthropic", note: "预设协议没有专用结构化输出规则，保留提示词 JSON 回退。" },
+      ],
+    },
+    // 2026-09-27 的预览版名称（仅 Token Plan / MiniMax Code），正式版发布后不再推荐；
+    // 已保存该名称的配置仍按 M3.1 推理规则处理。
+    {
+      model: "MiniMax-M3.1-Flash-Preview",
+      recommendedFor: [],
+      note: "历史清单保留名称；不改写用户请求。",
+      unknownCapabilities: [
+        { feature: "sampling", transport: "anthropic", note: "现有采样白名单未覆盖该型号。" },
         { feature: "structuredOutput", transport: "anthropic", note: "预设协议没有专用结构化输出规则，保留提示词 JSON 回退。" },
       ],
     },
@@ -89,12 +100,28 @@ export const MINIMAX_REGISTRY = defineVendor({
   ],
   reasoningRules: [
     // ── minimax（稀宇科技）──
-    // M3.1-Flash-Preview（2026-09-27 发布，仅 Token Plan / MiniMax Code 可用）：
-    // M3 的日常 Coding 提速款，1M 上下文 + 原生多模态（文本/图片/视频）。
-    // 与 M3 的差异是新增 effort 五档（low/medium/high/xhigh/max）；思考始终开启、
-    // 不能关闭 → supportsDisable=false。官方缺省 max，与 GLM-5.3 / Kimi K3 同属
-    // "思考爆炸"体质，产品默认压到 high。
-    // 必须排在 /^MiniMax-M3/ 之前，否则会被 M3 的 toggle 规则先吞掉。
+    // M3.1-Flash（2026-10-19 正式发布，按量 API 可用；此前 2026-09-27 的 -Preview 仅 Token Plan / MiniMax Code）：
+    // 1M 上下文 + 原生多模态。effort 五档 low/medium/high/xhigh/max；思考不能关闭
+    // （发送 thinking disabled 或 effort none 返回 400）→ supportsDisable=false。
+    // 官方缺省 max，与 GLM-5.3 / Kimi K3 同属"思考爆炸"体质，产品默认压到 high。
+    // 官方核验只针对正式型号名，精确匹配；两条规则都必须排在 /^MiniMax-M3/ 之前，否则会被 M3 的 toggle 规则先吞掉。
+    { modelPattern: /^MiniMax-M3\.1-Flash$/i, modelInferencePattern: /^MiniMax-M3\.1-Flash$/i, metadata: {
+      status: "supported",
+      evidence: {
+        kind: "official",
+        url: "https://platform.minimax.io/docs/guides/text-generation",
+        checkedAt: "2026-10-19",
+        transports: ["anthropic"],
+      },
+    }, capability: {
+      control: "toggle-effort",
+      supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "high",
+      requestStyle: "anthropic-adaptive",
+      supportsDisable: false,
+      autoEffort: "high",
+    } },
+    // 其余 M3.1 名称（含仅 Token Plan 可用的历史名称 -Preview）沿用同一能力，但未按当前文档核验，保留 legacy 元数据。
     { modelPattern: /^MiniMax-M3\.1/i, modelInferencePattern: /^MiniMax-M3\.1/i, metadata: legacyMetadata("迁自 src/shared/vendor-registry/entries/minimax.ts"), capability: {
       control: "toggle-effort",
       supportedEfforts: ["low", "medium", "high", "xhigh", "max"],

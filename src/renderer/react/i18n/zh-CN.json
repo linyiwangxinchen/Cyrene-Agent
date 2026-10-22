@@ -102,6 +102,8 @@
     }
   },
   "chatPage": {
+    "backgroundSettlementTitle": "后台任务尚未结算",
+    "backgroundSettlementPending": "该会话有尚未结算的后台任务，本次操作未完成。请稍后重试删除或切换工作区。",
     "scrollToBottom": "滚动到底部",
     "screenshotAttachmentName": "截图_{{ts}}.png",
     "pastedImageAttachmentName": "粘贴图片_{{ts}}.png",
@@ -110,6 +112,7 @@
     "toolCallFallbackName": "工具调用",
     "errorModelRequestFailed": "模型请求失败",
     "errorModelRequestStartFailed": "模型请求发起失败",
+    "learnRunActiveNotice": "另一个学习会话正在运行，本轮尚未执行。请等待该任务结束后重试。",
     "lastTurnChanged": "会话已有新消息，已刷新。请重新选择要编辑或重新生成的消息。",
     "lastTurnRefreshFailed": "会话已变化，但刷新失败。本轮未执行，请刷新窗口或重新打开会话后再试。",
     "sessionRunActiveNotice": "当前会话已有正在运行的任务（可能来自刷新前的旧运行），本轮未执行。",
@@ -1780,8 +1783,9 @@
       },
       "command": "命令",
       "commandPlaceholder": "npx",
-      "args": "参数（空格分隔）",
+      "args": "参数（空格分隔或 JSON 数组）",
       "argsPlaceholder": "-y @modelcontextprotocol/server-memory",
+      "argsInvalid": "参数格式不正确。使用方括号时，请参考 [\"C:\\\\new\\\\tool.js\", \"hello world\"]，路径里的反斜杠要写两次。",
       "url": "URL",
       "urlPlaceholder": "https://mcp.example.com/mcp",
       "advanced": "高级",

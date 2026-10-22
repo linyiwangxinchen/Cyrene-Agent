@@ -102,6 +102,8 @@
     }
   },
   "chatPage": {
+    "backgroundSettlementTitle": "バックグラウンド処理の確定待ち",
+    "backgroundSettlementPending": "この会話には確定していないバックグラウンド処理があります。変更は行われていません。しばらくしてから会話の削除またはワークスペースの変更を再試行してください。",
     "scrollToBottom": "一番下までスクロール",
     "screenshotAttachmentName": "スクリーンショット_{{ts}}.png",
     "pastedImageAttachmentName": "貼り付け画像_{{ts}}.png",
@@ -110,6 +112,7 @@
     "toolCallFallbackName": "ツール呼び出し",
     "errorModelRequestFailed": "モデルリクエストに失敗しました",
     "errorModelRequestStartFailed": "モデルリクエストの開始に失敗しました",
+    "learnRunActiveNotice": "別の学習会話が実行中のため、このターンはまだ実行されていません。そのタスクが完了してから再試行してください。",
     "lastTurnChanged": "会話に新しいメッセージが届いたため更新しました。編集または再生成するメッセージを選び直してください。",
     "lastTurnRefreshFailed": "会話が変更されましたが、更新に失敗しました。今回は実行されていません。ウィンドウを更新するか会話を開き直してから再試行してください。",
     "sessionRunActiveNotice": "現在の会話には実行中のタスクがあります（更新前の古い実行である可能性があります）。今回は実行されませんでした。",
@@ -1780,8 +1783,9 @@
       },
       "command": "コマンド",
       "commandPlaceholder": "npx",
-      "args": "引数（スペース区切り）",
+      "args": "引数（スペース区切りまたは JSON 配列）",
       "argsPlaceholder": "-y @modelcontextprotocol/server-memory",
+      "argsInvalid": "引数の書き方を確認してください。角括弧を使う場合の例：[\"C:\\\\new\\\\tool.js\", \"hello world\"]。パスのバックスラッシュは2つずつ入力してください。",
       "url": "URL",
       "urlPlaceholder": "https://mcp.example.com/mcp",
       "advanced": "詳細",

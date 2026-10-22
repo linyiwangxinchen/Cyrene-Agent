@@ -329,7 +329,15 @@ try {
   });
   await check('Memory edits and moments use original persistent stores', async () => { await invoke('memory-panel:save-l0', { preferredName: 'Parity updated' }); assert.equal((await invoke('memory-panel:get-data')).l0.preferredName, 'Parity updated'); const post = await invoke('moments:create-post', { text: 'Parity post' }); assert.equal(post.applied, true, JSON.stringify(post)); assert.ok(JSON.stringify(await invoke('moments:list')).includes('Parity post')); });
   await check('Usage report records actual model requests and token usage', async () => { const usage = await invoke('token-usage:get', 7); const model = usage.models.find(model => model.model === 'fixture-model'); assert.ok(model?.input > 0 && model.output > 0 && model.requests > 0); });
-  await check('Server browser loads and snapshots an actual page', async () => { const page = createServer((_req, res) => res.end('<!doctype html><title>Parity page</title><button id="parity" onclick="this.textContent=\'Clicked\'">Click fixture</button>')); await new Promise(resolve => page.listen(0, '127.0.0.1', resolve)); try { assert.equal((await invoke('browser-panel:navigate', `http://127.0.0.1:${page.address().port}`)).ok, true); const shot = await invoke('web:browser-screenshot'); assert.ok(shot.src.startsWith('data:image/jpeg;base64,')); } finally { await new Promise(resolve => page.close(resolve)); } });
+  await check('Server browser loads and snapshots an actual page', async () => {
+    const page = createServer((_req, res) => res.end('<!doctype html><title>Parity page</title><button id="parity" onclick="this.textContent=\'Clicked\'">Click fixture</button>'));
+    await new Promise(resolve => page.listen(0, '127.0.0.1', resolve));
+    try {
+      const navigation = await invoke('browser-panel:navigate', `http://127.0.0.1:${page.address().port}`);
+      assert.equal(navigation.ok, true, JSON.stringify({ navigation, browser: await invoke('browser-panel:get-state'), browserCache: process.env.PLAYWRIGHT_BROWSERS_PATH ?? 'default' }));
+      const shot = await invoke('web:browser-screenshot'); assert.ok(shot.src.startsWith('data:image/jpeg;base64,'));
+    } finally { await new Promise(resolve => page.close(resolve)); }
+  });
   await check('Element picker retains its observation for subsequent CSS reads', async () => {
     const page = createServer((_req, res) => res.end('<!doctype html><title>Picker fixture</title><style>button{width:140px;height:40px;background:rgb(20,30,40)}</style><button>Pick fixture</button>'));
     await new Promise(resolve => page.listen(0, '127.0.0.1', resolve));

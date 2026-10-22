@@ -20,10 +20,11 @@
 
 | 型号 | 界面推荐 | 推理（预设协议） | 采样（预设协议） | 结构化输出（官方端点） | 证据与限制 |
 | --- | --- | --- | --- | --- | --- |
-| MiniMax-M3.1-Flash-Preview | 主模型 | 思考开关与档位；档位 low / medium / high / xhigh / max；不可关闭；默认 high；自动 high（历史未核验） | 未知（无采样白名单） | openai：未知（提示词 JSON 回退）<br>anthropic：未知（提示词 JSON 回退）<br>responses：未知（提示词 JSON 回退） | 推理：历史未核验：迁自 src/shared/vendor-registry/entries/minimax.ts<br>未知 sampling / anthropic：现有采样白名单未覆盖该型号。<br>未知 structuredOutput / anthropic：预设协议没有专用结构化输出规则，保留提示词 JSON 回退。 |
+| MiniMax-M3.1-Flash | 主模型 | 思考开关与档位；档位 low / medium / high / xhigh / max；不可关闭；默认 high；自动 high | 未知（无采样白名单） | openai：未知（提示词 JSON 回退）<br>anthropic：未知（提示词 JSON 回退）<br>responses：未知（提示词 JSON 回退） | 推理：官方资料 [链接](<https://platform.minimax.io/docs/guides/text-generation>)；核验 2026-10-19；协议 anthropic<br>未知 sampling / anthropic：现有采样白名单未覆盖该型号。<br>未知 structuredOutput / anthropic：预设协议没有专用结构化输出规则，保留提示词 JSON 回退。 |
 | MiniMax-M3 | 主模型 | 思考开关；可关闭（历史未核验） | 温度 / Top-P（历史未核验） | openai：提示词 JSON（专用契约）；等级 M；发送 JSON 对象提示；分离思考（历史未核验）<br>anthropic：未知（提示词 JSON 回退）<br>responses：未知（提示词 JSON 回退） | 推理：历史未核验：迁自 src/shared/vendor-registry/entries/minimax.ts<br>采样：历史未核验：迁自 src/main/orchestrator/vendors/style-sampling.ts<br>输出 openai：历史未核验：迁自 src/main/orchestrator/structured-output/profiles.ts<br>未知 structuredOutput / anthropic：预设协议没有专用结构化输出规则，保留提示词 JSON 回退。 |
 | MiniMax-M2.7 | 主模型 | 强制思考；不可关闭（历史未核验） | 温度 / Top-P（历史未核验） | openai：未知（提示词 JSON 回退）<br>anthropic：未知（提示词 JSON 回退）<br>responses：未知（提示词 JSON 回退） | 推理：历史未核验：迁自 src/shared/vendor-registry/entries/minimax.ts<br>采样：历史未核验：迁自 src/main/orchestrator/vendors/style-sampling.ts<br>未知 structuredOutput / anthropic：预设协议没有专用结构化输出规则，保留提示词 JSON 回退。 |
 | MiniMax-M2.5 | 主模型 | 强制思考；不可关闭（历史未核验） | 温度 / Top-P（历史未核验） | openai：未知（提示词 JSON 回退）<br>anthropic：未知（提示词 JSON 回退）<br>responses：未知（提示词 JSON 回退） | 推理：历史未核验：迁自 src/shared/vendor-registry/entries/minimax.ts<br>采样：历史未核验：迁自 src/main/orchestrator/vendors/style-sampling.ts<br>未知 structuredOutput / anthropic：预设协议没有专用结构化输出规则，保留提示词 JSON 回退。 |
+| MiniMax-M3.1-Flash-Preview | 非推荐 | 思考开关与档位；档位 low / medium / high / xhigh / max；不可关闭；默认 high；自动 high（历史未核验） | 未知（无采样白名单） | openai：未知（提示词 JSON 回退）<br>anthropic：未知（提示词 JSON 回退）<br>responses：未知（提示词 JSON 回退） | 推理：历史未核验：迁自 src/shared/vendor-registry/entries/minimax.ts<br>历史清单保留名称；不改写用户请求。<br>未知 sampling / anthropic：现有采样白名单未覆盖该型号。<br>未知 structuredOutput / anthropic：预设协议没有专用结构化输出规则，保留提示词 JSON 回退。 |
 
 ### 人工标注的规则范围
 

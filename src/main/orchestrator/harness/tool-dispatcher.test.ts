@@ -32,10 +32,39 @@ function call(id: string, args: Record<string, unknown> = { to: "a@example.com" 
 }
 
 describe("dispatchToolCall truthful execution", () => {
-  it("binds shell output to the invocation ID without changing the tool result", async () => {
+  it.each(["ask_user", "confirm_uncertain_effect", "enter_plan_mode", "write_plan", "submit_plan", "pop_quiz",
+    "learn_exam_create_plan", "learn_exam_publish", "learn_exam_add_single_choice", "learn_exam_add_multiple_choice",
+    "learn_exam_add_true_false", "learn_exam_add_fill_blank", "learn_exam_add_written"])("rejects stale %s calls without invoking interactive handlers", async name => {
+    const execute = vi.fn();
+    const result = await dispatchToolCall({ id: "hidden", name, arguments: "{}" }, {
+      state: state(), tools: [{ ...tool(execute), id: name }], includeInteractiveTools: false,
+    });
+    expect(result).toMatchObject({ outcome: "failure", category: "not_found" });
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it.each(["entry", "active"] as const)("rejects headless browser %s tools before execution", async browserControlPhase => {
+    const execute = vi.fn();
+    const result = await dispatchToolCall({ id: "browser", name: "browser_tool", arguments: "{}" }, {
+      state: state(), tools: [{ ...tool(execute), id: "browser_tool", browserControlPhase }], includeInteractiveTools: false,
+    });
+    expect(result).toMatchObject({ outcome: "failure", category: "not_found" });
+    expect(execute).not.toHaveBeenCalled();
+  });
+  it.each([true, undefined])("keeps foreground interactive tools executable (%s)", async includeInteractiveTools => {
+    const execute = vi.fn(async () => "published");
+    const result = await dispatchToolCall({ id: "exam", name: "learn_exam_publish", arguments: "{}" }, {
+      state: state(), tools: [{ ...tool(execute), id: "learn_exam_publish" }], includeInteractiveTools,
+    });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(result.output).toBe("published");
+  });
+  it.each([true, false])("binds late shell completion to its invocation (events=%s)", async withEvents => {
+    const completed = vi.fn();
+    let complete!: () => void;
     const events: Array<{ type: string; toolCallId?: string; text?: string }> = [];
     const shellTool = {
       ...tool(async (_args, context) => {
+        complete = () => context?.onShellJobComplete?.({ jobId: "late" } as never);
         context?.onShellOutput?.({ action: "append", text: "ready" });
         return "done";
       }),
@@ -47,11 +76,13 @@ describe("dispatchToolCall truthful execution", () => {
       {
         state: state(),
         tools: [shellTool],
-        toolContext: { userQuery: "", runId: "run-1" },
-        onEvent: (event) => events.push(event),
+        toolContext: { userQuery: "", runId: "run-1", onShellJobComplete: completed },
+        onEvent: withEvents ? (event) => events.push(event) : undefined,
       },
     );
-    expect(events).toContainEqual(expect.objectContaining({
+    complete();
+    expect(completed).toHaveBeenCalledWith({ jobId: "late" }, "shell-7");
+    if (withEvents) expect(events).toContainEqual(expect.objectContaining({
       type: "tool_output", toolCallId: "shell-7", action: "append", text: "ready",
     }));
     expect(result.output).toBe("done");

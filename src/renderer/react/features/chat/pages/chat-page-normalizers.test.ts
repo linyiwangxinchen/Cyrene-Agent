@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatSession } from "../../../../../shared/chat-types";
-import { getInitialMode, LAST_MODE_STORAGE_KEY, parseSessionRunActiveError, stageForStep, toUiMessages } from "./chat-page-normalizers";
+import { isShellCompletionSettlementPending, getInitialMode, LAST_MODE_STORAGE_KEY, parseSessionRunActiveError, stageForStep, toUiMessages } from "./chat-page-normalizers";
 
 describe("parseSessionRunActiveError", () => {
   it("解析干净守卫错误串", () => {
@@ -144,5 +144,18 @@ describe("getInitialMode", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("后台结算失败提示", () => {
+  it.each([
+    "SHELL_COMPLETION_SETTLEMENT_PENDING: RETIRE_FAILED",
+    new Error("Error invoking remote method 'chats:delete': Error: SHELL_COMPLETION_SETTLEMENT_PENDING: SHELL_COMPLETION_SETTLEMENT_TIMEOUT"),
+  ])("识别 IPC 返回值和拒绝包装: %s", error => {
+    expect(isShellCompletionSettlementPending(error)).toBe(true);
+  });
+  it("其他错误保留原有提示", () => {
+    expect(isShellCompletionSettlementPending(new Error("permission denied"))).toBe(false);
+    expect(isShellCompletionSettlementPending(undefined)).toBe(false);
   });
 });

@@ -101,3 +101,14 @@ describe("ChatPage 首条消息暂存工作区绑定", () => {
     );
   });
 });
+
+describe("后台结算失败的页面接线", () => {
+  it("删除和现有会话换目录都显示可操作提示，绑定失败不更新目录名", () => {
+    const selection = chatPageSource.slice(chatPageSource.indexOf("  async function applyWorkspaceSelection("), chatPageSource.indexOf("  async function chooseWorkspace()"));
+    expect(selection).toContain("isShellCompletionSettlementPending(result.error)");
+    expect(selection.indexOf("if (!result.ok)")).toBeLessThan(selection.indexOf("setWorkspaceNames"));
+    const deletion = chatPageSource.slice(chatPageSource.indexOf("  async function handleDeleteSession("), chatPageSource.indexOf("  async function handleTogglePinSession("));
+    expect(deletion).toContain("isShellCompletionSettlementPending(error)");
+    expect(deletion).toContain('message: t("chatPage.backgroundSettlementPending")');
+  });
+});

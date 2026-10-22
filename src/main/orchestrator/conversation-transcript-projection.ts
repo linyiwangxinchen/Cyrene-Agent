@@ -72,6 +72,7 @@ type RewindEntry = Extract<TranscriptEntry, { kind: "turn_rewind" }>;
 type CompactionEntry = Extract<TranscriptEntry, { kind: "compaction_checkpoint" }>;
 
 type ActiveNode =
+  | { kind: "background_event"; entry: Extract<TranscriptEntry, { kind: "background_event" }> }
   | { kind: "user"; entry: UserEntry | RewindEntry; text: string }
   | {
       kind: "assistant";
@@ -117,6 +118,15 @@ function reduceActiveTranscript(entries: TranscriptEntry[]): ActiveTranscript {
   for (const entry of entries) {
     throughSeq = Math.max(throughSeq, entry.seq);
     switch (entry.kind) {
+      case "background_event":
+        nodes.push({ kind: "background_event", entry });
+        break;
+      case "background_event_retired": {
+        // 原始结果保留在审计轨迹；退休后不再参与模型上下文或压缩。
+        const index = nodes.findIndex(node => node.kind === "background_event" && node.entry.payload.jobId === entry.payload.jobId);
+        if (index >= 0) nodes.splice(index, 1);
+        break;
+      }
       case "user":
         nodes.push({ kind: "user", entry, text: entry.payload.text });
         break;
@@ -186,6 +196,16 @@ function reduceActiveTranscript(entries: TranscriptEntry[]): ActiveTranscript {
   return { nodes, throughSeq };
 }
 
+/** 审计全量轨迹保留归档来源，用活动分支判断来源运行是否已被回退移除。 */
+export function isTranscriptRunSuperseded(entries: TranscriptEntry[], runId: string, sourceToolCallId?: string): boolean {
+  if (sourceToolCallId) {
+    return !reduceActiveTranscript(entries).nodes.some(node => node.kind === "assistant" && node.entry.runId === runId
+      && node.entry.payload.toolCalls?.some(call => call.id === sourceToolCallId));
+  }
+  if (!entries.some(entry => entry.kind === "assistant" && entry.runId === runId)) return false;
+  return !reduceActiveTranscript(entries).nodes.some(node => node.kind === "assistant" && node.entry.runId === runId);
+}
+
 function syntheticToolMessage(call: ToolCall, outcome: "unknown" | "not_executed"): ChatMessage {
   return {
     role: "tool",
@@ -226,6 +246,11 @@ function materializeNodes(
   const uncertainEffects: UncertainEffect[] = [];
   const sourceSeqs: number[] = [];
   for (const node of nodes) {
+    if (node.kind === "background_event") {
+      messages.push(node.entry.payload.message);
+      sourceSeqs.push(node.entry.seq);
+      continue;
+    }
     if (node.kind === "user") {
       const attachments = node.entry.kind === "user"
         ? node.entry.payload.attachments
@@ -557,8 +582,12 @@ function checkpointCoversActiveBranch(
   checkpoint: Extract<TranscriptEntry, { kind: "compaction_checkpoint" }>,
 ): boolean {
   const sourceThroughSeq = checkpoint.payload.sourceThroughSeq;
+  if (entries.some(entry => entry.kind === "background_event_retired"
+    && entry.seq > checkpoint.payload.baseThroughSeq
+    && (entry.payload.sourceSeq === undefined || entry.payload.sourceSeq <= sourceThroughSeq))) return false;
   const beforeCheckpoint = reduceActiveTranscript(
-    entries.filter((entry) => entry.seq <= sourceThroughSeq),
+    entries.filter((entry) => entry.seq <= sourceThroughSeq
+      || (entry.kind === "background_event_retired" && entry.seq <= checkpoint.payload.baseThroughSeq)),
   ).nodes;
   const finalCovered = active.nodes.filter((node) => node.entry.seq <= sourceThroughSeq);
   return beforeCheckpoint.length === finalCovered.length
@@ -582,6 +611,7 @@ function contentToText(content: ChatMessageContent | undefined): string {
 }
 
 function makeUiMessage(node: ActiveNode): CanonicalUiMessage | null {
+  if (node.kind === "background_event") return null;
   if (node.kind === "user") {
     return {
       message: {
@@ -1044,7 +1074,7 @@ function projectionFromActive(
     throughSeq: Math.max(seed?.throughSeq ?? 0, active.throughSeq),
     messages: resultMessages,
     state: {
-      nodes: active.nodes.map(nodeStateFromActive),
+      nodes: active.nodes.filter(node => node.kind !== "background_event").map(nodeStateFromActive),
       patches: [...allPatches.entries()]
         .sort(([left], [right]) => left.localeCompare(right))
         .map(([messageId, record]) => ({

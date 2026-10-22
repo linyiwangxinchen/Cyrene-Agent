@@ -67,6 +67,7 @@ export async function prepareToolRuntime(input: {
       risk,
       runId,
       signal,
+      allowPrompt: options.allowPermissionPrompt,
     })).allowed;
   };
 
@@ -81,6 +82,8 @@ export async function prepareToolRuntime(input: {
     allowedSkillIds: options.capabilities?.skillIds,
     permissionMode: options.permissionMode,
     channelContext: options.channelContext,
+    allowUserInteraction: options.harnessInteractiveTools,
+    onShellJobComplete: options.onShellJobComplete,
   };
   const toolOutputStore = new FileToolOutputStore(app.getPath("userData"));
   // 只有 work/code 模式允许派生任务；chat 模式不创建 TaskSession，避免出现不可见的后台执行。

@@ -54,6 +54,7 @@ import {
 import {
   getInitialMode,
   isConversationMode,
+  isShellCompletionSettlementPending,
   LAST_MODE_STORAGE_KEY,
   permissionInteraction,
   toUiMessages,
@@ -1305,8 +1306,6 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       return;
     }
 
-    setWorkspaceNames((current) => ({ ...current, [targetMode]: workspace.displayName }));
-
     const activeId = activeSessionIdsRef.current[targetMode];
     // 引用可能已过期（例如会话已在侧边栏被删除），绑定前先确认存在；
     // 已不存在就清掉残留引用，按"无会话"走暂存路径，避免报"session not found"。
@@ -1326,10 +1325,11 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
         await feedback.alert({
           tone: "error",
           title: t("chatPage.setWorkspaceFailedTitle"),
-          message: t("chatPage.setWorkspaceFailed", { error: result.error ?? t("chatPage.unknownError") }),
+          message: t("chatPage.setWorkspaceFailed", { error: isShellCompletionSettlementPending(result.error) ? t("chatPage.backgroundSettlementPending") : result.error ?? t("chatPage.unknownError") }),
         });
         return;
       }
+      setWorkspaceNames((current) => ({ ...current, [targetMode]: workspace.displayName }));
       // Learn 模式：空目录询问是否初始化通用学习结构
       if (targetMode === "learn" && result.isEmpty) {
         const confirmed = await feedback.confirm({
@@ -1344,6 +1344,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       await refreshSessions(targetMode, false);
     } else {
       // 还没有发送第一条消息、未创建 session，先暂存工作区，发消息时一起绑定。
+      setWorkspaceNames((current) => ({ ...current, [targetMode]: workspace.displayName }));
       setPendingWorkspaceByMode((current) => ({ ...current, [targetMode]: workspace }));
     }
   }
@@ -1448,8 +1449,14 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   async function handleDeleteSession(sessionId: string) {
     const store = chatStore();
     if (!store) return;
-    const ok = await store.delete(sessionId);
-    if (!ok) return;
+    try {
+      const ok = await store.delete(sessionId);
+      if (!ok) return;
+    } catch (error) {
+      if (!isShellCompletionSettlementPending(error)) throw error;
+      await feedback.alert({ tone: "error", title: t("chatPage.backgroundSettlementTitle"), message: t("chatPage.backgroundSettlementPending") });
+      return;
+    }
     await refreshSessionsRef.current(mode, true);
   }
 
@@ -1509,7 +1516,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
           tone: "error",
           title: t("chatPage.setWorkspaceFailedTitle"),
           message: t("chatPage.setWorkspaceFailed", {
-            error: workspaceResult?.error ?? t("chatPage.unknownError"),
+            error: isShellCompletionSettlementPending(workspaceResult?.error) ? t("chatPage.backgroundSettlementPending") : workspaceResult?.error ?? t("chatPage.unknownError"),
           }),
         });
         // 撤掉"已选上"的显示并清掉失效暂存，让欢迎页重新出现工作区选择入口

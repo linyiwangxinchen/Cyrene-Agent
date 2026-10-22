@@ -161,7 +161,9 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
       pluginUserEnabled: task.pluginUserEnabled === true,
       mode: normalizeMode(task.mode),
       approvalFingerprint: typeof task.approvalFingerprint === "string" ? task.approvalFingerprint : "",
-    } : delivery ? { mode: "chat" as const } : {}),
+    } : {}),
+    // 渠道提醒保持 Chat；工作区用户任务恢复原模式，旧任务按 Work 执行。
+    ...(!ownerPluginId ? { mode: delivery ? "chat" as const : (task.mode === "code" ? "code" as const : "work" as const) } : {}),
   };
 }
 

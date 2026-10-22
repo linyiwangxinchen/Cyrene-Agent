@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished } from "vitest";
 import { createSchedulerStore } from "./scheduler-store";
 
 function tmpDir(): string {
@@ -45,8 +45,9 @@ describe("scheduler store", () => {
     })).toThrow("模式仅支持");
   });
 
-  it("adds and persists a normalized task", () => {
+  it.each(["work", "code"] as const)("persists and reloads a normalized %s task", (mode) => {
     const dir = tmpDir();
+    onTestFinished(() => fs.rmSync(dir, { recursive: true, force: true }));
     const store = createSchedulerStore({
       tasksFile: path.join(dir, "scheduled-tasks.json"),
       historyFile: path.join(dir, "scheduled-tasks-history.jsonl"),
@@ -60,7 +61,8 @@ describe("scheduler store", () => {
       prompt: "  Summarize my day  ",
       schedule: { kind: "daily", timeOfDay: "09:00" },
       workspaceBinding: { workspaceRoot: "E:/project", displayName: "project", boundAt: 1 },
-      mode: "code",
+      mode,
+      enabled: false,
       toolMode: "allow-list",
       allowedToolIds: ["weather", "weather", "calendar"],
     });
@@ -69,7 +71,7 @@ describe("scheduler store", () => {
     expect(task.prompt).toBe("Summarize my day");
     expect(task.allowedToolIds).toEqual(["weather", "calendar"]);
     expect(task.workspaceBinding).toEqual({ workspaceRoot: "E:/project", displayName: "project", boundAt: 1 });
-    expect(task.mode).toBe("code");
+    expect(task.mode).toBe(mode);
     expect(task.nextFireAt).toBeTruthy();
 
     const store2 = createSchedulerStore({
@@ -81,6 +83,13 @@ describe("scheduler store", () => {
     store2.load();
     expect(store2.getTasks()).toHaveLength(1);
     expect(store2.getTasks()[0].title).toBe("Morning");
+    expect(store2.getTasks()[0]).toMatchObject({
+      mode,
+      enabled: false,
+      workspaceBinding: task.workspaceBinding,
+      toolMode: "allow-list",
+      allowedToolIds: ["weather", "calendar"],
+    });
   });
 
   it("increments runCount on each scheduled occurrence and accepts an end condition", () => {
@@ -169,14 +178,16 @@ describe("scheduler store", () => {
     expect(history[0].status).toBe("success");
   });
 
-  it("normalizes persisted tasks instead of crashing on old missing optional arrays", () => {
+  it.each([undefined, null, "invalid", "chat", "learn"])("loads legacy user mode %s as work with missing optional arrays", (mode) => {
     const dir = tmpDir();
+    onTestFinished(() => fs.rmSync(dir, { recursive: true, force: true }));
     const tasksFile = path.join(dir, "scheduled-tasks.json");
     fs.writeFileSync(tasksFile, JSON.stringify({
       tasks: [{
         id: "task-a",
         title: "A",
         prompt: "Run A",
+        mode,
         enabled: true,
         schedule: { kind: "daily", timeOfDay: "08:00" },
         nextFireAt: "2026-06-22T08:00:00.000Z",
@@ -195,6 +206,37 @@ describe("scheduler store", () => {
     store.load();
 
     expect(store.getTasks()[0].allowedToolIds).toEqual([]);
+    expect(store.getTasks()[0].mode).toBe("work");
+    expect(store.getTasks()[0].enabled).toBe(false);
+  });
+
+  it.each(["wechat", "feishu", "qq", "qqbot"] as const)("restores %s reminders in chat mode alongside work/code tasks", (channel) => {
+    const dir = tmpDir();
+    onTestFinished(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const deps = {
+      tasksFile: path.join(dir, "scheduled-tasks.json"),
+      historyFile: path.join(dir, "scheduled-tasks-history.jsonl"),
+      now: () => new Date("2026-10-22T08:00:00.000Z"),
+      id: () => "reminder",
+    };
+    const store = createSchedulerStore(deps);
+    store.load();
+    const delivery = { channel, targetId: "contact", sessionId: "channel-session", chatType: "private" as const };
+    const reminder = store.addTask({
+      title: "渠道提醒", prompt: "主动询问明天的安排", mode: "chat",
+      schedule: { kind: "daily", timeOfDay: "12:00" }, delivery,
+    });
+    for (const mode of ["work", "code"] as const) {
+      store.addTask({ title: mode, prompt: "执行任务", mode,
+        workspaceBinding: { workspaceRoot: dir, displayName: "project", boundAt: 1 },
+        schedule: { kind: "daily", timeOfDay: "13:00" } });
+    }
+    const reloaded = createSchedulerStore(deps);
+    reloaded.load();
+    expect(reloaded.getTasks().find(task => task.id === reminder.id)).toMatchObject({
+      mode: "chat", kind: "reminder", delivery, enabled: true,
+    });
+    expect(reloaded.getTasks().filter(task => !task.delivery).map(task => task.mode)).toEqual(["work", "code"]);
   });
 
   it("rolls a stale recurring nextFireAt forward when re-enabled", () => {
@@ -255,8 +297,9 @@ describe("scheduler store", () => {
       expect(task.approvalFingerprint).toBe("");
     });
 
-    it("加载时把旧版可能启用的插件任务归一化回停用", () => {
+    it.each(["chat", "work", "learn", "code"] as const)("加载时保留插件任务的 %s 模式并归一化回停用", (mode) => {
       const dir = tmpDir();
+      onTestFinished(() => fs.rmSync(dir, { recursive: true, force: true }));
       const tasksFile = path.join(dir, "scheduled-tasks.json");
       fs.writeFileSync(tasksFile, JSON.stringify({
         tasks: [{
@@ -270,6 +313,7 @@ describe("scheduler store", () => {
           createdAt: "2026-06-22T00:00:00.000Z",
           updatedAt: "2026-06-22T00:00:00.000Z",
           ownerPluginId: "demo-plugin",
+          mode,
           pluginUserEnabled: true,
           approvalFingerprint: "abc",
         }, {
@@ -298,6 +342,7 @@ describe("scheduler store", () => {
       expect(pluginTask?.toolMode).toBe("allow-list");
       expect(pluginTask?.pluginUserEnabled).toBe(true);
       expect(pluginTask?.approvalFingerprint).toBe("abc");
+      expect(pluginTask?.mode).toBe(mode);
       // 旧版用户任务没有冻结的工作区，不能静默在当前工作区执行。
       expect(userTask?.enabled).toBe(false);
       expect(userTask?.ownerPluginId).toBeUndefined();

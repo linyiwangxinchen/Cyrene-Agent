@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { applyScheduledExecutionPolicy, createSchedulerRunner } from "./scheduler-runner";
+import { createSchedulerStore } from "./scheduler-store";
 import type { ScheduledTask } from "./types";
 import { ConversationTranscriptStore } from "../orchestrator/conversation-transcript-store";
 import { ConversationJournalService } from "../orchestrator/conversation-journal-service";
@@ -139,6 +140,55 @@ describe("scheduled Cyrene execution policy", () => {
 });
 
 describe("createSchedulerRunner lifecycle events", () => {
+  it.each(["code", "work"] as const)("runs a persisted %s user task in its saved mode and workspace after reload", async (mode) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-scheduler-mode-reload-"));
+    try {
+      const storeDeps = {
+        tasksFile: path.join(root, "scheduled-tasks.json"),
+        historyFile: path.join(root, "scheduled-tasks-history.jsonl"),
+        now: () => new Date("2026-09-03T10:00:00.000Z"),
+        id: () => "persisted-task",
+      };
+      const workspaceBinding = { workspaceRoot: root, displayName: "saved workspace", boundAt: 1 };
+      const store = createSchedulerStore(storeDeps);
+      store.load();
+      const task = store.addTask({
+        title: "重启后保持模式",
+        prompt: "只回复 ok",
+        mode,
+        enabled: false,
+        schedule: { kind: "daily", timeOfDay: "09:00" },
+        workspaceBinding,
+        toolMode: "allow-list",
+        allowedToolIds: [],
+      });
+      expect(JSON.parse(fs.readFileSync(storeDeps.tasksFile, "utf8")).tasks[0].mode).toBe(mode);
+
+      const reloadedStore = createSchedulerStore(storeDeps);
+      reloadedStore.load();
+      const reloadedTask = reloadedStore.getTasks()[0];
+      expect(reloadedTask).toMatchObject({ id: task.id, enabled: false, workspaceBinding });
+      const createRunSession = vi.fn(() => "reloaded-task-session");
+      const deps = makeRunnerDeps({
+        createRunSession,
+        getActiveConversation: () => ({ sessionId: "unrelated-chat", mode: "work" }),
+      });
+
+      const result = await createSchedulerRunner(deps as never).runScheduledTask(reloadedTask, storeDeps.now(), true);
+
+      expect(result.ok).toBe(true);
+      expect(createRunSession).toHaveBeenCalledWith(reloadedTask);
+      expect(runnerMocks.agentOptions).toMatchObject({
+        conversationMode: mode,
+        executionMode: "work",
+        conversationId: "reloaded-task-session",
+        resolvedWorkspaceRoot: root,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("runs a workspace-bound code task in its own bound session instead of the active chat", async () => {
     const task = makeTask({
       mode: "code",

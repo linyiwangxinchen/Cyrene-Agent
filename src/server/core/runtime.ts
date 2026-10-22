@@ -30,7 +30,7 @@ import { getHarnessRunStore } from "../../main/orchestrator/harness/run-store";
 import { ConversationJournalService } from "../../main/orchestrator/conversation-journal-service";
 import { createModelBackedConversationTranscriptCompactor } from "../../main/orchestrator/conversation-transcript-compactor";
 import { reconcileCrashedInterruptions } from "../../main/orchestrator/conversation-interruption-reconciliation";
-import { registerAgUiIpc, hasActiveConversationRun } from "../../main/agui-bridge";
+import { registerAgUiIpc, hasActiveConversationRun, prepareBackgroundSessionMutation, disposeShellCompletionDispatch } from "../../main/agui-bridge";
 import { createLifecyclePublisher } from "../../main/plugin-host/lifecycle-publisher";
 import { createPendingTurnLifecycle } from "../../main/plugin-host/pending-turn-lifecycle";
 import { createSchedulerSubsystem } from "../../main/scheduler/bootstrap";
@@ -219,7 +219,11 @@ export async function startHeadlessCore() {
   });
   registerMemoryUserToolIpc({ ipc, windowManager });
   registerWikiMemoryIpc(ipc); registerKnowledgeBaseIpc(ipc);
-  registerChatsIpc(ipc, { llmClient, isPrimaryModelBusy: hasActiveConversationRun, transcriptCompactor });
+  await registerChatsIpc(ipc, {
+    llmClient, isPrimaryModelBusy: hasActiveConversationRun, transcriptCompactor,
+    beforeWorkspaceBindingChange: prepareBackgroundSessionMutation,
+    beforeSessionDelete: prepareBackgroundSessionMutation,
+  });
   registerChatUiIpc({ ipc, windowManager, isTrustedChatSender: sender => webContents.fromId(sender.id) === sender as any, live2dWindowLifecycle: { getDiagnostics: () => ({ available: false, platform: "web" }) } });
   ipc.handle(IPC.SETTINGS_REQUEST_SWITCH_SECTION, (_event, section: string) => { emitHost(IPC.SETTINGS_SWITCH_SECTION, section || "appearance"); return true; });
   ipc.handle("web:system-theme", (_event, dark: boolean) => { nativeTheme.shouldUseDarkColors = !!dark; nativeTheme.emit("updated"); broadcast(IPC.UI_THEME_CHANGED, getEffectiveUiTheme(loadGeneralSettings().uiTheme)); return true; });
@@ -243,11 +247,15 @@ export async function startHeadlessCore() {
   });
   toast.registerIpc(ipc);
   registerProtocolHandlers();
-  registerAgUiIpc(input => runtime.buildOptions(input), (result, text, context) => runtime.onRunFinished(result, text, context), () => {
+  registerAgUiIpc(input => runtime.buildOptions(input), (result, text, context) => runtime.onRunFinished(result, text, context), (context) => {
+    // Timers inherit AsyncLocalStorage from the original browser request. A
+    // background continuation belongs to the server, including after that
+    // browser disconnects, so its events must reach all current subscribers.
+    if (context?.background) return chatWindow as any;
     const sender = invocation.getStore();
     // The invoking browser is the chat target. Returning the aggregate broadcast
     // port here would deliver every delta twice to that browser.
-    return sender ? { isDestroyed: () => sender.isDestroyed(), webContents: sender } as any : chatWindow as any;
+    return sender && !sender.isDestroyed() ? { isDestroyed: () => sender.isDestroyed(), webContents: sender } as any : chatWindow as any;
   }, proactive.proactiveConversationLifecycle, ipc, pending);
   ipc.handle(IPC.PLAN_GET_STATE, (_event, payload: any) => ({ state: payload?.conversationId ? getPlanState(payload.conversationId) : "NORMAL" }));
   ipc.handle(IPC.PLAN_SET_MODE, (_event, payload: any) => {
@@ -314,6 +322,7 @@ export async function startHeadlessCore() {
       return closing ??= (async () => {
         try {
           app.emit("before-quit");
+          await disposeShellCompletionDispatch();
           voice.close(); ttsSession.cancelAll();
           mcpAbort.abort(); await restoreMcp;
           await Promise.allSettled(listMcpServers().map(server => disconnectMcpServer(server.id)));

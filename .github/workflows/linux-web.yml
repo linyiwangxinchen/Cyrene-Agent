@@ -66,6 +66,14 @@ jobs:
           src/main/orchestrator/vendors/model-runtime.test.ts
           src/main/orchestrator/shell-runtime.test.ts
           src/main/orchestrator/tools/builtin-tools/run-shell-platform.test.ts
+          src/main/orchestrator/shell-completion-dispatcher.test.ts
+          src/main/orchestrator/tools/builtin-tools/shell-job-persistence.test.ts
+          src/main/learn/progress/learn-post-turn.test.ts
+          src/main/scheduler/scheduler-store.test.ts
+          src/main/scheduler/scheduler-runner.test.ts
+          src/renderer/react/features/settings/McpSettingsPanel.args.test.ts
+          src/renderer/react/features/settings/McpSettingsPanel.config.test.ts
+          src/renderer/react/features/chat/components/katex-rendering-contract.test.ts
       - run: pnpm run build:web
       - name: Install Chromium for Web and bundled Playwright MCP
         run: |
@@ -88,3 +96,4 @@ jobs:
           pnpm run verify:voice-mcp
           node scripts/verify/shared-core-compaction.mjs
           node scripts/verify/shared-core-memory.mjs
+          node scripts/verify/shared-core-shell.mjs

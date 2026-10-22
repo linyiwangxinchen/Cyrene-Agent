@@ -1,3 +1,4 @@
+import { requiresUserInteraction } from "./interactive-tools";
 /**
  * Harness 内置工具：update_todo（任务清单） / ask_user（澄清提问）
  *
@@ -713,7 +714,7 @@ export function isHarnessBuiltin(toolName: string): boolean {
 }
 
 export function isInteractiveHarnessBuiltin(toolName: string): boolean {
-  return toolName === ASK_USER_TOOL_ID || toolName === CONFIRM_UNCERTAIN_EFFECT_TOOL_ID;
+  return isHarnessBuiltin(toolName) && requiresUserInteraction({ id: toolName });
 }
 
 /**
@@ -759,5 +760,6 @@ export function getHarnessBuiltinToolSpecs(options?: {
     : [taskSpec, ...(options?.includeCloseTask ? [closeTaskToolSpec] : [])];
   const plan = planToolSpecsFor(options?.planState);
   return [updateTodoToolSpec, ...interactive, ...task, readToolResultToolSpec, ...plan]
+    .filter((tool) => options?.includeInteractive !== false || !isInteractiveHarnessBuiltin(tool.name))
     .filter((tool) => !options?.allowedToolIds || options.allowedToolIds.has(tool.name));
 }

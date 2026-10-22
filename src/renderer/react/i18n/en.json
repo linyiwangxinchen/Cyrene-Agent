@@ -102,6 +102,8 @@
     }
   },
   "chatPage": {
+    "backgroundSettlementTitle": "Background task is still settling",
+    "backgroundSettlementPending": "This conversation has a background task that has not finished settling. No change was made. Please try deleting the conversation or changing its workspace again later.",
     "scrollToBottom": "Scroll to bottom",
     "screenshotAttachmentName": "screenshot_{{ts}}.png",
     "pastedImageAttachmentName": "pasted-image_{{ts}}.png",
@@ -110,6 +112,7 @@
     "toolCallFallbackName": "Tool call",
     "errorModelRequestFailed": "Model request failed",
     "errorModelRequestStartFailed": "Couldn't start the model request",
+    "learnRunActiveNotice": "Another learning conversation is running, so this turn has not started. Please retry after that task finishes.",
     "lastTurnChanged": "The conversation has changed and has been refreshed. Please select the message to edit or regenerate again.",
     "lastTurnRefreshFailed": "The conversation has changed, but refreshing failed. This turn wasn't executed. Refresh the window or reopen the conversation before trying again.",
     "sessionRunActiveNotice": "A task is already running in this session (possibly from before a refresh), so this turn wasn't executed.",
@@ -1780,8 +1783,9 @@
       },
       "command": "Command",
       "commandPlaceholder": "npx",
-      "args": "Arguments (space separated)",
+      "args": "Arguments (space separated or JSON array)",
       "argsPlaceholder": "-y @modelcontextprotocol/server-memory",
+      "argsInvalid": "Check the argument format. When using brackets, follow this example: [\"C:\\\\new\\\\tool.js\", \"hello world\"]. Write each path backslash twice.",
       "url": "URL",
       "urlPlaceholder": "https://mcp.example.com/mcp",
       "advanced": "Advanced",

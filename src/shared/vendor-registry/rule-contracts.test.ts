@@ -40,7 +40,7 @@ const CASES: readonly [string, readonly string[], ReasoningCapability][] = [
   ["kimi", ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2-thinking"], fixed],
   ["kimi", ["kimi-k2.6"], toggle({ keepOnTools: true })],
   ["kimi", ["kimi-k2.5"], toggle({ keepOnTools: false })],
-  ["minimax", ["MiniMax-M3.1-Flash-Preview"], effort(five, {
+  ["minimax", ["MiniMax-M3.1-Flash", "MiniMax-M3.1-Flash-Preview"], effort(five, {
     control: "toggle-effort", requestStyle: "anthropic-adaptive", supportsDisable: false, defaultEffort: "high", autoEffort: "high",
   })],
   ["minimax", ["MiniMax-M3"], toggle({ requestStyle: "anthropic-adaptive", defaultMode: "off" })],

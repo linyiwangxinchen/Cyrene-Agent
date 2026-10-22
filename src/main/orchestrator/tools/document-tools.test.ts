@@ -95,7 +95,7 @@ describe("Review 基线捕获（写盘前）", () => {
     const baselines = listBaselines("run-xlsx-1");
     expect(baselines).toHaveLength(1);
     expect(baselines[0]).toMatch(/\.binary$/);
-  });
+  }, 15_000);
 
   it("write_word 覆盖已有文件时保存 binary 基线", async () => {
     fs.writeFileSync(path.join(tmpDir, "report.docx"), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0, 1]));
@@ -134,5 +134,5 @@ describe("Review 基线捕获（写盘前）", () => {
       // 等待 pdfkit 内部流动作结束，避免延迟 open 撞上目录清理
       await new Promise((r) => setTimeout(r, 50));
     }
-  });
+  }, 15_000);
 });

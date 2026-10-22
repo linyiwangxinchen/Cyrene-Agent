@@ -1297,6 +1297,24 @@ describe("AgentRunController", () => {
     expect(host.onRunFinished).toHaveBeenCalled();
   });
 
+  it.each([false, true])("Learn 跨会话冲突显示等待提示且不提供同会话接管（invoke=%s）", async rejected => {
+    const message = "LEARN_RUN_ACTIVE:run-other";
+    const api = createFakeApi({ success: false, runId: "", error: message });
+    if (rejected) vi.mocked(api.run).mockRejectedValue(new Error("Error invoking remote method 'agui:run': Error: " + message));
+    const store = createFakeStore();
+    const { host } = createRecordingHost();
+    const registries = createRegistries();
+    const { promise } = launch(createInput(), { api, store, host, registries });
+    await flush(); await promise;
+    expect(host.requestTakeover).not.toHaveBeenCalled();
+    expect(api.cancel).not.toHaveBeenCalled();
+    const saved = store.upsert.mock.calls.at(-1)?.[1];
+    expect(JSON.stringify(saved)).not.toContain("LEARN_RUN_ACTIVE");
+    expect(JSON.stringify(saved)).toContain("另一个学习会话正在运行");
+    expect(saved?.runSnapshot?.status).toBe("terminal");
+    expect(host.onRunFinished).toHaveBeenCalled();
+  });
+
   it("会话守卫冲突：挂起接管操作卡，重试时带 takeoverFromRunId 复用派发入口", async () => {
     const api = createFakeApi({ success: false, runId: "", error: "SESSION_RUN_ACTIVE:run-old" });
     const store = createFakeStore();

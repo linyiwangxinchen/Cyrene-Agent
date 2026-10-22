@@ -308,6 +308,35 @@ describe("G4 cfg.reasoning 改动 → JSON body 改动（契约：adapter 必须
     expect((bodyOff.thinking as Record<string, unknown>).type).toBe("disabled");
   });
 
+  test("MiniMax-M3.1-Flash 思考不可关闭：off 也不发 disabled，档位按选择发送", () => {
+    const miniMaxCap: ProviderCapability = {
+      id: "minimax",
+      displayName: "MiniMax（稀宇科技）",
+      transport: "anthropic",
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      authStyle: "x-api-key",
+      defaultModel: "MiniMax-M3",
+      supportsTools: true,
+      supportsThinking: true,
+      thinkingField: "thinking",
+      cacheStrategy: "cache_control",
+      testStrategy: "text",
+      visionBaseUrl: "https://api.minimaxi.com/v1",
+    };
+    const adapter = new AnthropicAdapter("minimax", miniMaxCap);
+    const model = "MiniMax-M3.1-Flash";
+    // 官方：发送 thinking disabled 或 effort none 返回 400
+    const bodyOf = (reasoning: ReasoningPreference) => JSON.parse(adapter.buildRequest(
+      { model, messages: [{ role: "user" as const, content: "hi" }], maxTokens: 100 },
+      cfgOf(miniMaxCap, { model, reasoning }),
+    ).body) as Record<string, unknown>;
+
+    const bodyOff = bodyOf({ mode: "off" });
+    expect((bodyOff.thinking as Record<string, unknown> | undefined)?.type).not.toBe("disabled");
+    expect(JSON.stringify(bodyOff)).not.toContain("\"none\"");
+    expect(JSON.stringify(bodyOf({ mode: "on", effort: "xhigh" }))).toContain("\"xhigh\"");
+  });
+
   test("DeepSeek v4 toggle + on vs off → body.thinking.type 不同", () => {
     const dsCap: ProviderCapability = {
       id: "deepseek",

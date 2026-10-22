@@ -168,7 +168,7 @@ async function execute(method: string, args: any[]): Promise<unknown> {
     return database.transaction(() => runMemoryCommand(database, method, args));
   }
   if (method.startsWith('runs.')) {
-    if (method === 'runs.admit') {
+    if (method === 'runs.admit' || method === 'runs.rejectLearnBusy') {
       await importTranscript(args[0]);
       return database.transaction(() => {
         const existing = runCommand(database, 'runs.lookup', args);
@@ -201,7 +201,36 @@ async function execute(method: string, args: any[]): Promise<unknown> {
         else if (user) {
           drafts.push({ id: `user:v1:${user.turnId}:r1`, at: Date.now(), kind: 'user', turnId: user.turnId, revision: 1, payload: { text: user.text, ...(user.attachments?.length ? { attachments: user.attachments } : {}) } });
         }
-        return runCommand(database, method, [...args.slice(0, 4), drafts]);
+        const receipt = runCommand(database, 'runs.admit', [...args.slice(0, 4), drafts]) as { runId: string };
+        if (method === 'runs.rejectLearnBusy') {
+          // 拒绝也要原子提交 canonical 终态；窗口关闭前无需等 renderer 的展示检查点。
+          const { error, notice } = args[4];
+          const at = Date.now();
+          const assistantId = facts.assistantTurnId;
+          const userPatch = { ...(user.sticker ? { sticker: user.sticker } : {}),
+            ...(user.visibleContent !== user.text ? { content: user.visibleContent } : {}) };
+          if ((!facts.transcriptRewind || facts.transcriptRewind.disposition === 'replace_user') && Object.keys(userPatch).length) {
+            const messageId = facts.transcriptRewind ? `${receipt.runId}:rewind:${facts.transcriptRewind.anchorUserTurnId}` : `user:v1:${user.turnId}:r1`;
+            presentation(id, messageId, `${receipt.runId}:learn-busy-user`, userPatch, at);
+          }
+          database.append(id, { id: `${receipt.runId}:learn-busy`, at, kind: 'assistant', runId: receipt.runId,
+            turnId: assistantId, payload: { role: 'assistant', content: '' } });
+          presentation(id, assistantId, `${receipt.runId}:learn-busy`, {
+            content: '',
+            processMessages: [{ id: 'process-0', content: notice, afterToolCount: 0, seq: 1 }],
+            runActivity: { startedAt: at, completedAt: at, reasoningMs: 0, keepExpanded: true },
+            runSnapshot: { status: 'terminal', terminalStatus: 'runtime_error', updatedAt: at },
+          }, at);
+          runCommand(database, 'runs.terminal', [receipt.runId, 'failed', at, error]);
+          const record = database.record(id);
+          if (record?.schemaVersion === 2) {
+            record.messageCount = reduceTranscriptProjection(database.entries(id, true)).messages.length;
+            record.updatedAt = Math.max(record.updatedAt, at);
+            database.saveRecord(record);
+          }
+          return { ...receipt, status: 'failed', error };
+        }
+        return receipt;
       });
     }
     return runCommand(database, method, args);
@@ -306,6 +335,10 @@ async function execute(method: string, args: any[]): Promise<unknown> {
     await importTranscript(id);
     if (name === 'read')
       return database.snapshot(id);
+    if (name === 'shellEvents')
+      return database.entries(id, true, args[1]
+        ? ['background_event_pending', 'background_event', 'background_event_retired', 'user', 'assistant', 'turn_rewind', 'turn_tombstone']
+        : ['background_event_pending', 'background_event', 'background_event_retired']);
     if (name === 'audit')
       return database.entries(id, true);
     if (name === 'append')
@@ -320,7 +353,7 @@ async function execute(method: string, args: any[]): Promise<unknown> {
         const entries = database.entries(id);
         const p = input.payload;
         const prefix = entries.filter(e => e.seq <= p.sourceThroughSeq);
-        if (createHash('sha256').update(JSON.stringify(prefix)).digest('hex') !== p.sourceDigest || entries.some(e => e.seq > p.baseThroughSeq && ['compaction_checkpoint', 'turn_rewind', 'turn_tombstone'].includes(e.kind)))
+        if (createHash('sha256').update(JSON.stringify(prefix)).digest('hex') !== p.sourceDigest || entries.some(e => e.seq > p.baseThroughSeq && ['compaction_checkpoint', 'turn_rewind', 'turn_tombstone', 'background_event_retired'].includes(e.kind)))
           throw new ConversationStoreError('TRANSCRIPT_COMPACTION_REQUIRED');
         return database.append(id, input);
       });
@@ -332,8 +365,12 @@ async function execute(method: string, args: any[]): Promise<unknown> {
         const row = database.db.prepare('SELECT archived_through FROM conversations WHERE id=?').get(id)!;
         if (boundary <= Number(row.archived_through))
           return;
-        if (!database.entries(id).some(e => e.kind === 'compaction_checkpoint' && e.seq > boundary && e.payload.sourceThroughSeq >= boundary))
+        const entries = database.entries(id);
+        const checkpoint = entries.filter(e => e.kind === 'compaction_checkpoint' && e.seq > boundary && e.payload.sourceThroughSeq >= boundary).at(-1);
+        if (!checkpoint || checkpoint.kind !== 'compaction_checkpoint')
           throw new Error('TRANSCRIPT_ARCHIVE_BOUNDARY_NOT_COMMITTED');
+        if (entries.some(e => e.kind === 'background_event_retired' && e.seq > checkpoint.payload.baseThroughSeq))
+          throw new ConversationStoreError('TRANSCRIPT_COMPACTION_REQUIRED');
         database.db.prepare('UPDATE conversations SET archived_through=? WHERE id=?').run(boundary, id);
       });
     if (name === 'delete') {

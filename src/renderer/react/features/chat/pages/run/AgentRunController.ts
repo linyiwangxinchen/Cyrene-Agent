@@ -34,7 +34,7 @@ import { applyAgentRoundBoundary, createRoundProcessMessage } from "../../compon
 import { applyTaskDelegationEvent, normalizeTaskDelegationEvent } from "../../components/task-delegations";
 import { getCharacterName, t } from "../../../../i18n";
 import type { AguiApi, AguiEvent, CandidateTextEventValue, ChatStoreApi } from "../chat-page-bridge";
-import { parseSessionRunActiveError, stageForStep } from "../chat-page-normalizers";
+import { parseLearnRunActiveError, parseSessionRunActiveError, stageForStep } from "../chat-page-normalizers";
 import { RunEventGate } from "../run-event-gate";
 import { applyVisibleOutput, normalizeShellOutputEvent } from "./command-output";
 import {
@@ -595,7 +595,9 @@ export class AgentRunController {
         await this.checkpointRun("terminal", true);
         return;
       }
-      const visibleError = t("chatPage.errorModelRequestFailedWith", { message: errorMessage });
+      const visibleError = parseLearnRunActiveError(errorMessage)
+        ? t("chatPage.learnRunActiveNotice")
+        : t("chatPage.errorModelRequestFailedWith", { message: errorMessage });
       this.moveCandidateToInterruptedProcess();
       this.processMessages = [...this.processMessages, createRoundProcessMessage(
         `process-${this.processMessageSequence++}`,

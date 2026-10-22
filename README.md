@@ -485,6 +485,13 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                 </a>
             </td>
             <td align="center">
+                <a href="https://github.com/Unknownuserfrommars">
+                    <img src="https://avatars.githubusercontent.com/u/163658509?v=4" width="48;" alt="Unknownuserfrommars"/>
+                    <br />
+                    <sub><b>Tianzzi</b></sub>
+                </a>
+            </td>
+            <td align="center">
                 <a href="https://github.com/lll69">
                     <img src="https://avatars.githubusercontent.com/u/60803753?v=4" width="48;" alt="lll69"/>
                     <br />
@@ -492,10 +499,10 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/Unknownuserfrommars">
-                    <img src="https://avatars.githubusercontent.com/u/163658509?v=4" width="48;" alt="Unknownuserfrommars"/>
+                <a href="https://github.com/ActorF">
+                    <img src="https://avatars.githubusercontent.com/u/155789159?v=4" width="48;" alt="ActorF"/>
                     <br />
-                    <sub><b>Tianzzi</b></sub>
+                    <sub><b>Ying Fang</b></sub>
                 </a>
             </td>
             <td align="center">
@@ -506,10 +513,10 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                 </a>
             </td>
             <td align="center">
-                <a href="https://github.com/ActorF">
-                    <img src="https://avatars.githubusercontent.com/u/155789159?v=4" width="48;" alt="ActorF"/>
+                <a href="https://github.com/ahwhshen">
+                    <img src="https://avatars.githubusercontent.com/u/317654555?v=4" width="48;" alt="ahwhshen"/>
                     <br />
-                    <sub><b>Ying Fang</b></sub>
+                    <sub><b>ahwhshen</b></sub>
                 </a>
             </td>
             <td align="center">
@@ -533,6 +540,8 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <sub><b>Modusensus</b></sub>
                 </a>
             </td>
+		</tr>
+		<tr>
             <td align="center">
                 <a href="https://github.com/boring9720">
                     <img src="https://avatars.githubusercontent.com/u/20534568?v=4" width="48;" alt="boring9720"/>
@@ -540,8 +549,6 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <sub><b>chuxuan</b></sub>
                 </a>
             </td>
-		</tr>
-		<tr>
             <td align="center">
                 <a href="https://github.com/Tobi1chi">
                     <img src="https://avatars.githubusercontent.com/u/49900770?v=4" width="48;" alt="Tobi1chi"/>
@@ -554,13 +561,6 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
                     <img src="https://avatars.githubusercontent.com/u/89506631?v=4" width="48;" alt="proobker"/>
                     <br />
                     <sub><b>proobker</b></sub>
-                </a>
-            </td>
-            <td align="center">
-                <a href="https://github.com/ahwhshen">
-                    <img src="https://avatars.githubusercontent.com/u/317654555?v=4" width="48;" alt="ahwhshen"/>
-                    <br />
-                    <sub><b>ahwhshen</b></sub>
                 </a>
             </td>
 		</tr>
@@ -598,5 +598,15 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
 </table>
 
 ---
+
+## <img src="./docs/image/icons/star.svg" width="20" height="20" alt=""> Star History
+
+<a href="https://www.star-history.com/?repos=playa-cyrene%2Fcyrene-agent&type=date&legend=bottom-right">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&theme=dark&legend=bottom-right" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&legend=bottom-right" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&legend=bottom-right" />
+  </picture>
+</a>
 
 <img src="./docs/image/icons/star.svg" width="18" height="18" alt=""> 如果你喜欢这个项目，欢迎点一个 Star。这会帮助更多喜欢昔涟的人发现它。

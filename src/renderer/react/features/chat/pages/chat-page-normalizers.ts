@@ -49,6 +49,11 @@ export function parseSessionRunActiveError(message: string): string | undefined 
   return /SESSION_RUN_ACTIVE:(run-[A-Za-z0-9-]+)/.exec(message)?.[1];
 }
 
+/** 跨会话 Learn 互斥不能复用同会话的接管操作。 */
+export function parseLearnRunActiveError(message: string): string | undefined {
+  return /LEARN_RUN_ACTIVE:(run-[A-Za-z0-9-]+)/.exec(message)?.[1];
+}
+
 export function permissionInteraction(request: PermissionApprovalRequest): ComposerInteraction {
   const target = [request.args.path, request.args.filePath]
     .find((value): value is string => typeof value === "string" && value.trim().length > 0);
@@ -110,4 +115,10 @@ export function getInitialMode(): ConversationMode {
     // localStorage 不可用或数据异常时回退到默认值
   }
   return "chat";
+}
+
+/** 同时接受主进程返回的错误码和 Electron 包装后的拒绝信息。 */
+export function isShellCompletionSettlementPending(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /SHELL_COMPLETION_(?:SETTLEMENT_PENDING|SETTLEMENT_TIMEOUT)/.test(message);
 }

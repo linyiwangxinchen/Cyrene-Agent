@@ -4,7 +4,7 @@
 
 ## 修改清单和提交主题
 
-最近一次上游同步：[2026-10-18 集成与验收记录](upstream-integration-20261018.md)。集成分支为 `integrate/upstream-linux-web-20261018`，从共同基点 `8d905897` 合入上游 `13f61493` 的 37 个提交（v1.3.4）；本次三方合并无文本冲突，并补齐 Web 地址栏兼容、图片上下文与微信投递修复，新增只读同步预检和独立 Linux/Web CI。[2026-10-17 集成记录](upstream-integration-20261017.md)记录了 README 自动生成区冲突的处理；此前的 [2026-10-16 集成记录](upstream-integration-20261016.md)、[2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯后台任务收尾、压缩器适配和 SQLite 迁移。
+最近一次上游同步：[2026-10-22 集成与验收记录](upstream-integration-20261022.md)。集成分支为 `integrate/upstream-linux-web-20261022`，从共同基点 `13f61493` 合入上游 `6094d1b6` 的 64 个提交，处理 5 处共享业务冲突，并完成后台 Shell/Learn、压缩、任务模式、MCP 和依赖兼容；Windows 发布版本为 `1.3.4-3`。[2026-10-18 集成记录](upstream-integration-20261018.md)保留前一轮图片/微信和 Web 地址栏适配；[2026-10-17 集成记录](upstream-integration-20261017.md)记录 README 自动生成区冲突的处理。此前的 [2026-10-16 集成记录](upstream-integration-20261016.md)、[2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯后台任务收尾、压缩器适配和 SQLite 迁移。
 
 [linux-web-changes.md](linux-web-changes.md) 给出每一个新增/修改文件的作用。提交按 10 个主题组织，commit body 也逐文件描述用途：
 
