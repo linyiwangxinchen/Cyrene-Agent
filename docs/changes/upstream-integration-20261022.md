@@ -57,9 +57,10 @@
 - Windows x64 NSIS 1.3.4-3 编译完成；版本、内置 Git 2.55.0、mpv、截图辅助程序检查通过，7-Zip 完整性检查通过。ASAR 的 22 项检查确认编译内容与当前代码一致，许可证和 fork 更新源完整，没有凭据/聊天数据库/构建工作区。
 - Windows 新包隔离实机运行 20 项通过：Electron 44.7.2、两次正常退出、SQLite 写入与重启恢复、设置页面原生滚轮滚动及回滚、5 张截图视觉检查；所检页面无未捕获渲染异常。
 - 已跟踪静态源资源的构建改写经忽略行尾差异检查后恢复；保留上游文件原换行，空白检查以 `cr-at-eol` 识别 CRLF，没有整仓换行归一化。
+- GitHub [Ubuntu 24.04 实际验收](https://github.com/linyiwangxinchen/Cyrene-Agent/actions/runs/39780906466) 对 `6d2dc37e` 全部通过：冻结依赖安装、同步预检、四项类型检查、Linux/渠道回归、Web 构建、两套锁定 Chromium 安装及认证后的业务/语音/MCP/压缩/记忆/后台 Shell 验收。首轮的夹具失败已修复；没有跳过失败测试或更改生产权限来通过 CI。
 
 所有模型和渠道自动验收使用隔离数据与本地受控服务，不调用用户付费模型、不向真实联系人发送测试消息，也不自动更新生产 Ubuntu 服务。Windows 运行验收使用新包的 `win-unpacked`，不覆盖本机用户设置；NSIS 安装器另做归档完整性和版本/更新元数据校验。
 
-本地 bundled MCP 浏览器验收显式指向已安装 Chromium；Ubuntu CI 将分别安装 Web 和 MCP 各自锁定的版本并使用默认路径。安装包没有数字签名。未在当前机器运行 NSIS 安装/卸载；Windows 隔离验收的退出卸载阶段有 cursor-position handler 已移除的日志，未造成页面异常或退出失败。
+本地 bundled MCP 先用已安装 Chromium 验收，再补装其锁定的 Chromium 1237，清除可执行文件和缓存路径覆盖后，21 项语音/MCP 验收再次全部通过。Ubuntu CI 分别安装 Web 和 MCP 各自锁定的版本并使用默认路径。安装包没有数字签名。未在当前机器运行 NSIS 安装/卸载；Windows 隔离验收的退出卸载阶段有 cursor-position handler 已移除的日志，未造成页面异常或退出失败。
 
 sandbox-runtime 0.0.80 的真实导入、所需导出及 Windows x64 附带程序已检查。其 Windows 沙箱状态存储迁移至 HKLM/ProgramData；本次未安装沙箱、未触发 UAC、未更改机器证书或注册表，旧沙箱配置迁移仍需具备对应权限的环境专项验证。
