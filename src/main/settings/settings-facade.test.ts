@@ -234,3 +234,11 @@ describe("general interface language settings", () => {
     expect(reloaded.loadGeneralSettings().language).toBe(language);
   });
 });
+
+describe("general browser viewport mode setting", () => {
+  it("defaults to auto and rejects unknown values", () => {
+    expect(normalizeGeneralSettings({}).browserViewportMode).toBe("auto");
+    expect(normalizeGeneralSettings({ browserViewportMode: "tablet" } as never).browserViewportMode).toBe("auto");
+    expect(normalizeGeneralSettings({ browserViewportMode: "custom" }).browserViewportMode).toBe("custom");
+  });
+});

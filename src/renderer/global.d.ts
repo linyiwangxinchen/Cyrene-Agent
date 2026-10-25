@@ -83,6 +83,8 @@ interface SettingsWindowApi {
   setPermissionLevel: (level: string) => Promise<{ ok: boolean; level?: string; error?: string }>;
   openChromeGpu: () => void;
   openCustomStylePrompt: () => Promise<unknown>;
+  getDataDir?: () => Promise<string>;
+  openDataDir?: () => Promise<{ ok: boolean; error?: string }>;
   channelsGetStatus: () => Promise<unknown>;
   setPetAlwaysOnTop: (value: boolean) => void;
   setPetVisible: (value: boolean) => void;

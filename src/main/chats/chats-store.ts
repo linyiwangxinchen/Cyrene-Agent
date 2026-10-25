@@ -1,4 +1,4 @@
-import { app, shell } from "electron";
+import { app } from "electron";
 import path from "node:path";
 import type * as core from "./chats-store-core";
 import { getConversationDatabase } from "../storage/conversation-database-client";
@@ -46,7 +46,6 @@ export const clearStalePendingAdjustMarks = (...args: Parameters<typeof core.cle
 export const deleteSession = (...args: Parameters<typeof core.deleteSession>): Promise<Awaited<ReturnType<typeof core.deleteSession>>> => invoke('deleteSession', args);
 export const getLatestSessionId = (...args: Parameters<typeof core.getLatestSessionId>): Promise<Awaited<ReturnType<typeof core.getLatestSessionId>>> => invoke('getLatestSessionId', args);
 export const migrateLegacyMessages = (...args: Parameters<typeof core.migrateLegacyMessages>): Promise<Awaited<ReturnType<typeof core.migrateLegacyMessages>>> => invoke('migrateLegacyMessages', args);
-export async function openStorageFolder(): Promise<void> { await shell.openPath(app.getPath('userData')); }
 export const setWorkspaceBinding = (...args: Parameters<typeof core.setWorkspaceBinding>): Promise<Awaited<ReturnType<typeof core.setWorkspaceBinding>>> => invoke('setWorkspaceBinding', args);
 export const getWorkspaceBinding = (...args: Parameters<typeof core.getWorkspaceBinding>): Promise<Awaited<ReturnType<typeof core.getWorkspaceBinding>>> => invoke('getWorkspaceBinding', args);
 export const clearWorkspaceBinding = (...args: Parameters<typeof core.clearWorkspaceBinding>): Promise<Awaited<ReturnType<typeof core.clearWorkspaceBinding>>> => invoke('clearWorkspaceBinding', args);

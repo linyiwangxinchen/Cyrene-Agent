@@ -20,6 +20,8 @@ import { getTimeoutSettings, saveTimeoutSettings } from "../timeout-manager";
 import type { syncVolcanoSearchMcp } from "./general-settings-lifecycle";
 import type { syncPlaywrightMcp, syncFilesystemMcp } from "../sync-mcp-builtin";
 import { broadcastChatsChanged } from "../chats/chats-ipc";
+import { registerDataDirIpc } from "./data-dir-ipc";
+import { getBrowserPanelController } from "../browser/browser-panel-runtime";
 import { normalizeMemoryMode, type MemoryMode } from "../memory/memory-mode";
 import { getEffectiveUiTheme, watchSystemUiTheme } from "../system-ui-theme";
 import { getModelInstallStatus } from "../rag/model-status";
@@ -141,6 +143,9 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     const before = getGeneralSettings();
     const saved = saveGeneralSettings({ ...before, ...tts });
 
+    // 浏览器视口模式切换后立即按当前面板宽度重新判断身份，无需拖动面板。
+    if ("browserViewportMode" in tts) getBrowserPanelController()?.refreshViewportMode?.();
+
     // 搜索 MCP 自动注册/移除：选 MiniMax+有key→注册，否则→移除
     const searchConfigChanged = "searchMinimaxKey" in tts || "searchEngine" in tts;
     if (searchConfigChanged) {
@@ -177,6 +182,8 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     await shell.showItemInFolder(filePath);
     return { ok: true, filePath };
   });
+
+  registerDataDirIpc(ipc);
 
   ipc.on(IPC.SETTINGS_SET_PET_ALWAYS_ON_TOP, (_event, value: boolean) => {
     const saved = saveGeneralSettings({ ...getGeneralSettings(), petAlwaysOnTop: Boolean(value) });

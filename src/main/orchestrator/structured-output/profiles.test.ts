@@ -14,6 +14,8 @@ describe("resolveStructuredOutputProfile", () => {
     ["claude", "claude-haiku-5-5", "anthropic", "provider_json_schema"],
     ["gemini", "gemini-4-argon", "openai", "provider_json_schema"],
     ["kimi", "kimi-k3", "openai", "provider_json_schema"],
+    ["kimi", "kimi-k3.1-pro", "openai", "provider_json_schema"],
+    ["kimi", "kimi-k3.1-pro-highspeed", "openai", "provider_json_schema"],
     ["kimi", "kimi-for-coding", "openai", "provider_json_schema"],
     ["doubao", "doubao-seed-2-1-pro-260628", "openai", "provider_json_schema"],
     ["deepseek", "deepseek-flash", "openai", "provider_json_object"],
@@ -38,6 +40,17 @@ describe("resolveStructuredOutputProfile", () => {
     for (const model of ["gemini-3.8-flash", "gemini-4-argon-preview", "gemini-4-flash"]) {
       expect(resolveStructuredOutputProfile({
         provider: "gemini",
+        model,
+        transport: "openai",
+        endpointKind: "official",
+      }).mode).toBe("prompt_json");
+    }
+  });
+
+  test("Kimi K3.1 Pro rule matches only the verified model names", () => {
+    for (const model of ["kimi-k3.1", "kimi-k3.1-pro-preview", "kimi-k3.1-flash"]) {
+      expect(resolveStructuredOutputProfile({
+        provider: "kimi",
         model,
         transport: "openai",
         endpointKind: "official",
@@ -207,6 +220,8 @@ describe("resolveStructuredOutputProfile", () => {
   test.each([
     "kimi-k2.7-code",
     "kimi-k3",
+    "kimi-k3.1-pro",
+    "kimi-k3.1-pro-highspeed",
     "kimi-for-coding",
   ])("%s gets the slow-thinking Kimi CITA budget", (model) => {
     expect(resolveStructuredOutputProfile({

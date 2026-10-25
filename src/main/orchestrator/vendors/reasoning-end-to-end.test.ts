@@ -215,6 +215,49 @@ describe("G2 Claude + reasoning 透传", () => {
   });
 });
 
+describe("kimi-k3.1-pro 请求体", () => {
+  const kimiCap: ProviderCapability = {
+    id: "kimi",
+    displayName: "Kimi（月之暗面）",
+    transport: "openai",
+    baseUrl: "https://api.moonshot.cn/v1",
+    authStyle: "bearer",
+    defaultModel: "kimi-k2.7-code",
+    supportsTools: true,
+    supportsThinking: true,
+    thinkingField: "thinking",
+    cacheStrategy: "prompt_cache_key",
+    testStrategy: "text",
+  };
+  const adapter = new OpenAICompatAdapter("kimi", kimiCap);
+  // 官方：始终开启思考、无法关闭；reasoning_effort 仅 low/high/max；temperature/top_p 为固定值不应传入。
+  const bodyOf = (model: string, reasoning?: ReasoningPreference) => JSON.parse(adapter.buildRequest(
+    { model, messages: [{ role: "user", content: "hi" }] },
+    cfgOf(kimiCap, { model, ...(reasoning ? { reasoning } : {}) }),
+  ).body) as Record<string, unknown>;
+
+  test.each(["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])("%s 未设置档位 → reasoning_effort=high，且不发 temperature / top_p", (model) => {
+    const body = bodyOf(model);
+    expect(body.reasoning_effort).toBe("high");
+    expect("temperature" in body).toBe(false);
+    expect("top_p" in body).toBe(false);
+  });
+
+  test("kimi-k3.1-pro + {mode:'on', effort:'max'} → reasoning_effort=max", () => {
+    expect(bodyOf("kimi-k3.1-pro", { mode: "on", effort: "max" }).reasoning_effort).toBe("max");
+  });
+
+  test("kimi-k3.1-pro + off → 不发送关闭思考，回到默认 high", () => {
+    const body = bodyOf("kimi-k3.1-pro", { mode: "off" });
+    expect(body.reasoning_effort).toBe("high");
+    expect("thinking" in body).toBe(false);
+  });
+
+  test("kimi-k3.1-pro + 不支持的 medium → 收敛到默认 high", () => {
+    expect(bodyOf("kimi-k3.1-pro", { mode: "on", effort: "medium" }).reasoning_effort).toBe("high");
+  });
+});
+
 describe("gemini-4-argon 请求体", () => {
   const adapter = new OpenAICompatAdapter("gemini", geminiCap);
   // 官方：thinking_level 仅 low/medium/high，默认 medium；兼容层 reasoning_effort 映射 thinking_level，

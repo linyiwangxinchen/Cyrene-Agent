@@ -46,6 +46,9 @@ const TRANSPORT_NAMES_EN: Readonly<Record<Transport, string>> = {
 const NOTES_EN: Readonly<Record<string, string>> = {
   "历史清单保留名称；不改写用户请求。": "Legacy catalog entry; the model name is sent as provided.",
   "现有采样白名单未覆盖该型号。": "The existing sampling allowlist does not cover this model.",
+  "K3 的后训练版本（2026-10 发布）；1M 上下文，原生视觉理解。": "A post-trained version of K3 (released 2026-10); 1M context with native vision understanding.",
+  "K3.1 Pro 的高速版，约 2～3 倍输出速度。": "The high-speed variant of K3.1 Pro, with roughly 2–3× the output speed.",
+  "官方说明 temperature/top_p 为固定值、建议不显式传入；未加采样白名单即不注入采样参数。": "Officially, temperature/top_p are fixed and should not be passed; with no sampling allowlist, no sampling parameters are sent.",
   "2026-10-07 发布；固定型号名，无日期后缀、无别名。": "Released 2026-10-07; a fixed model name with no date suffix and no alias.",
   "官方说明非默认 temperature/top_p/top_k 返回 400；未加采样白名单即不注入采样参数。": "Officially, non-default temperature/top_p/top_k return a 400; with no sampling allowlist, no sampling parameters are sent.",
   "2026-09-30 发布的旗舰推理模型（Stable）；固定型号名，无日期后缀。": "Flagship reasoning model released 2026-09-30 (Stable); a fixed model name with no date suffix.",

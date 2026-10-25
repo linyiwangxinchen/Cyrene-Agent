@@ -969,6 +969,12 @@
       "description": "Manage session data for Cyrene's embedded browser.",
       "sectionTitle": "Browser data",
       "sectionDescription": "This data belongs only to Cyrene's embedded browser and does not affect system Edge.",
+      "viewportMode": "Page layout",
+      "viewportModeAuto": "Auto",
+      "viewportModeCustom": "Custom",
+      "viewportModeAutoDescription": "When the panel is narrow, sites are opened as a phone would (Baidu, Bing and others show their mobile layout); wider panels switch back to desktop.",
+      "viewportModeCustomDescription": "Always open sites as a desktop browser.",
+      "retry": "Retry",
       "clearCookies": "Clear cookies",
       "clearCookiesDescription": "Remove sign-in cookies saved by the embedded browser. The current page reloads afterward.",
       "confirmTitle": "Clear browser cookies?",
@@ -1391,6 +1397,10 @@
       "about": "About Cyrene",
       "aboutDescription": "A lightweight desktop companion for emotional support.",
       "softwareUpdate": "Software update",
+      "dataDir": "Data folder",
+      "dataDirDescription": "Chats, model profiles, plugins and other data are stored here",
+      "openDataDir": "Open folder",
+      "openDataDirFailed": "Could not open the data folder: {{error}}",
       "save": "Save settings"
     },
     "usage": {

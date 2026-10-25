@@ -17,6 +17,21 @@ import { registerExamPageSource } from "../learn/exam-page-authority";
 import { appendBrowserObservationLog } from "./browser-observation-log";
 import { navigationErrorCode, parseHttpUrl } from "./http-url";
 import {
+  DEFAULT_BROWSER_VIEWPORT_MODE,
+  mobileUserAgent,
+  type BrowserUserAgentKind,
+  type BrowserViewportMode,
+} from "../../shared/browser-viewport";
+import { UserAgentSwitch } from "./user-agent-switch";
+import {
+  focusedElementIsEditable,
+  isEditingKeystroke,
+  pageHasUserInput,
+  reloadForUserAgentIfIdle,
+  responseVariesByUserAgent,
+  watchUserInput,
+} from "./user-agent-reload-guard";
+import {
   capturePlaywrightPageSnapshot,
   cancelPlaywrightElementPicker,
   readPlaywrightElementPicker,
@@ -39,6 +54,9 @@ const EMPTY_TAB_STATE = {
   crashed: false,
 } as const;
 
+/** 新标签导航等待面板首个可见尺寸的上限；超时仍按当时状态继续导航。 */
+const VISIBLE_BOUNDS_FOR_NAVIGATION_MS = 1500;
+
 interface BrowserTab {
   id: string;
   kind: "web" | "exam";
@@ -47,7 +65,30 @@ interface BrowserTab {
   unregisterExamPage?: () => void;
   view: WebContentsView | null;
   state: BrowserPanelTabState;
+  /** 当前文档实际以哪种身份加载；与当前应使用的身份不同时才需要刷新。 */
+  documentUserAgentKind?: BrowserUserAgentKind;
+  /** 进行中的主框架导航实际发出请求时用的身份；没有请求（前进后退缓存恢复）时为空。 */
+  requestedUserAgentKind?: BrowserUserAgentKind;
+  /** 每个历史记录条目加载时的身份，用于前进后退从缓存恢复旧文档时判断其身份。 */
+  historyUserAgentKinds?: Map<number, BrowserUserAgentKind>;
+  /** 当前文档里用户是否用键盘改动过内容（含 iframe）；文档跳转后清零。 */
+  userTyped?: boolean;
+  /** 主框架跨文档导航计数，用于判断刷新前的异步探测期间是否有新导航开始。 */
+  navigationGeneration?: number;
+  /** 被用户停止或加载失败的那次主框架导航的代次；与当前代次相同时不自动刷新。 */
+  interruptedNavigationGeneration?: number;
+  /** 编辑类按键与鼠标按下的计数，用于判断刷新前的异步探测期间用户是否开始输入。 */
+  inputGeneration?: number;
+  /** 上一次因身份切换自动刷新的「历史条目:身份」，同一条目同一身份只自动刷新一次，防止缓存命中导致反复刷新。 */
+  lastUserAgentReload?: string;
+  /** 进行中的主框架导航最后一次实际请求的方法（重定向后为最终请求）；没有请求时为空。 */
+  requestedMethod?: string;
+  /** 当前文档是否为 POST 响应；这类文档不自动刷新，避免重提交表单。 */
+  documentIsPost?: boolean;
+  /** 每个历史记录条目是否为 POST 响应，前进后退恢复时据此判断。 */
+  historyPostEntries?: Map<number, boolean>;
 }
+
 
 interface BrowserObservationRecord {
   tabId: string;
@@ -89,6 +130,12 @@ export class BrowserPanelController {
   private controlAction: "starting" | "opening" | "switching" | "clicking" | "filling" | "pressing" | "scrolling" | "screenshot" | "active" | undefined;
   private controlActionTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly observedWindows = new WeakSet<BrowserWindow>();
+  private getViewportMode: () => BrowserViewportMode = () => DEFAULT_BROWSER_VIEWPORT_MODE;
+  /** 拖动分隔条时宽度连续变化，停下后再切换身份并刷新，避免拖动途中重载。 */
+  private readonly userAgentSwitch = new UserAgentSwitch(() => this.syncUserAgents());
+  /** 浏览器会话默认（桌面）UA，切回桌面版时恢复。 */
+  private desktopUserAgent = "";
+  private sessionUserAgent = "";
   private readonly onPlaywrightSnapshotNavigation = (contents: WebContents): void => {
     resetPlaywrightPageSnapshot(contents);
   };
@@ -144,25 +191,15 @@ export class BrowserPanelController {
     if (tab.kind === "exam") return "考试答题页不能作为外部网页控制目标。请先切换到普通网页标签。";
     this.controlLease = { conversationId: input.conversationId, tabId: tab.id };
     this.setControlAction("starting");
-    if (!this.bounds || this.bounds.width <= 0 || this.bounds.height <= 0) {
-      const visible = new Promise<void>((resolve) => {
-        let done = false;
-        const finish = () => {
-          if (done) return;
-          done = true;
-          clearTimeout(timer);
-          this.visibleBoundsWaiters.delete(finish);
-          resolve();
-        };
-        const timer = setTimeout(finish, 8_000);
-        this.visibleBoundsWaiters.add(finish);
-      });
+    if (!this.hasVisibleBounds()) {
+      const visible = this.waitForVisibleBounds(8_000);
       this.openPanelForControl?.();
       await visible;
     }
     if (!this.bounds || this.bounds.width <= 0 || this.bounds.height <= 0) {
       this.controlLease = null;
       this.setControlAction(undefined);
+      this.retryUserAgentReloadAfterGuard();
       return "右侧浏览器面板未能显示，请先打开浏览器标签后重试。";
     }
     if (tab.id !== this.activeTabId) this.activateTab(tab.id);
@@ -171,6 +208,7 @@ export class BrowserPanelController {
       catch {
         this.controlLease = null;
         this.setControlAction(undefined);
+        this.retryUserAgentReloadAfterGuard();
         return "右侧网页视图初始化失败，浏览器控制没有启动。";
       }
     }
@@ -185,6 +223,7 @@ export class BrowserPanelController {
     }
     this.controlLease = null;
     this.setControlAction(undefined);
+    this.retryUserAgentReloadAfterGuard();
     return "浏览器控制已退出；网页标签和登录状态保留。";
   }
 
@@ -407,7 +446,7 @@ export class BrowserPanelController {
     const contents = tab?.view?.webContents;
     if (!tab || !contents || contents.isDestroyed() || contents.isLoading() || !tab.state.url
       || !this.bounds || this.bounds.width <= 0 || this.bounds.height <= 0) return false;
-    this.cancelElementPicker();
+    this.clearElementPicker();
     try {
       const snapshot = await startPlaywrightElementPicker(contents);
       if (this.getActiveTab()?.id !== tab.id || tab.state.loading || contents.isDestroyed()) {
@@ -431,7 +470,15 @@ export class BrowserPanelController {
     }
   }
 
+  /** 用户取消元素选择（渲染进程经 IPC 调用）：释放护栏后补做被延后的身份刷新。 */
   cancelElementPicker(): boolean {
+    if (!this.clearElementPicker()) return false;
+    this.retryUserAgentReloadAfterGuard();
+    return true;
+  }
+
+  /** 内部清理：切换 / 关闭标签、页面开始加载、启动新的选择前调用，这些场景另有同步或不需要刷新。 */
+  private clearElementPicker(): boolean {
     const tabId = this.elementPickerTabId;
     if (!tabId) return false;
     this.elementPickerTabId = "";
@@ -491,6 +538,7 @@ export class BrowserPanelController {
     if (this.elementPickerTimer) clearTimeout(this.elementPickerTimer);
     this.elementPickerTimer = null;
     this.publish();
+    this.retryUserAgentReloadAfterGuard();
   }
 
   async getActivePageSnapshot(owner?: { conversationId?: string; runId?: string }): Promise<
@@ -863,7 +911,7 @@ export class BrowserPanelController {
       this.forgetTabObservations(this.activeTabId);
       this.forgetTabObservations(tabId);
     }
-    if (this.elementPickerTabId && this.elementPickerTabId !== tabId) this.cancelElementPicker();
+    if (this.elementPickerTabId && this.elementPickerTabId !== tabId) this.clearElementPicker();
     this.activeTabId = tab.id;
     tab.lastActivationOrder = ++this.activationSequence;
     if (this.bounds && tab.state.url && !tab.view) {
@@ -883,7 +931,7 @@ export class BrowserPanelController {
     const index = this.tabs.findIndex((candidate) => candidate.id === tabId);
     if (index < 0) return false;
     if (this.controlLease?.tabId === tabId) this.controlLease = null;
-    if (this.elementPickerTabId === tabId) this.cancelElementPicker();
+    if (this.elementPickerTabId === tabId) this.clearElementPicker();
     const tab = this.tabs[index];
     this.forgetTabObservations(tabId);
     if (this.tabs.length === 1) {
@@ -936,8 +984,12 @@ export class BrowserPanelController {
   }
 
   stop(): void {
-    const contents = this.getActiveTab()?.view?.webContents;
-    if (contents && !contents.isDestroyed()) contents.stop();
+    const tab = this.getActiveTab();
+    const contents = tab?.view?.webContents;
+    if (!tab || !contents || contents.isDestroyed()) return;
+    // 文档已提交、只剩子资源时停止不会触发主框架 did-fail-load，这里直接记下，停止后不自动刷新
+    tab.interruptedNavigationGeneration = tab.navigationGeneration ?? 0;
+    contents.stop();
   }
 
   async clearCookies(): Promise<void> {
@@ -956,6 +1008,7 @@ export class BrowserPanelController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.userAgentSwitch.dispose();
     this.controlLease = null;
     if (this.controlActionTimer) clearTimeout(this.controlActionTimer);
     this.controlActionTimer = null;
@@ -993,6 +1046,27 @@ export class BrowserPanelController {
     return tab;
   }
 
+  private hasVisibleBounds(): boolean {
+    return !!this.bounds && this.bounds.width > 0 && this.bounds.height > 0;
+  }
+
+  /** 等待渲染层上报第一个可见尺寸；超时也返回，由调用方按无尺寸处理。 */
+  private waitForVisibleBounds(timeoutMs: number): Promise<void> {
+    if (this.hasVisibleBounds()) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        this.visibleBoundsWaiters.delete(finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      this.visibleBoundsWaiters.add(finish);
+    });
+  }
+
   private async navigateTab(tab: BrowserTab, input: string): Promise<BrowserPanelResult> {
     if (this.disposed || !this.tabs.includes(tab)) return { ok: false, error: "unavailable" };
     const url = parseHttpUrl(input);
@@ -1006,6 +1080,12 @@ export class BrowserPanelController {
       tab.state = { id: tab.id, ...EMPTY_TAB_STATE, url: url.href };
     }
     this.forgetTabObservations(tab.id);
+    // 面板刚被打开（例如从聊天里第一次在 Cyrene 中打开链接）时，渲染层稍后才上报宽度；
+    // 先等第一个可见尺寸，新视图才能按实际宽度确定身份，避免先以桌面版请求、再切换重载
+    if (!tab.view && !this.hasVisibleBounds()) {
+      await this.waitForVisibleBounds(VISIBLE_BOUNDS_FOR_NAVIGATION_MS);
+      if (this.disposed || !this.tabs.includes(tab)) return { ok: false, error: "unavailable" };
+    }
     let view: WebContentsView | null;
     try {
       view = this.ensureView(tab, false);
@@ -1036,6 +1116,20 @@ export class BrowserPanelController {
       browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
       browserSession.setPermissionCheckHandler(() => false);
       browserSession.on("will-download", (_event, item) => item.cancel());
+      // 主框架请求统一带上「当前应使用」的身份：链接、表单、前进后退、刷新、页面脚本发起的跳转
+      // 都在这里生效，不只是地址栏导航；子资源沿用该文档加载时的身份，避免同一页面里混用
+      browserSession.webRequest.onBeforeSendHeaders((details, callback) => {
+        callback({ requestHeaders: this.withTabUserAgent(details) });
+      });
+      // 主框架响应来自缓存时（前进后退、缓存命中），文档内容是当初加载时的身份，不能按本次请求头算
+      // 但带 Vary: User-Agent 的缓存只会在 UA 匹配时命中，内容就是本次请求的身份，仍按请求身份记录
+      browserSession.webRequest.onResponseStarted((details) => {
+        if (details.resourceType !== "mainFrame" || !details.fromCache) return;
+        const tab = this.findTabByContentsId(details.webContents?.id ?? details.webContentsId);
+        if (tab && !responseVariesByUserAgent(details.responseHeaders)) tab.requestedUserAgentKind = undefined;
+      });
+      this.desktopUserAgent = browserSession.getUserAgent();
+      this.sessionUserAgent = this.desktopUserAgent;
       this.browserSession = browserSession;
     }
     return this.browserSession;
@@ -1145,6 +1239,19 @@ export class BrowserPanelController {
       },
     });
     tab.view = view;
+    // 新视图按当前身份创建，随后的 loadURL 直接拿到对应版式；考试页是应用内页面，不切换身份。
+    // 已知面板宽度时先据此确定身份：恢复会话 / 首次打开时视图早于 applyBounds 创建，
+    // 否则会先以桌面版加载、300ms 后再切换并重载
+    if (!isExam && this.bounds && this.bounds.width > 0) {
+      this.userAgentSwitch.prime(this.getViewportMode(), Math.round(this.bounds.width));
+    }
+    tab.documentUserAgentKind = isExam ? "desktop" : this.userAgentSwitch.kind;
+    tab.requestedUserAgentKind = undefined;
+    tab.historyUserAgentKinds = new Map();
+    tab.historyPostEntries = new Map();
+    tab.requestedMethod = undefined;
+    tab.documentIsPost = false;
+    this.applySessionUserAgent();
     if (isExam) {
       const page = parseLearnExamPageRequest(tab.state.url);
       if (page?.kind === "document" && tab.examConversationId) {
@@ -1162,6 +1269,74 @@ export class BrowserPanelController {
     win.contentView.addChildView(view);
     view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     this.attachEvents(tab, view);
+    if (!isExam) {
+      view.webContents.on("dom-ready", () => watchUserInput(view.webContents));
+      view.webContents.on("before-input-event", (_event, input) => {
+        if (!isEditingKeystroke(input)) return;
+        // 先同步累加输入代次（此时页面还没收到这个按键），让进行中的刷新探测放弃
+        tab.inputGeneration = (tab.inputGeneration ?? 0) + 1;
+        if (tab.userTyped) return;
+        // 只有焦点在可编辑元素上的按键才算输入：空格翻页、j/k 等网页快捷键不算
+        void focusedElementIsEditable(view.webContents).then((editable) => {
+          if (editable && tab.view === view) tab.userTyped = true;
+        });
+      });
+      // 鼠标也能改动表单（勾选框、下拉框、右键粘贴），按下时同样累加输入代次
+      view.webContents.on("before-mouse-event", (_event, mouse) => {
+        if (mouse.type === "mouseDown") tab.inputGeneration = (tab.inputGeneration ?? 0) + 1;
+      });
+      // 任何入口发起的主框架跳转（链接、表单、前进后退、刷新、页面脚本）都按当前身份请求，
+      // 请求头见 withTabUserAgent，响应来源见 onResponseStarted
+      view.webContents.on("did-start-navigation", (details) => {
+        if (!details.isMainFrame || details.isSameDocument) return;
+        tab.navigationGeneration = (tab.navigationGeneration ?? 0) + 1;
+        tab.requestedUserAgentKind = undefined;
+        tab.requestedMethod = undefined;
+      });
+      // 提交时记下新文档的身份：有真实请求就是请求用的身份；前进后退从缓存恢复旧文档时
+      // 没有请求，按该历史条目当初加载时的身份。仍与当前身份不符时再走带护栏的刷新
+      view.webContents.on("did-navigate", () => {
+        if (tab.view !== view || view.webContents.isDestroyed()) return;
+        tab.userTyped = false;
+        const index = view.webContents.navigationHistory.getActiveIndex();
+        const kind = tab.requestedUserAgentKind ?? tab.historyUserAgentKinds?.get(index) ?? tab.documentUserAgentKind;
+        // 真实请求加载的新文档身份已确定，允许之后再次自动刷新
+        if (tab.requestedUserAgentKind) tab.lastUserAgentReload = undefined;
+        tab.requestedUserAgentKind = undefined;
+        if (kind) {
+          tab.documentUserAgentKind = kind;
+          tab.historyUserAgentKinds?.set(index, kind);
+        }
+        // 有请求时按最终请求方法判断（POST 后 303 跳转到 GET 的结果页可以刷新）；缓存恢复没有请求，按历史条目记录
+        const post = tab.requestedMethod
+          ? tab.requestedMethod.toUpperCase() === "POST"
+          : tab.historyPostEntries?.get(index) ?? false;
+        tab.requestedMethod = undefined;
+        tab.documentIsPost = post;
+        tab.historyPostEntries?.set(index, post);
+      });
+      // 同文档跳转（pushState、hash）产生的新历史条目沿用当前文档的身份：
+      // 之后离开再后退恢复到这个条目时，按它真实的文档身份判断，而不是误用刚离开的别页身份
+      view.webContents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
+        if (!isMainFrame || tab.view !== view || view.webContents.isDestroyed() || !tab.documentUserAgentKind) return;
+        const index = view.webContents.navigationHistory.getActiveIndex();
+        tab.historyUserAgentKinds?.set(index, tab.documentUserAgentKind);
+        tab.historyPostEntries?.set(index, tab.documentIsPost === true);
+      });
+      // 主框架加载失败：记下这次导航，护栏不再用刷新把它重新拉起，也不让旧条目的刷新盖掉失败页；
+      // 用户下一次自己导航时代次变化，限制自然解除。ERR_ABORTED（-3）不算：用户点停止由 stop() 单独记录，
+      // 其余 -3 多是被新导航取代的旧请求，可能在新导航开始之后才到达，会把新导航误标为已中断
+      view.webContents.on("did-fail-load", (_event, errorCode, _description, _validatedUrl, isMainFrame) => {
+        if (!isMainFrame || errorCode === -3 || tab.view !== view) return;
+        tab.interruptedNavigationGeneration = tab.navigationGeneration ?? 0;
+      });
+      // 加载结束时再判断：前进后退从缓存恢复了旧身份的文档、或加载期间切换了身份，
+      // 都在页面加载完、不再处于加载中时带护栏补刷新一次
+      view.webContents.on("did-stop-loading", () => {
+        if (tab.view !== view || view.webContents.isDestroyed()) return;
+        if (this.activeTabId === tab.id && this.documentNeedsUserAgentReload(tab)) void this.reloadForUserAgentWhenIdle(tab, view);
+      });
+    }
     if (!this.observedWindows.has(win)) {
       this.observedWindows.add(win);
       win.once("closed", () => {
@@ -1199,7 +1374,7 @@ export class BrowserPanelController {
     };
     contents.on("did-start-loading", () => {
       if (!isLive()) return;
-      if (this.elementPickerTabId === tab.id) this.cancelElementPicker();
+      if (this.elementPickerTabId === tab.id) this.clearElementPicker();
       this.forgetTabObservations(tab.id);
       this.onPlaywrightSnapshotNavigation(contents);
       tab.state = { ...tab.state, loading: true, error: undefined, crashed: false, favicon: undefined };
@@ -1300,6 +1475,121 @@ export class BrowserPanelController {
       const viewBounds = tab.id === this.activeTabId ? { x, y, width, height } : { x: 0, y: 0, width: 0, height: 0 };
       tab.view?.setBounds(viewBounds);
     }
+    // 用渲染层上报的面板宽度判断，而不是按窗口尺寸裁剪后的宽度：
+    // 窗口最小化时内容尺寸为 0，裁剪后宽度也是 0，会被误判为窄面板而切到移动版并重载
+    this.updateUserAgentKind(Math.round(bounds.width));
+  }
+
+  /** 视口模式：注册时注入设置读取函数，每次判断都读最新值。 */
+  setViewportModeGetter(getter: () => BrowserViewportMode): void {
+    this.getViewportMode = getter;
+  }
+
+  /**
+   * 设置里切换模式后调用；applyBounds 只在尺寸变化时触发，这里立即重新判断。
+   * 打开设置页时面板被隐藏、bounds 为空或 0，applyBounds 会提前返回，所以按最后一次可见宽度判断。
+   */
+  refreshViewportMode(): void {
+    this.userAgentSwitch.changeMode(this.getViewportMode());
+    this.applySessionUserAgent();
+  }
+
+  private updateUserAgentKind(width: number): void {
+    this.userAgentSwitch.update(this.getViewportMode(), width);
+    this.applySessionUserAgent();
+  }
+
+  /**
+   * 身份设在浏览器会话上，而不是逐个 webContents.setUserAgent：
+   * 后者在页面加载中调用时 Chromium 会重新加载当前条目，打断正在进行的导航。
+   * 会话 UA 只影响之后的请求与新文档，切换本身不会刷新任何页面；刷新只走带护栏的 reloadForUserAgentWhenIdle。
+   */
+  private applySessionUserAgent(): void {
+    if (!this.browserSession || !this.desktopUserAgent) return;
+    const userAgent = this.userAgentSwitch.kind === "mobile" ? mobileUserAgent(process.versions.chrome) : this.desktopUserAgent;
+    if (userAgent === this.sessionUserAgent) return;
+    this.browserSession.setUserAgent(userAgent);
+    this.sessionUserAgent = userAgent;
+  }
+
+  private findTabByContentsId(contentsId: number | undefined): BrowserTab | undefined {
+    if (contentsId === undefined) return undefined;
+    return this.tabs.find((candidate) => candidate.view && !candidate.view.webContents.isDestroyed() && candidate.view.webContents.id === contentsId);
+  }
+
+  private withTabUserAgent(details: Electron.OnBeforeSendHeadersListenerDetails): Record<string, string> {
+    const headers = details.requestHeaders;
+    const tab = this.findTabByContentsId(details.webContents?.id ?? details.webContentsId);
+    if (!tab || tab.kind === "exam") return headers;
+    let kind: BrowserUserAgentKind;
+    if (details.resourceType === "mainFrame") {
+      kind = this.userAgentSwitch.kind;
+      tab.requestedUserAgentKind = kind;
+      tab.requestedMethod = details.method;
+    } else {
+      kind = tab.documentUserAgentKind ?? "desktop";
+    }
+    const userAgent = kind === "mobile" ? mobileUserAgent(process.versions.chrome) : this.desktopUserAgent;
+    if (!userAgent) return headers;
+    const key = Object.keys(headers).find((name) => name.toLowerCase() === "user-agent") ?? "User-Agent";
+    return { ...headers, [key]: userAgent };
+  }
+
+  /** 当前文档按旧身份加载，需要刷新才能拿到对应版式。 */
+  private documentNeedsUserAgentReload(tab: BrowserTab): boolean {
+    return tab.kind !== "exam" && !!tab.state.url && tab.documentUserAgentKind !== this.userAgentSwitch.kind;
+  }
+
+  /**
+   * Agent 控制或元素选择结束时调用：这两种护栏只是暂缓刷新，宽度之后可能不再变化，
+   * 不在这里补一次，当前文档会一直停在旧身份，直到下一次缩放或切换标签。
+   * 缩放防抖还在等待时不抢先刷新：分隔条可能仍在拖动，交给计时器结算后的同步统一处理。
+   */
+  private retryUserAgentReloadAfterGuard(): void {
+    if (this.userAgentSwitch.pending) return;
+    this.syncUserAgents();
+  }
+
+  private syncUserAgents(): void {
+    if (this.disposed) return;
+    this.applySessionUserAgent();
+    // 只刷新当前可见的标签；后台标签在切过去时再刷新
+    const active = this.getActiveTab();
+    if (active?.view && !active.view.webContents.isDestroyed() && this.documentNeedsUserAgentReload(active)) {
+      void this.reloadForUserAgentWhenIdle(active, active.view);
+    }
+  }
+
+  /**
+   * 页面正被使用（Agent 控制中、元素选择中、仍在加载、用户输入过内容）时不刷新：
+   * 下一次宽度变化或切换标签触发的同步会再判断；用户自己导航时新文档直接按新身份加载。
+   */
+  private async reloadForUserAgentWhenIdle(tab: BrowserTab, view: WebContentsView): Promise<void> {
+    const contents = view.webContents;
+    let attempt = "";
+    await reloadForUserAgentIfIdle({
+      snapshot: () => {
+        // 状态可能已变化（标签关闭、切走、视图重建）
+        if (this.disposed || contents.isDestroyed() || tab.view !== view || this.activeTabId !== tab.id) return null;
+        attempt = `${contents.navigationHistory.getActiveIndex()}:${this.userAgentSwitch.kind}`;
+        return {
+          controlled: this.controlLease?.tabId === tab.id,
+          picking: this.elementPickerTabId === tab.id,
+          loading: contents.isLoading(),
+          interrupted: tab.interruptedNavigationGeneration === (tab.navigationGeneration ?? 0),
+          postDocument: tab.documentIsPost === true,
+          navigationGeneration: tab.navigationGeneration ?? 0,
+          inputGeneration: tab.inputGeneration ?? 0,
+          // 同一条目同一身份只自动刷新一次，防止缓存命中导致反复刷新
+          stillNeeded: this.documentNeedsUserAgentReload(tab) && tab.lastUserAgentReload !== attempt,
+        };
+      },
+      hasUserInput: async () => tab.userTyped === true || await pageHasUserInput(contents),
+      reload: () => {
+        tab.lastUserAgentReload = attempt;
+        contents.reload();
+      },
+    });
   }
 
   private releaseOldestViewsUntilRoom(exceptTabId: string): void {

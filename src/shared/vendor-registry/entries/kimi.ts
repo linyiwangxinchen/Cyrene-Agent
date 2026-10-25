@@ -24,6 +24,22 @@ export const KIMI_REGISTRY = defineVendor({
   },
   models: [
     {
+      model: "kimi-k3.1-pro",
+      recommendedFor: ["chat"],
+      note: "K3 的后训练版本（2026-10 发布）；1M 上下文，原生视觉理解。",
+      unknownCapabilities: [
+        { feature: "sampling", transport: "openai", note: "官方说明 temperature/top_p 为固定值、建议不显式传入；未加采样白名单即不注入采样参数。" },
+      ],
+    },
+    {
+      model: "kimi-k3.1-pro-highspeed",
+      recommendedFor: ["chat"],
+      note: "K3.1 Pro 的高速版，约 2～3 倍输出速度。",
+      unknownCapabilities: [
+        { feature: "sampling", transport: "openai", note: "官方说明 temperature/top_p 为固定值、建议不显式传入；未加采样白名单即不注入采样参数。" },
+      ],
+    },
+    {
       model: "kimi-k2.6",
       recommendedFor: ["chat"],
       unknownCapabilities: [
@@ -80,9 +96,48 @@ export const KIMI_REGISTRY = defineVendor({
       metadata: legacyMetadata("迁自 src/main/orchestrator/structured-output/profiles.ts"),
       repairOverrides: [{ modelPattern: /^(?:kimi-for-coding|kimi-(?:k3|k2\.7-code(?:-highspeed)?))(?:$|-)/i, preset: "kimi-slow" }],
     },
+    // K3.1 Pro 快速上手文档：response_format 支持 json_schema + strict: true（只约束 message.content）。
+    // 只覆盖已核实的两个完整型号名；与 K3 同属强制思考的慢模型，修复预算沿用 kimi-slow。
+    {
+      id: "kimi-k3-1-pro-structured-output",
+      transport: "openai",
+      modelPattern: /^kimi-k3\.1-pro(?:-highspeed)?$/i,
+      tier: "A",
+      mode: "provider_json_schema",
+      verification: "official",
+      metadata: {
+        status: "supported",
+        evidence: {
+          kind: "official",
+          url: "https://platform.kimi.com/docs/guide/kimi-k3-1-pro-quickstart.md",
+          checkedAt: "2026-10-24",
+          transports: ["openai"],
+        },
+      },
+      repairOverrides: [{ modelPattern: /^kimi-k3\.1-pro(?:-highspeed)?$/i, preset: "kimi-slow" }],
+    },
   ],
   reasoningRules: [
     // ── kimi（月之暗面）──
+    // K3.1 Pro / Pro Highspeed（快速上手文档）：始终开启思考、无法关闭；reasoning_effort
+    // 支持 low/high/max，默认 max。与 K3 同样把产品默认压到 high。只对完整型号名标官方依据，
+    // 必须排在 /^kimi-k3/ 之前。
+    { modelPattern: /^kimi-k3\.1-pro(?:-highspeed)?$/i, modelInferencePattern: /^kimi-k3\.1-pro(?:-highspeed)?$/i, metadata: {
+      status: "supported",
+      evidence: {
+        kind: "official",
+        url: "https://platform.kimi.com/docs/guide/kimi-k3-1-pro-quickstart.md",
+        checkedAt: "2026-10-24",
+        transports: ["openai"],
+      },
+    }, capability: {
+      control: "effort",
+      supportedEfforts: ["low", "high", "max"],
+      defaultEffort: "high",
+      requestStyle: "openai-effort",
+      supportsDisable: false,
+      autoEffort: "high",
+    } },
     // K3：旗舰思考模型（2026-07 发布）。思考始终开启（Preserved Thinking 常开），
     // 不用 K2.x 的 thinking 参数，用顶层 reasoning_effort（low/high/max，默认 max）。
     // 强制思考 + 服务端默认 max → 与 GLM-5.3 同体质，默认选择 high 防思考爆炸。

@@ -1,4 +1,5 @@
 import type { UiThemeChoice } from "../../shared/ui-theme";
+import type { BrowserViewportMode } from "../../shared/browser-viewport";
 import type { UiIcon } from "../../shared/ui-icon";
 import type { UiLanguage } from "../../shared/ui-language";
 import type { MessageTypography } from "../../shared/message-typography";
@@ -138,6 +139,8 @@ export interface GeneralSettings {
   filesystemMcpEnabled: boolean;
   // 联网搜索：选哪个搜索源 + 对应 key
   searchEngine: "off" | "bocha" | "tavily" | "minimax" | "anySearch";
+  /** 内置浏览器视口模式：auto 面板窄时用移动版身份访问；custom 始终桌面版（原有行为）。默认 auto。 */
+  browserViewportMode: BrowserViewportMode;
   searchBochaKey: string;
   searchTavilyKey: string;
   searchMinimaxKey: string;

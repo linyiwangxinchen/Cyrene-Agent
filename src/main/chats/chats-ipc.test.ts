@@ -62,6 +62,19 @@ describe("chats IPC mode filtering", () => {
     expect(send).toHaveBeenLastCalledWith(IPC.CHATS_COMPACTION_PHASE, { sessionId: "c1", phase: "running", contextUsage: usage });
   });
 
+  it("CHATS_OPEN_FOLDER opens userData and reports shell.openPath failures instead of succeeding silently", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    (await registerChatsIpc());
+    const openFolder = mocks.handlers.get(IPC.CHATS_OPEN_FOLDER);
+    if (!openFolder) throw new Error("CHATS_OPEN_FOLDER was not registered");
+
+    await expect(openFolder({})).resolves.toEqual({ ok: true });
+    expect(mocks.openPath).toHaveBeenLastCalledWith(mocks.userDataDir);
+
+    mocks.openPath.mockResolvedValueOnce("Failed to open path");
+    await expect(openFolder({})).resolves.toEqual({ ok: false, error: "Failed to open path" });
+  });
+
   it("returns only Code sessions for CHATS_LIST({ mode: \"code\" })", async () => {
     const { registerChatsIpc } = await import("./chats-ipc");
     (await registerChatsIpc());

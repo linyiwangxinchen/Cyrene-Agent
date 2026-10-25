@@ -5,6 +5,8 @@
 import { describe, expect, test } from "vitest";
 import { resolveReasoningCapability } from "../reasoning";
 import { UNKNOWN_REASONING_CAPABILITY } from "./fallback";
+import { renderAdaptedModelsMarkdown } from "./catalog-doc";
+import { KIMI_REGISTRY } from "./entries/kimi";
 
 describe("resolveReasoningCapability — 行为基准", () => {
   test.each(["other-thinking", "not-qwen3-thinking", "qwenish-thinking"])("外来型号 %s 不按后缀推断为通义千问", (model) => {
@@ -92,6 +94,31 @@ describe("resolveReasoningCapability — 行为基准", () => {
   test("邻近反例：gemini-3.8-flash 仍走 gemini-3 规则，未核实的 gemini-4-flash 落兜底", () => {
     expect(resolveReasoningCapability("gemini", "gemini-3.8-flash").supportedEfforts).toEqual(["low", "medium", "high"]);
     expect(resolveReasoningCapability("gemini", "gemini-4-flash")).toBe(UNKNOWN_REASONING_CAPABILITY);
+  });
+
+  // 预期值按官方文档独立填写（K3.1 Pro 快速上手文档，核验 2026-10-24），不从注册表复制。
+  // 官方默认 max；产品默认与 K3 一致压到 high，防止思考过长。
+  test.each(["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])("kimi + %s → reasoning_effort 三档 low/high/max，不可关闭，默认 high", (model) => {
+    const cap = resolveReasoningCapability("kimi", model);
+    expect(cap.control).toBe("effort");
+    expect(cap.requestStyle).toBe("openai-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "high", "max"]);
+    expect(cap.defaultEffort).toBe("high");
+    expect(cap.supportsDisable).toBe(false);
+  });
+
+  test("K3.1 Pro 规则可跨厂商推断：托管端点使用同一型号名", () => {
+    expect(resolveReasoningCapability("unknown-provider", "kimi-k3.1-pro").supportedEfforts).toEqual(["low", "high", "max"]);
+  });
+
+  test("邻近反例：官方依据只记在 K3.1 Pro 的完整型号名上，kimi-k3 仍是历史未核验", () => {
+    const rows = renderAdaptedModelsMarkdown([KIMI_REGISTRY]).split("\n");
+    const row = (model: string) => rows.find((line) => line.startsWith(`| ${model} |`)) ?? "";
+    for (const model of ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"]) {
+      expect(row(model)).toContain("platform.kimi.com/docs/guide/kimi-k3-1-pro-quickstart.md");
+      expect(row(model)).not.toContain("历史未核验");
+    }
+    expect(row("kimi-k3")).toContain("历史未核验");
   });
 
   test("邻近反例：claude-haiku-4-5 不命中 Haiku 5.5 规则，仍落兜底", () => {

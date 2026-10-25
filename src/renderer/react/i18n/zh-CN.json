@@ -969,6 +969,12 @@
       "description": "管理 Cyrene 内嵌浏览器的会话数据。",
       "sectionTitle": "浏览器数据",
       "sectionDescription": "这些数据仅属于 Cyrene 内嵌浏览器，不会影响系统 Edge。",
+      "viewportMode": "网页显示模式",
+      "viewportModeAuto": "自动",
+      "viewportModeCustom": "自定义",
+      "viewportModeAutoDescription": "面板较窄时以手机版访问网页（百度、必应等会显示移动版），变宽后恢复桌面版。",
+      "viewportModeCustomDescription": "始终以桌面版访问网页。",
+      "retry": "重试",
       "clearCookies": "清除 Cookie",
       "clearCookiesDescription": "清除内嵌浏览器保存的登录 Cookie；清理后当前网页会重新加载。",
       "confirmTitle": "清除浏览器 Cookie？",
@@ -1391,6 +1397,10 @@
       "about": "关于昔涟",
       "aboutDescription": "轻量情感陪伴桌面 Agent",
       "softwareUpdate": "软件更新",
+      "dataDir": "数据目录",
+      "dataDirDescription": "聊天记录、模型档案、插件等数据都保存在这里",
+      "openDataDir": "打开文件夹",
+      "openDataDirFailed": "无法打开数据目录：{{error}}",
       "save": "保存设置"
     },
     "usage": {

@@ -36,7 +36,7 @@ const CASES: readonly [string, readonly string[], ReasoningCapability][] = [
   ["glm", ["glm-5-turbo", "glm-5v-turbo", "glm-5.1", "glm-5", "glm-4.5", "glm-4.6", "glm-4.7"], toggle()],
   ["qwen", ["qwen3-thinking", "qwen-plus-thinking"], fixed],
   ["qwen", ["qwen3.8-max", "qwen-max", "qwen-plus", "qwen-turbo"], toggle({ requestStyle: "qwen-enable-thinking" })],
-  ["kimi", ["kimi-k3"], effort(["low", "high", "max"], { supportsDisable: false, defaultEffort: "high", autoEffort: "high" })],
+  ["kimi", ["kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"], effort(["low", "high", "max"], { supportsDisable: false, defaultEffort: "high", autoEffort: "high" })],
   ["kimi", ["kimi-k2.7-code", "kimi-k2.7-code-highspeed", "kimi-k2-thinking"], fixed],
   ["kimi", ["kimi-k2.6"], toggle({ keepOnTools: true })],
   ["kimi", ["kimi-k2.5"], toggle({ keepOnTools: false })],

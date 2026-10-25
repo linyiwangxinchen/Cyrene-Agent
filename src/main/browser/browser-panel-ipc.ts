@@ -7,6 +7,7 @@ import { registerBrowserPageTools } from "./browser-page-tools";
 import { setBrowserPanelController } from "./browser-panel-runtime";
 import { normalizeAddressInput } from "./address-input";
 import type { LearnExamRecord } from "../../shared/learn-exam";
+import type { BrowserViewportMode } from "../../shared/browser-viewport";
 
 const EXAM_ID_PATTERN = /^exam-[0-9a-f-]{36}$/i;
 
@@ -26,6 +27,8 @@ export function registerBrowserPanelIpc(input: {
   ipc: IpcScope;
   getWindow: () => BrowserWindow | null;
   getExamRecord?: (examId: string) => Promise<LearnExamRecord | null>;
+  /** 视口模式（auto / custom）；每次按面板宽度判断时读取，设置修改后立即生效。 */
+  getViewportMode?: () => BrowserViewportMode;
 }): BrowserPanelController {
   const controller = new BrowserPanelController(input.getWindow, (state) => {
     const win = input.getWindow();
@@ -35,6 +38,7 @@ export function registerBrowserPanelIpc(input: {
     if (win && !win.isDestroyed()) win.webContents.send(IPC.BROWSER_PANEL_ELEMENT_SELECTED, element);
   });
   setBrowserPanelController(controller);
+  if (input.getViewportMode) controller.setViewportModeGetter(input.getViewportMode);
   controller.setOpenPanelForControl(() => {
     const win = input.getWindow();
     if (win && !win.isDestroyed()) win.webContents.send(IPC.BROWSER_PANEL_OPEN_FOR_CONTROL);

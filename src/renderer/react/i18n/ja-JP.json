@@ -969,6 +969,12 @@
       "description": "Cyrene 内蔵ブラウザーのセッションデータを管理します。",
       "sectionTitle": "ブラウザーデータ",
       "sectionDescription": "このデータは Cyrene 内蔵ブラウザー専用で、システム Edge には影響しません。",
+      "viewportMode": "ページ表示モード",
+      "viewportModeAuto": "自動",
+      "viewportModeCustom": "カスタム",
+      "viewportModeAutoDescription": "パネルが狭いときはスマートフォンとしてサイトを開き（Baidu や Bing などはモバイル版を表示）、広くするとデスクトップ版に戻ります。",
+      "viewportModeCustomDescription": "常にデスクトップ版でサイトを開きます。",
+      "retry": "再試行",
       "clearCookies": "Cookie を削除",
       "clearCookiesDescription": "内蔵ブラウザーに保存されたログイン Cookie を削除します。削除後、現在のページを再読み込みします。",
       "confirmTitle": "ブラウザーの Cookie を削除しますか？",
@@ -1391,6 +1397,10 @@
       "about": "キュレネについて",
       "aboutDescription": "軽量な感情コンパニオン型デスクトップ Agent",
       "softwareUpdate": "ソフトウェアアップデート",
+      "dataDir": "データフォルダー",
+      "dataDirDescription": "チャット履歴、モデルプロファイル、プラグインなどのデータはここに保存されます",
+      "openDataDir": "フォルダーを開く",
+      "openDataDirFailed": "データフォルダーを開けませんでした：{{error}}",
       "save": "設定を保存"
     },
     "usage": {

@@ -1285,7 +1285,6 @@ export function migrateLegacyMessages(messages: ChatMessage[]): ChatSession | nu
   });
   return setWorkspaceBinding(session.id, legacyMigrationBinding());
 }
-export function openStorageFolder(): void { }
 // ── 对话工作区绑定 ────────────────────────────────────────
 import type { ConversationWorkspaceBinding } from "../../shared/chat-types";
 /**

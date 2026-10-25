@@ -20,6 +20,7 @@ import type { ChatMessage, ChatSession, ChatsSetSessionModelResult, Conversation
 import * as chatsStore from "./chats-store";
 import * as sidebarOrganizationStore from "./sidebar-organization-store";
 import { resolveSessionWorkspaceFile } from "./workspace-files-ipc";
+import { openUserDataFolder } from "../storage/user-data-folder";
 import * as fs from "fs";
 import * as path from "path";
 import { ensureVaultStructure, isEmptyDirectory } from "../learn/obsidian/vault-init";
@@ -616,10 +617,8 @@ export async function registerChatsIpc(
     return result;
   });
 
-  ipc.handle(IPC.CHATS_OPEN_FOLDER, async () => {
-    await chatsStore.openStorageFolder();
-    return true;
-  });
+  // 与设置页「打开数据目录」同一实现：失败时返回错误而不是静默成功
+  ipc.handle(IPC.CHATS_OPEN_FOLDER, () => openUserDataFolder());
 
   ipc.handle(IPC.CHATS_OPEN_WORKSPACE, async (_event, workspaceRoot: unknown) => {
     if (typeof workspaceRoot !== "string" || !workspaceRoot.trim()) {

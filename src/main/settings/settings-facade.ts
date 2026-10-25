@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { DEFAULT_BROWSER_VIEWPORT_MODE, normalizeBrowserViewportMode } from "../../shared/browser-viewport";
 import { DEFAULT_MESSAGE_TYPOGRAPHY, normalizeMessageTypography } from "../../shared/message-typography";
 import {
   DEFAULT_CUSTOM_STYLE,
@@ -101,6 +102,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   playwrightMcpEnabled: false,
   filesystemMcpEnabled: false,
   searchEngine: "off",
+  browserViewportMode: DEFAULT_BROWSER_VIEWPORT_MODE,
   searchBochaKey: "",
   searchTavilyKey: "",
   searchMinimaxKey: "",
@@ -291,6 +293,7 @@ export function normalizeGeneralSettings(
     searchEngine: ["off", "bocha", "tavily", "minimax", "anySearch"].includes(String(input?.searchEngine))
       ? (input!.searchEngine as "off" | "bocha" | "tavily" | "minimax" | "anySearch")
       : "off",
+    browserViewportMode: normalizeBrowserViewportMode(input?.browserViewportMode),
     searchBochaKey: typeof input?.searchBochaKey === "string" ? input.searchBochaKey : "",
     searchTavilyKey: typeof input?.searchTavilyKey === "string" ? input.searchTavilyKey : "",
     searchMinimaxKey: typeof input?.searchMinimaxKey === "string" ? input.searchMinimaxKey : "",
