@@ -17,6 +17,6 @@
 - 全量 Vitest：615 个测试文件，6447 通过，1 跳过。
 - `scripts/verify/upstream-sync.test.mjs`：6/6 通过。
 - shared core：34 项通过；voice/MCP：21 项通过；transcript compaction：9 项通过；memory：4 项通过；shell：5 项通过。
-- `pnpm run package:win:dir`：通过，Windows x64 `release/win-unpacked` 目录包完成构建。构建使用现有 `1.3.4-3` 版本，不覆盖既有 GitHub Release。
+- `pnpm run package:win:dir`：通过，Windows x64 `release/win-unpacked` 目录包完成构建；随后 `pnpm exec electron-builder --win nsis --publish never` 生成 `release/Cyrene-Setup-1.3.4-3.exe`，并由 `scripts/verify/installer-artifacts.mjs --expect-version 1.3.4-3` 校验 `latest.yml`、blockmap、MinGit、mpv 和截图助手。构建使用现有 `1.3.4-3` 版本，不覆盖既有 GitHub Release。
 
 集成提交为 `4a3d6ff0`。通过集成分支 CI 后，将其快进到 `master` 并推送；后续同步仍应先使用日期集成分支和 `scripts/verify/upstream-sync.mjs`，不要在正式服务目录直接合并。
