@@ -9,7 +9,7 @@
  * 底座复用 context-manager.ts 的 estimateTokens / estimateMessageTokens。
  */
 
-import type { ChatMessage } from "../vendors/types";
+import type { ChatMessage, ModelMessageOrigin } from "../vendors/types";
 import { estimateTokens, estimateMessageTokens } from "../context-manager";
 import { DEFAULT_HARNESS_CONFIG } from "./types";
 
@@ -56,13 +56,14 @@ export function computeTokenBudget(
   reservedOutput: number,
   safetyMargin: number,
   threshold = DEFAULT_HARNESS_CONFIG.compactionThreshold,
+  messageOrigin?: ModelMessageOrigin,
 ): TokenBudget {
   const systemTokens = estimateTokens(systemPrompt);
   const schemaTokens = toolSchemas.reduce(
     (sum, s) => sum + estimateTokens(s.name + s.description + JSON.stringify(s.parameters)),
     0,
   );
-  const messageTokens = estimateMessageTokens(messages);
+  const messageTokens = estimateMessageTokens(messages, messageOrigin);
 
   const usableInputBudget = contextWindow - reservedOutput - safetyMargin;
   const estimatedInput = systemTokens + schemaTokens + messageTokens;
@@ -146,6 +147,7 @@ export function isToolPairSafeBoundary(messages: ChatMessage[], cutIndex: number
 export function findSafeCutPointForRetainedTokens(
   messages: ChatMessage[],
   retainTokens: number,
+  messageOrigin?: ModelMessageOrigin,
 ): number {
   if (messages.length === 0 || retainTokens <= 0) return 0;
 
@@ -153,7 +155,7 @@ export function findSafeCutPointForRetainedTokens(
   let retainedTokens = 0;
   while (cutIndex > 0 && retainedTokens < retainTokens) {
     cutIndex--;
-    retainedTokens += estimateMessageTokens([messages[cutIndex]!]);
+    retainedTokens += estimateMessageTokens([messages[cutIndex]!], messageOrigin);
   }
 
   while (cutIndex > 0 && !isToolPairSafeBoundary(messages, cutIndex)) cutIndex--;
@@ -170,6 +172,7 @@ export function resolveCompactionRetainTokens(input: {
   usableInputBudget: number;
   fixedInputTokens: number;
   transientTokens: number;
+  messageOrigin?: ModelMessageOrigin;
 }): number {
   const availableHistoryTokens = Math.floor(input.usableInputBudget - input.fixedInputTokens - input.transientTokens);
   if (availableHistoryTokens <= 0) {
@@ -177,11 +180,11 @@ export function resolveCompactionRetainTokens(input: {
   }
 
   // 只保留最后一条消息时仍需把跨边界的工具调用及结果整组保留。
-  const latestGroupCut = findSafeCutPointForRetainedTokens(input.messages, 1);
+  const latestGroupCut = findSafeCutPointForRetainedTokens(input.messages, 1, input.messageOrigin);
   if (latestGroupCut <= 0) {
     throw new Error("当前历史只有一组不可拆分的最新消息或工具调用，无法安全压缩。请缩短该消息或工具输出，或选择上下文更大的模型。原会话历史已保留。");
   }
-  const minimumTailTokens = estimateMessageTokens(input.messages.slice(latestGroupCut));
+  const minimumTailTokens = estimateMessageTokens(input.messages.slice(latestGroupCut), input.messageOrigin);
   if (minimumTailTokens >= availableHistoryTokens) {
     throw new Error("最新一组消息或工具结果已占满可用输入容量，压缩更早历史也无法继续。请缩短最新消息或工具输出，或选择上下文更大的模型。原会话历史已保留。");
   }
@@ -191,17 +194,17 @@ export function resolveCompactionRetainTokens(input: {
   // 默认尾窗比整段历史更长时，至少留出一个完整旧前缀供摘要，而不是永久返回 cut=0。
   let firstSafeCut = 1;
   while (firstSafeCut < latestGroupCut && !isToolPairSafeBoundary(input.messages, firstSafeCut)) firstSafeCut++;
-  const maximumRetainableTokens = estimateMessageTokens(input.messages.slice(firstSafeCut));
+  const maximumRetainableTokens = estimateMessageTokens(input.messages.slice(firstSafeCut), input.messageOrigin);
   const requestedTailTokens = Math.max(1, Math.min(
     input.defaultRetainTokens, maximumTailTokens, maximumRetainableTokens,
   ));
-  let cut = findSafeCutPointForRetainedTokens(input.messages, requestedTailTokens);
+  let cut = findSafeCutPointForRetainedTokens(input.messages, requestedTailTokens, input.messageOrigin);
   // token 尾窗允许最后一条消息越界；这里改用下一个完整边界以满足真实硬预算。
   while (cut < latestGroupCut && (
     !isToolPairSafeBoundary(input.messages, cut)
-    || estimateMessageTokens(input.messages.slice(cut)) > maximumTailTokens
+    || estimateMessageTokens(input.messages.slice(cut), input.messageOrigin) > maximumTailTokens
   )) cut++;
-  return estimateMessageTokens(input.messages.slice(cut));
+  return estimateMessageTokens(input.messages.slice(cut), input.messageOrigin);
 }
 
 // ── Agent 导向压缩 prompt ────────────────────────────────
@@ -248,6 +251,7 @@ export function buildCompactionCheckpoint(summary: string): ChatMessage {
 
 export interface CompactionOptions {
   messages: ChatMessage[];
+  messageOrigin?: ModelMessageOrigin;
   /** 压缩后至少原样保留的近期 transcript token 估算值。 */
   retainTokens: number;
   /** 压缩回调：把待压缩的原始消息序列摘要成一段。 */
@@ -267,7 +271,7 @@ export async function compressForAgentLoop(
 ): Promise<ChatMessage[]> {
   const { messages, retainTokens, summarize } = options;
 
-  const cutIndex = findSafeCutPointForRetainedTokens(messages, retainTokens);
+  const cutIndex = findSafeCutPointForRetainedTokens(messages, retainTokens, options.messageOrigin);
   if (cutIndex === 0) return messages; // 无法安全切分
 
   const toCompress = messages.slice(0, cutIndex);
@@ -277,7 +281,7 @@ export async function compressForAgentLoop(
     const summary = await summarize(toCompress);
     if (!summary.trim()) return messages;
     const summaryMessage = buildCompactionCheckpoint(summary);
-    if (estimateMessageTokens([summaryMessage]) >= estimateMessageTokens(toCompress)) {
+    if (estimateMessageTokens([summaryMessage], options.messageOrigin) >= estimateMessageTokens(toCompress, options.messageOrigin)) {
       return messages;
     }
     return [summaryMessage, ...toKeep];

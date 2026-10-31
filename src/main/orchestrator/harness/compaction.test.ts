@@ -41,7 +41,8 @@ describe("durable compaction tail budget", () => {
       { ...tokenMessage(100), role: "assistant", toolCalls: [{ id: "read", name: "read_file", arguments: "{}" }] },
       { ...tokenMessage(400), role: "tool", toolCallId: "read", name: "read_file" }];
     const retain = resolveCompactionRetainTokens({ ...base, messages, defaultRetainTokens: 100 });
-    expect(retain).toBe(500);
+    // 请求投影还包含 read + read_file + {} 的 4 个工具参数词元。
+    expect(retain).toBe(504);
     expect(findSafeCutPointForRetainedTokens(messages, retain)).toBe(1);
   });
 

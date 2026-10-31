@@ -121,6 +121,30 @@ describe("resolveReasoningCapability — 行为基准", () => {
     expect(row("kimi-k3")).toContain("历史未核验");
   });
 
+  // 预期值按官方文档独立填写（GPT-6.1 Terra / Sol 模型页与最新模型指南，核验 2026-10-28），不从注册表复制。
+  test("chatgpt + gpt-6.1-terra → 五档 effort，默认 medium，可关闭（none），未写明 pro mode", () => {
+    const cap = resolveReasoningCapability("chatgpt", "gpt-6.1-terra");
+    expect(cap.control).toBe("effort");
+    expect(cap.requestStyle).toBe("openai-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(cap.defaultEffort).toBe("medium");
+    expect(cap.supportsDisable).toBe(true);
+    expect(cap.supportsProMode).toBeFalsy();
+  });
+
+  test("chatgpt + gpt-6.1-sol → 官方不支持 none，不可关闭", () => {
+    expect(resolveReasoningCapability("chatgpt", "gpt-6.1-sol").supportsDisable).toBe(false);
+  });
+
+  test("GPT-6.1 Terra 规则可跨厂商推断：托管端点使用同一型号名", () => {
+    expect(resolveReasoningCapability("unknown-provider", "gpt-6.1-terra").supportsDisable).toBe(true);
+  });
+
+  test("邻近反例：gpt-5.6-terra 仍走 GPT-5.6 规则，未核验的 gpt-6.1-* 名称不可关闭", () => {
+    expect(resolveReasoningCapability("chatgpt", "gpt-5.6-terra").supportsProMode).toBe(true);
+    expect(resolveReasoningCapability("chatgpt", "gpt-6.1-terra-preview").supportsDisable).toBe(false);
+  });
+
   test("邻近反例：claude-haiku-4-5 不命中 Haiku 5.5 规则，仍落兜底", () => {
     // Haiku 4.5 只支持 budget_tokens 式思考，套用自适应规则会发出它不接受的请求
     expect(resolveReasoningCapability("claude", "claude-haiku-4-5")).toBe(UNKNOWN_REASONING_CAPABILITY);

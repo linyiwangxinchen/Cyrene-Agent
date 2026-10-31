@@ -4,7 +4,7 @@
 
 ## 修改清单和提交主题
 
-最近一次上游同步：[2026-10-25 集成与验收记录](upstream-integration-20261025.md)。集成分支为 `integrate/upstream-linux-web-20261025`，从共同基点 `6094d1b6` 合入上游 `1c0c15e8` 的 24 个提交，处理设置 IPC 与设置页面两处共享业务冲突，并完成 Kimi K3.1 Pro/Highspeed、数据目录、浏览器视口和 Linux/Web 边界验收；Windows 目录包使用当前版本 `1.3.4-3` 完成构建检查。[2026-10-22 集成记录](upstream-integration-20261022.md)保留前一轮 Windows 发布与后台能力验收；[2026-10-18 集成记录](upstream-integration-20261018.md)保留前一轮图片/微信和 Web 地址栏适配；[2026-10-17 集成记录](upstream-integration-20261017.md)记录 README 自动生成区冲突的处理。此前的 [2026-10-16 集成记录](upstream-integration-20261016.md)、[2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯后台任务收尾、压缩器适配和 SQLite 迁移。
+最近一次上游同步：[2026-10-31 集成与验收记录](upstream-integration-20261031.md)。集成分支为 `integrate/upstream-linux-web-20261031`，从共同基点 `1c0c15e8` 合入上游 `8f6f1abd` 的 21 个提交，解决 6 处冲突，补齐 Linux 环境代理、持久化压缩的来源预算及离线字体适配；四套类型检查、621 个测试文件、Web/Windows 构建和本地 NSIS 校验通过。保留的 [2026-10-25 集成记录](upstream-integration-20261025.md)记录 Kimi K3.1、数据目录和浏览器视口适配；[2026-10-22 集成记录](upstream-integration-20261022.md)记录前一轮 Windows 发布与后台能力验收；[2026-10-18 集成记录](upstream-integration-20261018.md)记录图片/微信和 Web 地址栏适配；[2026-10-17 集成记录](upstream-integration-20261017.md)记录 README 自动生成区冲突的处理。此前的 [2026-10-16 集成记录](upstream-integration-20261016.md)、[2026-10-09 集成记录](upstream-integration-20261009.md)和 [2026-10-08 集成记录](upstream-integration-20261008.md)用于追溯后台任务收尾、压缩器适配和 SQLite 迁移。
 
 [linux-web-changes.md](linux-web-changes.md) 给出每一个新增/修改文件的作用。提交按 10 个主题组织，commit body 也逐文件描述用途：
 

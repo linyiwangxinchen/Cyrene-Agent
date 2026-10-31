@@ -127,14 +127,21 @@ describe("MODEL_REASONING_RULES — 9 家全部存在性", () => {
     expect(cap.defaultEffort).toBe("medium");
   });
 
-  test("chatgpt gpt-6.1-sol → 复用 Sol 规则（可关闭 + pro mode），不被 ^gpt-6 Astra 兜底吞", () => {
+  test("chatgpt gpt-6.1-sol → 五档 effort + pro mode，官方不支持 none 档（不可关闭）", () => {
     const cap = resolveReasoningCapability("chatgpt", "gpt-6.1-sol");
     expect(cap.control).toBe("effort");
     expect(cap.requestStyle).toBe("openai-effort");
     expect(cap.supportedEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
-    // 若被 ^gpt-6（Astra）规则先吞，supportsDisable 会是 false
-    expect(cap.supportsDisable).toBe(true);
+    // 官方模型页只列 low/medium/high/xhigh/max，最新模型指南写明 Sol 不支持 none
+    expect(cap.supportsDisable).toBe(false);
     expect(cap.supportsProMode).toBe(true);
+  });
+
+  test("chatgpt gpt-6.1-terra → 五档 effort 且可关闭（none），不被 ^gpt-6 Astra 兜底吞", () => {
+    const cap = resolveReasoningCapability("chatgpt", "gpt-6.1-terra");
+    expect(cap.supportedEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    // 若被 ^gpt-6（Astra）或 GPT-6.1 兜底规则吞，supportsDisable 会是 false
+    expect(cap.supportsDisable).toBe(true);
   });
 
   test("chatgpt gpt-5.6 → effort + openai-effort + supportedEfforts 含 max + supportsProMode", () => {

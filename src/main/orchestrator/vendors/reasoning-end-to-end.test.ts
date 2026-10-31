@@ -163,6 +163,32 @@ describe("G1 OpenAI chatgpt + reasoning 透传", () => {
     expect(body.reasoning_effort).toBe("medium");
   });
 
+  // 官方：Terra 支持 none；Sol 只列 low/medium/high/xhigh/max，不支持 none。
+  test("gpt-6.1-terra + off → reasoning_effort=none", () => {
+    const http = adapter.buildRequest(
+      { model: "gpt-6.1-terra", messages: [{ role: "user", content: "hi" }] },
+      cfgOf(chatgptCap, { model: "gpt-6.1-terra", reasoning: { mode: "off" } }),
+    );
+    expect(JSON.parse(http.body).reasoning_effort).toBe("none");
+  });
+
+  test("gpt-6.1-terra 经 Responses + {mode:'on', effort:'xhigh'} → reasoning.effort=xhigh", () => {
+    const responses = new ResponsesAdapter("chatgpt", chatgptCap);
+    const http = responses.buildRequest(
+      { model: "gpt-6.1-terra", messages: [{ role: "user", content: "hi" }] },
+      cfgOf(chatgptCap, { model: "gpt-6.1-terra", reasoning: { mode: "on", effort: "xhigh" } }),
+    );
+    expect(JSON.parse(http.body).reasoning).toEqual({ effort: "xhigh" });
+  });
+
+  test("gpt-6.1-sol + off → 不发送 none，回到默认 medium", () => {
+    const http = adapter.buildRequest(
+      { model: "gpt-6.1-sol", messages: [{ role: "user", content: "hi" }] },
+      cfgOf(chatgptCap, { model: "gpt-6.1-sol", reasoning: { mode: "off" } }),
+    );
+    expect(JSON.parse(http.body).reasoning_effort).toBe("medium");
+  });
+
   test("gpt-4o + reasoning=auto → body 中无 reasoning_effort（非推理模型）", () => {
     const http = adapter.buildRequest(
       { model: "gpt-4o", messages: [{ role: "user", content: "hi" }] },

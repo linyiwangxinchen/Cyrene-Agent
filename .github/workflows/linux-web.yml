@@ -50,17 +50,23 @@ jobs:
           src/main/memory/memory-background-schedulers.test.ts
           src/main/memory/memory-llm-client.test.ts
           src/main/memory/memory-llm-client.responses.test.ts
+          src/main/network/node-request-proxy.test.ts
+          src/main/search-jieba.test.ts
           src/main/orchestrator/structured-output/runner.test.ts
           src/main/services/llm/llm-client.test.ts
+          src/main/proactive/proactive-lifecycle.test.ts
+          src/main/proactive/proactive-lifecycle.headless.test.ts
+          src/main/proactive/proactive-service.test.ts
           src/main/proactive/proactive-wechat.integration.test.ts
           src/main/orchestrator/build-options.test.ts
+          src/main/orchestrator/context-manager.test.ts
           src/main/orchestrator/context-manager.summarize.test.ts
           src/main/orchestrator/context-manager.responses.test.ts
           src/shared/transcript-compaction-error.test.ts
           src/main/orchestrator/conversation-transcript-projection.test.ts
           src/main/orchestrator/conversation-transcript-compactor.test.ts
-          src/main/orchestrator/conversation-transcript-validation.test.ts
           src/main/orchestrator/harness/compaction.test.ts
+          src/main/orchestrator/harness/compaction.headless.test.ts
           src/main/orchestrator/harness/cyrene-harness.test.ts
           src/main/orchestrator/vendors/model-factory.test.ts
           src/main/orchestrator/vendors/model-runtime.test.ts
@@ -74,6 +80,7 @@ jobs:
           src/renderer/react/features/settings/McpSettingsPanel.args.test.ts
           src/renderer/react/features/settings/McpSettingsPanel.config.test.ts
           src/renderer/react/features/chat/components/katex-rendering-contract.test.ts
+          src/renderer/ui/fonts.test.ts
       - run: pnpm run build:web
       - name: Install Chromium for Web and bundled Playwright MCP
         run: |
@@ -90,6 +97,8 @@ jobs:
           if (result.error) throw result.error;
           process.exit(result.status ?? 1);
           NODE
+      - name: Verify bundled fonts offline for Web and desktop paths
+        run: pnpm run verify:fonts:offline
       - name: Verify authenticated Web business and voice MCP paths
         run: |
           pnpm run verify:shared-core

@@ -44,6 +44,15 @@ export const CHATGPT_REGISTRY = defineVendor({
       ],
     },
     {
+      model: "gpt-6.1-terra",
+      recommendedFor: ["chat"],
+      note: "2026-10 发布的快速款；Chat Completions 下不支持工具调用，需走 Responses（预设默认）。",
+      unknownCapabilities: [
+        { feature: "sampling", transport: "responses", note: "现有采样白名单未覆盖该型号。" },
+        { feature: "structuredOutput", transport: "responses", note: "预设协议没有专用结构化输出规则，保留提示词 JSON 回退。" },
+      ],
+    },
+    {
       model: "gpt-6-sol",
       recommendedFor: ["chat"],
       unknownCapabilities: [
@@ -107,21 +116,76 @@ export const CHATGPT_REGISTRY = defineVendor({
       verification: "official",
       metadata: legacyMetadata("迁自 src/main/orchestrator/structured-output/profiles.ts"),
     },
+    // GPT-6.1 Terra：官方模型页列出 Structured outputs 为已支持；上面的家族规则匹配不到 "gpt-6.1-"。
+    // 只覆盖已核实的完整型号名，Responses 协议仍与其他型号一样保留提示词 JSON 回退。
+    {
+      id: "openai-gpt-6-1-terra-structured-output",
+      transport: "openai",
+      modelPattern: /^gpt-6\.1-terra$/i,
+      tier: "A",
+      mode: "provider_json_schema",
+      verification: "official",
+      metadata: {
+        status: "supported",
+        evidence: {
+          kind: "official",
+          url: "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+          checkedAt: "2026-10-28",
+          transports: ["openai"],
+        },
+      },
+    },
   ],
   reasoningRules: [
     // ── chatgpt（OpenAI）──
     // 按具体型号拆分。
-    // GPT-6.1 Sol（2026-09-29 发布）：GPT-6 Sol 的升级款，定位在旗舰 Astra 之下，
-    // 1.1M 上下文，agentic coding / 文档密集任务接近 Astra 水平而成本低得多。
-    // effort 与 Sol 相同（可关闭 → supportsDisable=true），pro mode 同样支持。
-    // 必须排在 /^gpt-6/（Astra 兜底，禁关思考）之前：/^gpt-6-/ 匹配不到 "gpt-6.1-"，
-    // 不前置会被 Astra 规则误吞。
-    { modelPattern: /^gpt-6\.1/i, modelInferencePattern: /^gpt-6\.1/i, metadata: legacyMetadata("迁自 src/shared/vendor-registry/entries/chatgpt.ts"), capability: {
+    // GPT-6.1 系按完整型号名拆分，都必须排在 /^gpt-6/（Astra 兜底，禁关思考）之前：
+    // /^gpt-6-/ 匹配不到 "gpt-6.1-"，不前置会被 Astra 规则误吞。
+    // GPT-6.1 Terra（2026-10 发布）：快速款。官方模型页 reasoning.effort 支持
+    // none/low/medium(默认)/high/xhigh/max → 可关闭（off → "none"）。
+    // 模型页与最新模型指南均未写明 pro mode，保守不开放。
+    { modelPattern: /^gpt-6\.1-terra$/i, modelInferencePattern: /^gpt-6\.1-terra$/i, metadata: {
+      status: "supported",
+      evidence: {
+        kind: "official",
+        url: "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+        checkedAt: "2026-10-28",
+        transports: ["openai", "responses"],
+      },
+    }, capability: {
       control: "effort",
       supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
       defaultEffort: "medium",
       requestStyle: "openai-effort",
       supportsDisable: true,
+    } },
+    // GPT-6.1 Sol（2026-09-29 发布）：GPT-6 Sol 的升级款，定位在旗舰 Astra 之下。
+    // 官方模型页 reasoning.effort 只列 low/medium(默认)/high/xhigh/max，最新模型指南也写明
+    // Sol 不支持 none → supportsDisable=false（此前沿用 GPT-6 Sol 规则误开了关闭，off 会发出
+    // 不被接受的 "none"）。pro mode 沿用指南中 GPT-6 系的通用说明。
+    { modelPattern: /^gpt-6\.1-sol$/i, modelInferencePattern: /^gpt-6\.1-sol$/i, metadata: {
+      status: "supported",
+      evidence: {
+        kind: "official",
+        url: "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+        checkedAt: "2026-10-28",
+        transports: ["openai", "responses"],
+      },
+    }, capability: {
+      control: "effort",
+      supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "medium",
+      requestStyle: "openai-effort",
+      supportsDisable: false,
+      supportsProMode: true,
+    } },
+    // 其余 gpt-6.1 名称：未逐个核验，沿用 GPT-6.1 Sol 的保守能力（不可关闭）。
+    { modelPattern: /^gpt-6\.1/i, modelInferencePattern: /^gpt-6\.1/i, metadata: legacyMetadata("迁自 src/shared/vendor-registry/entries/chatgpt.ts"), capability: {
+      control: "effort",
+      supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+      defaultEffort: "medium",
+      requestStyle: "openai-effort",
+      supportsDisable: false,
       supportsProMode: true,
     } },
     // GPT-6 Sol / Luna（2026-09-22 发布）：Astra 能力下放的日常工作款。官方模型页

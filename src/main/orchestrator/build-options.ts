@@ -1,4 +1,6 @@
 import { buildChannelSystem, buildStylePromptBlock } from "./expression-context-core";
+import { getAdapterForConfig } from "./vendors";
+import { modelMessageOrigin } from "./vendors/model-history";
 // buildAgentRunOptions —— 把 AG-UI 桥的 buildOptions 闭包抽成纯函数。
 //
 // 设计原则：
@@ -626,7 +628,8 @@ export async function buildAgentRunOptions(
   // 都必须先提交自动压缩检查点，再重读 journal 作为最终上下文。
   if (input.sessionId && transcriptContext) {
     const compactionTriggerTokens = resolveCompactionTriggerTokens(contextWindowTokens);
-    const estimatedMessages = estimateMessageTokens(transcriptContext.messages);
+    const messageOrigin = modelMessageOrigin(getAdapterForConfig(settings), settings);
+    const estimatedMessages = estimateMessageTokens(transcriptContext.messages, messageOrigin);
     if (estimatedMessages >= compactionTriggerTokens) {
       if (!deps.compactTranscript) throw new Error("TRANSCRIPT_COMPACTION_REQUIRED");
       try {
@@ -647,7 +650,7 @@ export async function buildAgentRunOptions(
         throw failure;
       }
       transcriptContext = await requireBuildModelContext(deps)(input.sessionId, retainTokens);
-      if (estimateMessageTokens(transcriptContext.messages) >= compactionTriggerTokens) {
+      if (estimateMessageTokens(transcriptContext.messages, messageOrigin) >= compactionTriggerTokens) {
         throw createTranscriptCompactionRequiredError();
       }
     }

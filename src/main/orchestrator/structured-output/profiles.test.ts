@@ -7,6 +7,7 @@ import {
 describe("resolveStructuredOutputProfile", () => {
   test.each([
     ["chatgpt", "gpt-6-astra", "openai", "provider_json_schema"],
+    ["chatgpt", "gpt-6.1-terra", "openai", "provider_json_schema"],
     ["chatgpt", "gpt-6-sol", "openai", "provider_json_schema"],
     ["chatgpt", "gpt-6-luna", "openai", "provider_json_schema"],
     ["chatgpt", "gpt-5.6", "openai", "provider_json_schema"],
@@ -53,6 +54,17 @@ describe("resolveStructuredOutputProfile", () => {
         provider: "kimi",
         model,
         transport: "openai",
+        endpointKind: "official",
+      }).mode).toBe("prompt_json");
+    }
+  });
+
+  test("GPT-6.1 Terra rule matches only the verified model name on Chat Completions", () => {
+    for (const [model, transport] of [["gpt-6.1-terra-preview", "openai"], ["gpt-6.1-terra", "responses"]] as const) {
+      expect(resolveStructuredOutputProfile({
+        provider: "chatgpt",
+        model,
+        transport,
         endpointKind: "official",
       }).mode).toBe("prompt_json");
     }

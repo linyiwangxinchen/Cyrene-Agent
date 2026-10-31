@@ -1,3 +1,5 @@
+import { getAdapterForConfig } from "../vendors";
+import { modelMessageOrigin } from "../vendors/model-history";
 /**
  * CyreneHarness 核心循环
  *
@@ -548,6 +550,7 @@ function compactIfNeeded(run: HarnessRun, promptLayers: PromptLayers): Promise<v
     config.reservedOutputTokens,
     config.safetyMarginTokens,
     config.compactionThreshold,
+    modelMessageOrigin(getAdapterForConfig(run.input.vendorConfig), run.input.vendorConfig),
   );
   if (!budget.needsCompaction) return undefined;
   return runCompaction(run, roundSystemPrompt, budget);
@@ -555,6 +558,7 @@ function compactIfNeeded(run: HarnessRun, promptLayers: PromptLayers): Promise<v
 
 async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget: TokenBudget): Promise<void> {
   const { input, config } = run;
+  const messageOrigin = modelMessageOrigin(getAdapterForConfig(input.vendorConfig), input.vendorConfig);
   console.log(`${LOG_PREFIX} mid-loop compaction triggered (estimated=${budget.estimatedInput} budget=${budget.usableInputBudget})`);
   const messageCountBefore = run.messages.length;
   emitContextUsage(run, "preCompaction");
@@ -570,14 +574,16 @@ async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget:
       messages: run.messages.filter((message) => !transientMessages.includes(message)),
       defaultRetainTokens: retainTokens,
       usableInputBudget: budget.usableInputBudget,
-      fixedInputTokens: budget.estimatedInput - estimateMessageTokens(run.messages),
-      transientTokens: estimateMessageTokens(transientMessages),
+      fixedInputTokens: budget.estimatedInput - estimateMessageTokens(run.messages, messageOrigin),
+      transientTokens: estimateMessageTokens(transientMessages, messageOrigin),
+      messageOrigin,
     });
   }
   const compactedMessages = durableCompaction
     ? [...await input.compactTranscript!({ retainTokens, transientMessages, signal: input.signal }), ...transientMessages]
     : await compressForAgentLoop({
       messages: run.messages,
+      messageOrigin,
       retainTokens,
       summarize: (history) => summarizeHistory(
         input.vendorConfig,
@@ -594,7 +600,7 @@ async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget:
     });
   if (durableCompaction) {
     const after = computeTokenBudget(roundSystemPrompt, run.allToolSpecs, compactedMessages,
-      config.contextWindowTokens, config.reservedOutputTokens, config.safetyMarginTokens, config.compactionThreshold);
+      config.contextWindowTokens, config.reservedOutputTokens, config.safetyMarginTokens, config.compactionThreshold, messageOrigin);
     if (after.estimatedInput > after.usableInputBudget) {
       throw new Error("摘要生成后，系统提示词、工具定义与最新消息仍超过模型输入容量。请减少启用的工具或缩短最新消息，或选择上下文更大的模型。原会话记录已保留。");
     }

@@ -8,6 +8,7 @@ dist/plugin-panel/
 dist/cli/
 dist/preload/
 dist/renderer/assets
+dist/renderer/fonts/
 dist/renderer/feeling/
 dist/renderer/status/
 dist/renderer/call/index.html

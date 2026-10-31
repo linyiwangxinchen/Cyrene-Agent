@@ -92,8 +92,10 @@ import { disconnectMcpServer } from "../../main/orchestrator/mcp-adapter";
 import { syncPlaywrightMcp, syncFilesystemMcp } from "../../main/sync-mcp-builtin";
 import { syncVolcanoSearchMcp } from "../../main/settings/general-settings-lifecycle";
 import { registerHeadlessVoice } from "./voice";
+import { configureHeadlessRequestProxy } from "./network-proxy";
 
 export async function startHeadlessCore() {
+  await configureHeadlessRequestProxy();
   const root = app.getPath("userData");
   for (const filename of new Set(Object.values(MODE_PROMPT_FILES).flat())) {
     if (!loadPromptFile(filename)) throw new Error(`缺少必要提示词 ${filename}，请完整部署 prompts 目录或配置 CYRENE_PROMPTS_DIR`);
