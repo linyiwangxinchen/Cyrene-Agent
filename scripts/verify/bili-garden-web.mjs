@@ -163,7 +163,34 @@ try {
   await page
     .getByRole("button", { name: "设置", exact: true })
     .click({ timeout: 20000 });
-  await page.getByText("功能插件", { exact: true }).click({ timeout: 10000 });
+  // The shared upstream settings search must work in authenticated desktop/mobile Web.
+  const search = page.getByRole("button", { name: "搜索设置", exact: true });
+  await search.click();
+  // Use the translated placeholder to distinguish model selectors from this search input.
+  const searchInput = page.getByPlaceholder("搜索设置名称或关键词");
+  await searchInput.fill("GPU");
+  await page.getByText("未找到相关设置", { exact: true }).waitFor();
+  await searchInput.fill("语言");
+  await page.getByRole("option", { name: "界面语言", exact: true }).click();
+  await page.locator('[data-settings-search-id="settingsPage.general.language"]').waitFor();
+  await page.waitForFunction(() => document.querySelector('[data-settings-search-id="settingsPage.general.language"]')?.closest('.cy-settings-row')?.classList.contains('cy-settings-search-highlight'));
+  const originalGeneral = await invoke("settings:get-general");
+  await invoke("settings:save-general", { ...originalGeneral, proactiveChatMode: "on" });
+  try {
+    await search.click();
+    await searchInput.fill("目标候选评分");
+    await page.getByRole("option", { name: "目标候选评分", exact: true }).click();
+    await page.locator('[data-settings-search-id="settingsPage.preferences.proactiveTargetScore"]').waitFor();
+  } finally { await invoke("settings:save-general", originalGeneral); }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "设置导航", exact: true }).click();
+  await search.click();
+  await searchInput.fill("小花园");
+  await page.getByRole("option", { name: "功能插件", exact: true }).click();
+  await searchInput.waitFor({ state: "hidden" });
+  await page.waitForFunction(() => !document.querySelector('.cy-settings-page.is-mobile-nav-open'));
+  await page.screenshot({ path: path.join(evidence, "settings-search-mobile.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 1000 });
   const frame = page.frameLocator('iframe[src*="bili-garden"]');
   await frame
     .getByRole("heading", { name: /昔涟的小花园/ })
@@ -275,6 +302,8 @@ try {
           "queue",
           "persist-config",
           "mobile-layout",
+          "settings-search-web",
+          "settings-search-mobile",
         "dark-theme",
         "markdown-download",
         "external-link",

@@ -53,6 +53,7 @@ jobs:
           src/main/network/node-request-proxy.test.ts
           src/main/plugin-agent.garden.test.ts
           src/main/plugin-panel-bridge.test.ts
+          src/renderer/react/features/settings/settings-search-fork.test.ts
           src/plugins/installer.test.ts
           src/main/search-jieba.test.ts
           src/main/orchestrator/structured-output/runner.test.ts

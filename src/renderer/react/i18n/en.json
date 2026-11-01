@@ -1336,7 +1336,7 @@
     "description": "Adjust the app window, interface font, and desktop companion.",
     "interface": "Interface",
     "interfaceDescription": "Customize the window and chat content appearance.",
-    "theme": "Appearance",
+    "theme": "Theme",
     "themeDescription": "Follow your system appearance or choose a light or dark theme.",
     "themeSystem": "Follow system",
     "themePearlWhite": "Pearl White",
@@ -1881,6 +1881,7 @@
       "rerankerFailed": "Could not set reranking."
     },
     "asr": {
+      "localTitle": "Local / self-hosted ASR",
       "title": "Speech recognition",
       "description": "Choose a speech-to-text provider and tune recognition during calls.",
       "unavailable": "Voice settings are unavailable.",
@@ -2463,5 +2464,21 @@
       "grading_failed": "Grading failed",
       "graded": "Graded"
     }
+  },
+  "settingsSearch": {
+    "unavailable": "The related settings page is open. This option may require enabling its feature first, or may still be loading.",
+    "title": "Search settings",
+    "placeholder": "Search settings or keywords",
+    "results": "Search results",
+    "empty": "No matching settings",
+    "history": "Search history",
+    "manage": "Manage",
+    "done": "Done",
+    "clear": "Clear history",
+    "delete": "Delete “{{query}}”",
+    "noHistory": "No search history yet",
+    "clearConfirm": "Clear all search history?",
+    "clearDescription": "All saved searches will be permanently deleted.",
+    "cancel": "Cancel"
   }
 }
