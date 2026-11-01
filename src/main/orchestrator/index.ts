@@ -41,7 +41,7 @@ export async function buildMemoryInjection(
         const quoteSuffix = sourceQuote ? `（原文：${sourceQuote}）` : "";
         return `· ${l2.content}${conflictSuffix}${quoteSuffix}`;
       });
-      parts.push("【相关记忆】\n" + annotated.join("\n"));
+      parts.push("【相关记忆】\n以下是历史背景，仅在与当前问题相关时引用；以最新用户消息及明确纠正为准，不把旧目标当作本轮任务。\n" + annotated.join("\n"));
     }
   } catch (err) {
     if (isDimensionMismatchError(err)) {
@@ -140,7 +140,7 @@ export async function buildAlwaysOnContext(
       ].filter(Boolean);
 
       if (l0Lines.length > 0 || l1Lines.length > 0) {
-        let memoryContext = "";
+        let memoryContext = "[记忆背景规则]\n以下画像与近期状态来自历史记录；仅用于理解本轮问题，不得代替用户最新请求。用户明确纠正时优先采用最新说明，旧项目不自动成为当前任务。\n\n";
         if (l0Lines.length > 0) {
           memoryContext += `[用户画像]\n${l0Lines.join("\n")}\n\n`;
         }

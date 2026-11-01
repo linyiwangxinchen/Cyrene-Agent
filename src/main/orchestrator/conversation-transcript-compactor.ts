@@ -10,7 +10,8 @@ import {
 } from "./conversation-transcript-projection";
 import type { TranscriptAppendInput, TranscriptEntry } from "./conversation-transcript-types";
 import type { ChatMessage as CanonicalChatMessage } from "./vendors/types";
-import { callSummarizeModel } from "./context-manager";
+import { callSummarizeModel, estimateMessageTokens } from "./context-manager";
+import { recoverLegacyCompactionState } from "./compaction-recovery";
 import { getAdapterForConfig } from "./vendors";
 import { buildCompactionContextUsageSnapshot } from "./context-usage";
 import type { ContextUsageSnapshot } from "../../shared/context-usage";
@@ -19,6 +20,7 @@ export { TRANSCRIPT_COMPACTION_REQUIRED, createTranscriptCompactionRequiredError
 import {
   compressForAgentLoop,
   findSafeCutPointForRetainedTokens,
+  resolveCompactionRetainTokens,
 } from "./harness/compaction";
 
 export interface ConversationCompactionRequest {
@@ -47,6 +49,8 @@ export interface ConversationTranscriptCompactorOptions {
   runReader?: TranscriptRunReader;
   archive?: ConversationTranscriptArchive;
   now?: () => number;
+  /** Includes all summary chunks and retries; below the Web invocation deadline. */
+  timeoutMs?: number;
   /** 压缩阶段观察者：摘要请求前 running、检查点提交后 finished（失败也发）。
    *  统一推送运行前和运行中压缩的阶段及占用，驱动窗口提示。 */
   onPhase?: (phase: "running" | "finished", conversationId: string, usage?: ContextUsageSnapshot) => void;
@@ -106,6 +110,8 @@ export class ConversationTranscriptCompactor {
   private readonly archive: ConversationTranscriptArchive;
   private readonly now: () => number;
   private readonly onPhase: ConversationTranscriptCompactorOptions["onPhase"];
+  private readonly timeoutMs: number;
+  private readonly active = new Map<string, Promise<ConversationCompactionResult>>();
 
   constructor(options: ConversationTranscriptCompactorOptions) {
     this.store = options.store;
@@ -114,20 +120,57 @@ export class ConversationTranscriptCompactor {
     this.archive = options.archive ?? new ConversationTranscriptArchive(options.store);
     this.now = options.now ?? (() => Date.now());
     this.onPhase = options.onPhase;
+    this.timeoutMs = options.timeoutMs ?? 300_000;
   }
 
   async compact(request: ConversationCompactionRequest): Promise<ConversationCompactionResult> {
     request.signal?.throwIfAborted();
+    const existing = this.active.get(request.conversationId);
+    if (existing) return waitForAbort(existing, request.signal);
+    const pending = this.compactWithDeadline(request);
+    this.active.set(request.conversationId, pending);
+    const clear = () => { if (this.active.get(request.conversationId) === pending) this.active.delete(request.conversationId); };
+    void pending.then(clear, clear);
+    return pending;
+  }
+
+  private async compactWithDeadline(request: ConversationCompactionRequest): Promise<ConversationCompactionResult> {
+    const deadline = new AbortController();
+    const signal = request.signal ? AbortSignal.any([request.signal, deadline.signal]) : deadline.signal;
+    const timer = setTimeout(() => deadline.abort(createTranscriptCompactionRequiredError(
+      new DOMException("Compaction deadline exceeded", "TimeoutError"), "timeout",
+    )), this.timeoutMs);
+    try { return await this.compactOnce({ ...request, signal }); }
+    finally { clearTimeout(timer); }
+  }
+
+  private async compactOnce(request: ConversationCompactionRequest): Promise<ConversationCompactionResult> {
+    request.signal?.throwIfAborted();
     await this.runReader.refresh?.();
-    const retainTokens = request.retainTokens ?? 1;
+    let retainTokens = request.retainTokens ?? 1;
     const before = await this.store.read(request.conversationId);
     // 已有有效检查点时输入为"旧摘要 + 后缀"，二次压缩不会丢弃第一次摘要；
     // previousReplacement 用于识别压缩器未产出新摘要的失败路径。
-    const full = buildCompactionSourceView(before.entries, this.runReader);
+    const legacyRecovery = await recoverLegacyCompactionState(this.store, request.conversationId, before.entries, this.runReader);
+    const full = buildCompactionSourceView(before.entries, this.runReader, legacyRecovery);
     const messageOrigin = request.modelSettings
       ? modelMessageOrigin(getAdapterForConfig(request.modelSettings), request.modelSettings)
       : undefined;
-    const cutIndex = findSafeCutPointForRetainedTokens(full.messages, retainTokens, messageOrigin);
+    let cutIndex = findSafeCutPointForRetainedTokens(full.messages, retainTokens, messageOrigin);
+    if (cutIndex <= 0 && request.trigger === "automatic" && estimateMessageTokens(full.messages, messageOrigin) > retainTokens) {
+      // A very large first turn plus a short recent suffix can make the requested
+      // tail include the whole history. Retain the largest safe suffix instead.
+      try {
+        retainTokens = resolveCompactionRetainTokens({ messages: full.messages, defaultRetainTokens: retainTokens,
+          usableInputBudget: request.modelSettings?.contextWindowTokens ?? Number.MAX_SAFE_INTEGER,
+          fixedInputTokens: 0, transientTokens: 0, messageOrigin });
+        cutIndex = findSafeCutPointForRetainedTokens(full.messages, retainTokens, messageOrigin);
+      } catch { /* Preserve the existing explicit no-safe-boundary failure below. */ }
+    }
+    console.info("[ConversationTranscriptCompactor] source", {
+      conversation: request.conversationId.slice(0, 8), messages: full.messages.length,
+      retainTokens, cutIndex, contextWindowTokens: request.modelSettings?.contextWindowTokens,
+    });
     if (cutIndex <= 0) throw createTranscriptCompactionRequiredError(undefined, "no_safe_boundary");
 
     const sourceThroughSeq = Math.max(...full.sourceSeqs.slice(0, cutIndex), 0);
@@ -159,7 +202,8 @@ export class ConversationTranscriptCompactor {
         retainTokens,
         summarize: async (history) => {
           try {
-            return await this.summarize(history, request.modelSettings, request.signal);
+            request.signal?.throwIfAborted();
+            return await waitForAbort(this.summarize(history, request.modelSettings, request.signal), request.signal);
           } catch (error) {
             summaryError = error;
             throw error;
@@ -194,6 +238,7 @@ export class ConversationTranscriptCompactor {
       }
 
       const recentUserImages = selectCompactionImageReference(afterSummary.entries, sourceThroughSeq);
+      const recovery = buildModelContextFromCompactedView(afterSummary.entries, this.runReader, legacyRecovery);
       const retirementSeq = before.entries.filter(entry => entry.kind === "background_event_retired").at(-1)?.seq;
       const checkpointInput: TranscriptAppendInput = {
         id: `compaction:${sourceThroughSeq}:${sourceDigest}${retirementSeq ? `:retired:${retirementSeq}` : ""}`,
@@ -204,6 +249,8 @@ export class ConversationTranscriptCompactor {
           sourceThroughSeq,
           sourceDigest,
           replacement,
+          recoveryState: { ...(recovery.todoItems !== undefined ? { todoItems: recovery.todoItems } : {}), uncertainEffects: recovery.uncertainEffects },
+          recoveryThroughSeq: afterSummary.throughSeq,
           ...(recentUserImages ? { recentUserImages } : {}),
           trigger: request.trigger,
         },
@@ -235,6 +282,20 @@ export class ConversationTranscriptCompactor {
       this.onPhase?.("finished", request.conversationId, phaseUsage);
     }
   }
+}
+
+/** Release the conversation even when a provider/adapter ignores cancellation.
+ * A late summary has no path back to checkpoint persistence. */
+function waitForAbort<T>(pending: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return pending;
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException("Compaction cancelled", "AbortError"));
+    if (signal.aborted) abort();
+    else signal.addEventListener("abort", abort, { once: true });
+    pending.then(value => { signal.removeEventListener("abort", abort); resolve(value); }, error => {
+      signal.removeEventListener("abort", abort); reject(error);
+    });
+  });
 }
 
 function isCompactionReplacement(message: CanonicalChatMessage): boolean {

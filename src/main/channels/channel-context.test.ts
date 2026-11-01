@@ -22,6 +22,12 @@ function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage
 }
 
 describe("渠道上下文", () => {
+  it("绑定冻结后仍拒绝已经删除的目标，不能重新创建旧会话", async () => {
+    const context = createChannelContext({ migrateHistory: vi.fn(), isConversationAvailable: async () => false });
+    await expect(context.validateDispatchContext!({ sessionId: "channel:wechat:x", boundConversationId: "removed" }))
+      .rejects.toThrow("CHANNEL_BOUND_CONVERSATION_REMOVED");
+    await expect(context.validateDispatchContext!({ sessionId: "channel:wechat:x", boundConversationId: null })).resolves.toBeUndefined();
+  });
   it("绑定渠道使用桌面对话 journal，未绑定渠道使用逻辑 channel sessionId", () => {
     expect(resolveChannelConversationTarget({
       sessionId: "channel:wechat:private:42",

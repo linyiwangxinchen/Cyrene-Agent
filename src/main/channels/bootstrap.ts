@@ -7,7 +7,7 @@ import type { IpcScope } from "../application/ipc-scope";
 import { IPC } from "../../shared/ipc-channels";
 import type { PluginPromptMode, PluginTurnStatus } from "../../plugins/api";
 import { loadGeneralSettings } from "../settings/settings-facade";
-import { loadModelSettings, resolveModelSettingsProfile } from "../settings/model-settings";
+import { loadModelSettings, resolveModelSettingsProfile, resolveSessionModelSettings } from "../settings/model-settings";
 import type { LifecyclePublisher } from "../plugin-host/lifecycle-publisher";
 import { CyreneAgent } from "../orchestrator/cyrene-agent";
 import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
@@ -22,7 +22,7 @@ import type { TtsSynthesisService } from "../services/tts/tts-synthesis-service"
 import { buildChannelAttachmentInputs } from "./agent-input";
 import { loadChannelsSettings } from "./settings-store";
 import { enforceChannelAgentPolicy, resolveChannelAgentPolicy } from "./agent-policy";
-import { listSessions } from "../chats/chats-store";
+import { listSessions, getSessionRecord } from "../chats/chats-store";
 import { getChannelConversationBindingStore } from "./conversation-binding-store";
 import { ChannelDispatcher, type ChannelAgentInput, type DispatcherDeps } from "./dispatcher";
 import {
@@ -137,15 +137,20 @@ export function createChannelsSubsystem(
       `msg.channel=${msg.channel} sandbox=${sandbox} tools=${exposedTools.length}/${allTools.length}`,
     );
 
-    // 图片路由统一收口在 image-router（基于解析后的默认档案——顶层镜像可能是空壳）
-    const channelModelSettings = resolveModelSettingsProfile(loadModelSettings());
+    // Bound chats reuse the conversation's selected model; unbound chats use the default profile.
+    // Captioning, compaction and the main reply consume the same frozen settings.
+    const boundSession = channelInput.target.conversationId !== channelInput.sessionId
+      ? await getSessionRecord(channelInput.target.conversationId)
+      : null;
+    const channelModelSettings = boundSession
+      ? resolveSessionModelSettings(loadModelSettings(), boundSession)
+      : resolveModelSettingsProfile(loadModelSettings());
     const channelImageRoute = resolveImageRoute("channel", channelModelSettings);
     const attachmentInputs = await buildChannelAttachmentInputs(msg, {
       // reject 时走 caption 分支：每张图会拿到路由的人话错误并诚实告知用户
       imageMode: channelImageRoute.mode === "direct" ? "direct" : "caption",
       captionImage: async (filePath: string) => {
-        const settings = resolveModelSettingsProfile(loadModelSettings());
-        const vision = resolveCaptionVisionConfig(settings);
+        const vision = resolveCaptionVisionConfig(channelModelSettings);
         if (!vision.ok) return { ok: false, error: vision.error };
         return captionImageSafe(filePath, IMAGE_CAPTION_PROMPT, vision.config);
       },
@@ -158,7 +163,7 @@ export function createChannelsSubsystem(
         text: agentUserText,
         visibleContent: msg.text,
       },
-      style: "01_default.md",
+      sessionModelSettings: channelModelSettings,
       sessionId: channelInput.target.conversationId,
       // 渠道绑定只共享文字上下文，不继承桌面对话的工作区权限。
       workspaceBindingSessionId: null,
@@ -301,6 +306,7 @@ export function createChannelsSubsystem(
 
   const context = createChannelContext({
     resolveBoundConversationId,
+    isConversationAvailable: async (id) => Boolean(await getSessionRecord(id)),
     migrateHistory,
   });
   const baseComposer = createOutgoingComposer({ synthesizeTts });

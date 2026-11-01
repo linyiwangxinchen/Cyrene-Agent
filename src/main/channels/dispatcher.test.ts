@@ -39,6 +39,30 @@ vi.mock("./history-log", () => ({
 }));
 
 describe("channels/dispatcher", () => {
+  it("排队期间修改绑定不会把已经到达的旧消息送入新会话", async () => {
+    let bound = "conversation-A";
+    let release!: () => void;
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const seen: Array<[string, string]> = [];
+    const dispatcher = makeDispatcher({
+      resolveBoundConversationId: () => bound,
+      buildAndRunAgent: async (msg, input) => {
+        seen.push([msg.text, input.target.conversationId]);
+        if (msg.text === "first") { started(); await new Promise<void>(resolve => { release = resolve; }); }
+        return { text: "fixture", sticker: null };
+      },
+    });
+    const first = dispatcher.handleIncoming(makeIncoming({ text: "first", messageId: "first" }));
+    await ready;
+    const second = dispatcher.handleIncoming(makeIncoming({ text: "second", messageId: "second" }));
+    await flushMicrotasks();
+    bound = "conversation-B";
+    const third = dispatcher.handleIncoming(makeIncoming({ text: "third", messageId: "third" }));
+    release();
+    await Promise.all([first, second, third]);
+    expect(seen).toEqual([["first", "conversation-A"], ["second", "conversation-A"], ["third", "conversation-B"]]);
+  });
   function makeIncoming(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
     return {
       channel: "qq",

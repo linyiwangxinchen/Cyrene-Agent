@@ -9,6 +9,7 @@ export type TranscriptCompactionFailureReason =
   | "invalid_summary"
   | "history_changed"
   | "checkpoint_write_failed"
+  | "timeout"
   | "unknown";
 
 const REASON_MESSAGES: Record<TranscriptCompactionFailureReason, string> = {
@@ -18,6 +19,7 @@ const REASON_MESSAGES: Record<TranscriptCompactionFailureReason, string> = {
   invalid_summary: "摘要模型没有返回有效且更短的摘要，请重试压缩或更换模型。",
   history_changed: "生成摘要期间会话历史发生了变化，请在会话空闲后重试。",
   checkpoint_write_failed: "摘要已生成，但未能保存压缩检查点，请检查服务器存储后重试。",
+  timeout: "压缩已超过总等待时间，本次已停止。请检查摘要模型的响应速度后重试。",
   unknown: "未能完成会话摘要，请重试并检查服务器日志。",
 };
 

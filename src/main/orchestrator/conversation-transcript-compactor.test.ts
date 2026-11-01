@@ -47,6 +47,7 @@ describe("ConversationTranscriptCompactor", () => {
     };
     const compactor = new ConversationTranscriptCompactor({ store, summarize });
     return {
+      root,
       store,
       journal,
       compactor,
@@ -431,6 +432,160 @@ describe("ConversationTranscriptCompactor", () => {
     fixture.resume("取消后的摘要");
     await rejected;
     expect((await fixture.store.read("c1")).entries.some((entry) => entry.kind === "compaction_checkpoint")).toBe(false);
+  });
+
+  it("取消不等待忽略 signal 的摘要服务，且迟到摘要不能写检查点", async () => {
+    const fixture = createFixture();
+    await seed(fixture);
+    let release!: (text: string) => void;
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const phases: string[] = [];
+    const compactor = new ConversationTranscriptCompactor({ store: fixture.store,
+      summarize: () => { started(); return new Promise(resolve => { release = resolve; }); },
+      onPhase: phase => phases.push(phase),
+    });
+    const controller = new AbortController();
+    let settled = false;
+    const result = compactor.compact({ conversationId: "c1", trigger: "manual", signal: controller.signal })
+      .catch(() => { settled = true; });
+    await ready;
+    controller.abort();
+    try {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      expect(settled).toBe(true);
+      expect(phases).toEqual(["running", "finished"]);
+    } finally { release("迟到摘要"); await result; }
+    expect((await fixture.store.read("c1")).entries.some(entry => entry.kind === "compaction_checkpoint")).toBe(false);
+  });
+
+  it("同一会话的并发压缩共享一次摘要请求", async () => {
+    const fixture = createFixture();
+    await seed(fixture);
+    fixture.pause();
+    const a = fixture.compactor.compact({ conversationId: "c1", trigger: "manual", retainTokens: 1 });
+    await fixture.summaryStarted;
+    const b = fixture.compactor.compact({ conversationId: "c1", trigger: "automatic", retainTokens: 1 });
+    const all = Promise.allSettled([a, b]);
+    fixture.resume("并发共享摘要");
+    const results = await all;
+    expect(results.map(result => result.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect((await fixture.store.read("c1")).entries.filter(entry => entry.kind === "compaction_checkpoint")).toHaveLength(1);
+  });
+
+  it("总预算到期会结束压缩阶段并释放会话，迟到摘要不会提交", async () => {
+    const fixture = createFixture();
+    await seed(fixture);
+    let started!: () => void;
+    let release!: (value: string) => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const phases: string[] = [];
+    let calls = 0;
+    const compactor = new ConversationTranscriptCompactor({ store: fixture.store, timeoutMs: 50,
+      summarize: () => ++calls === 1
+        ? new Promise<string>(resolve => { release = resolve; started(); })
+        : Promise.resolve("恢复后的摘要"),
+      onPhase: phase => phases.push(phase),
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let failure: any;
+      const pending = compactor.compact({ conversationId: "c1", trigger: "manual" }).catch(error => { failure = error; });
+      await ready;
+      await vi.advanceTimersByTimeAsync(51);
+      expect(failure?.reason).toBe("timeout");
+      expect(phases).toEqual(["running", "finished"]);
+      release("不应写入的迟到摘要");
+      await pending;
+    } finally { vi.useRealTimers(); }
+    expect((await fixture.store.read("c1")).entries.some(entry => entry.kind === "compaction_checkpoint")).toBe(false);
+    await compactor.compact({ conversationId: "c1", trigger: "manual" });
+    expect(calls).toBe(2);
+    expect(JSON.stringify((await fixture.journal.buildModelContext("c1")).messages)).toContain("恢复后的摘要");
+  });
+
+  it("压缩归档和重启后保留未完成任务及未确认副作用", async () => {
+    const fixture = createFixture();
+    await fixture.journal.appendUser("resume-work", { id: "goal", turnId: "goal", text: "生成文件后发给我，完成后再检查结果。".repeat(60) });
+    const sink = fixture.journal.createRunSink({ conversationId: "resume-work", runId: "resume-run", assistantTurnId: "resume-assistant" });
+    const assistantEntryId = await sink.appendAssistant({ message: { role: "assistant", content: "继续处理", toolCalls: [
+      { id: "todo", name: "update_todo", arguments: "{}" }, { id: "send", name: "channel_send_file", arguments: '{"filePath":"/storage/report.pdf"}' },
+    ] } });
+    await sink.appendToolStarted!({ assistantEntryId, toolCallId: "send", toolName: "channel_send_file", sideEffect: "non_idempotent_side_effect", fingerprint: "send-fingerprint" });
+    const todos = [{ id: "check", content: "确认文件已送达", status: "pending" as const }];
+    await sink.appendTaskState!({ assistantEntryId, toolCallId: "todo", items: todos });
+    await sink.appendToolResult({ assistantEntryId, message: { role: "tool", toolCallId: "todo", name: "update_todo", content: "已记录待办" }, outcome: "success" });
+    await fixture.journal.appendUser("resume-work", { id: "continue", turnId: "continue", text: "继续" });
+    const before = await fixture.journal.buildModelContext("resume-work");
+    expect(before.todoItems).toEqual(todos);
+    expect(before.uncertainEffects).toHaveLength(1);
+    await fixture.compactor.compact({ conversationId: "resume-work", trigger: "manual", retainTokens: 1 });
+    await closeConversationDatabases();
+    const reopenedStore = new ConversationTranscriptStore(fixture.root);
+    const reopened = new ConversationJournalService(reopenedStore);
+    const after = await reopened.buildModelContext("resume-work");
+    expect(after.todoItems).toEqual(todos);
+    expect(after.uncertainEffects).toEqual(before.uncertainEffects);
+    expect(after.messages.at(-1)?.content).toBe("继续");
+    const nextSink = reopened.createRunSink({ conversationId: "resume-work", runId: "next-run", assistantTurnId: "next-assistant" });
+    const nextAssistant = await nextSink.appendAssistant({ message: { role: "assistant", content: "已完成待办。".repeat(30), toolCalls: [{ id: "clear", name: "update_todo", arguments: "{}" }] } });
+    await nextSink.appendTaskState!({ assistantEntryId: nextAssistant, toolCallId: "clear", items: [] });
+    await nextSink.appendToolResult({ assistantEntryId: nextAssistant, message: { role: "tool", name: "update_todo", toolCallId: "clear", content: "清空待办" }, outcome: "success" });
+    await reopened.appendUser("resume-work", { id: "next-topic", turnId: "next-topic", text: "现在讨论新问题" });
+    await new ConversationTranscriptCompactor({ store: reopenedStore, summarize: async () => "旧任务已结束" }).compact({ conversationId: "resume-work", trigger: "manual", retainTokens: 1 });
+    expect((await reopened.buildModelContext("resume-work")).todoItems).toEqual([]);
+  });
+
+  it.each(["during-summary", "before-checkpoint", "before-archive", "after-archive"])("工具在 %s 完成时保留完成状态且不重新注入原始历史", async phase => {
+    const fixture = createFixture();
+    await fixture.journal.appendUser("late-work", { id: "goal", turnId: "goal", text: "RAW_OLD_TASK".repeat(100) });
+    const sink = fixture.journal.createRunSink({ conversationId: "late-work", runId: "late-run" });
+    const assistantEntryId = await sink.appendAssistant({ message: { role: "assistant", content: "正在处理", toolCalls: [
+      { id: "todo", name: "update_todo", arguments: "{}" }, { id: "clear", name: "update_todo", arguments: "{}" },
+      { id: "send", name: "channel_send_file", arguments: "{}" },
+    ] } });
+    await sink.appendTaskState!({ assistantEntryId, toolCallId: "todo", items: [{ id: "remaining", content: "发送报告", status: "pending" }] });
+    await sink.appendToolStarted!({ assistantEntryId, toolCallId: "send", toolName: "channel_send_file", sideEffect: "non_idempotent_side_effect", fingerprint: "send-once" });
+    await fixture.journal.appendUser("late-work", { id: "now", turnId: "now", text: "继续" });
+    const complete = async () => {
+      await sink.appendTaskState!({ assistantEntryId, toolCallId: "clear", items: [] });
+      await sink.appendToolResult({ assistantEntryId, message: { role: "tool", toolCallId: "send", name: "channel_send_file", content: "已发送" }, outcome: "success" });
+    };
+    const commit = fixture.store.appendCompactionCheckpoint.bind(fixture.store);
+    const checkpointSpy = vi.spyOn(fixture.store, "appendCompactionCheckpoint").mockImplementation(async (id, input) => {
+      if (phase === "before-checkpoint") await complete();
+      return commit(id, input);
+    });
+    const archive = new ConversationTranscriptArchive(fixture.store);
+    const archiveThrough = archive.archiveThrough.bind(archive);
+    const archiveSpy = vi.spyOn(archive, "archiveThrough").mockImplementation(async (id, through) => {
+      if (phase === "before-archive") await complete();
+      await archiveThrough(id, through);
+      if (phase === "after-archive") await complete();
+    });
+    const compactor = new ConversationTranscriptCompactor({ store: fixture.store, archive,
+      summarize: async () => { if (phase === "during-summary") await complete(); return "任务摘要"; },
+    });
+    try {
+      const pending = compactor.compact({ conversationId: "late-work", trigger: "manual", retainTokens: 1 });
+      if (phase === "before-checkpoint") await expect(pending).rejects.toMatchObject({ reason: "history_changed" });
+      else await pending;
+    } finally { checkpointSpy.mockRestore(); archiveSpy.mockRestore(); }
+    await closeConversationDatabases();
+    const context = await new ConversationJournalService(new ConversationTranscriptStore(fixture.root)).buildModelContext("late-work");
+    expect(context.todoItems).toEqual([]);
+    expect(context.uncertainEffects).toEqual([]);
+    expect(context.messages.at(-1)?.content).toBe("继续");
+    if (phase !== "before-checkpoint") expect(JSON.stringify(context.messages)).not.toContain("RAW_OLD_TASK");
+  });
+
+  it("自动压缩不会因旧首轮过长且近期尾部很短而永远找不到切点", async () => {
+    const fixture = createFixture();
+    await fixture.journal.appendUser("short-tail", { id: "old", turnId: "old", text: "很长的旧上下文。".repeat(3000) });
+    await fixture.journal.appendUser("short-tail", { id: "now", turnId: "now", text: "继续之前的任务" });
+    const result = await fixture.compactor.compact({ conversationId: "short-tail", trigger: "automatic", retainTokens: 1000 });
+    expect(result.compactedMessages).toHaveLength(2);
+    expect(result.compactedMessages.at(-1)?.content).toBe("继续之前的任务");
   });
 
   it("第一次压缩归档后仍可按热分支完成第二次压缩", async () => {

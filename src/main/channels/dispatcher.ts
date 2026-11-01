@@ -64,6 +64,7 @@ export interface ChannelConversationJournal {
     assistantTurnId: string;
   }): Promise<{
     userEntry: unknown;
+    stale?: boolean;
     assistantEntry?: unknown;
     latestReceipt?: unknown;
   } | null>;
@@ -162,6 +163,10 @@ export class ChannelDispatcher {
     const sessionId = makeSessionId(msg.channel, msg.chatId);
     // 读取设置会同步刷新限速器，必须发生在本轮额度消费之前。
     void this.settings;
+    // Freeze the target on arrival, not after an earlier turn's compaction/model wait.
+    // Both outcomes are handled immediately, even when the queue rejects this task.
+    const pendingContext = Promise.resolve(this.deps.context.resolveDispatchContext(sessionId))
+      .then(value => ({ value: { ...value } }), error => ({ error }));
     return this.deps.queue.run(`external:${sessionId}`, async () => {
       if (!this.deps.limiter.tryConsume(msg.channel, msg.senderId)) {
         console.warn(LOG, `限速: ${msg.channel}:${msg.senderId}`);
@@ -174,8 +179,13 @@ export class ChannelDispatcher {
         console.warn(LOG, "observeExternalChat 失败（继续处理消息）:", err);
       }
 
-      const context = await this.deps.context.resolveDispatchContext(sessionId);
-      const execute = () => this.processIncoming(msg, context);
+      const resolved = await pendingContext;
+      if ("error" in resolved) throw resolved.error;
+      const context = resolved.value;
+      const execute = async () => {
+        await this.deps.context.validateDispatchContext?.(context);
+        return this.processIncoming(msg, context);
+      };
       return context.boundConversationId
         ? this.deps.queue.run(`conversation:${context.boundConversationId}`, execute)
         : execute();
@@ -190,8 +200,8 @@ export class ChannelDispatcher {
   }
 
   /**
-   * Canonical CTA channel path. Target and all journal writes happen inside
-   * the keyed queue; a binding change can therefore only affect the next turn.
+   * Canonical CTA channel path. The arrival-time target is validated in the
+   * keyed queue; rebinding cannot move a message that is already waiting.
    */
   private async processIncomingCanonical(
     msg: IncomingMessage,
@@ -204,8 +214,6 @@ export class ChannelDispatcher {
     const runId = randomUUID();
     this.deps.context.recordIncomingSession(msg, context);
     rememberProactiveChannelRecipient(msg, context.sessionId);
-    this.broadcastIncoming(msg);
-    this.appendIncomingAuditLog(msg);
 
     const userEntry = await journal.appendUser(target.conversationId, {
       id: `channel:${turnId}`,
@@ -218,6 +226,9 @@ export class ChannelDispatcher {
       userTurnId: turnId,
       assistantTurnId,
     });
+    // A network replay of an archived/superseded unanswered message is not a new
+    // instruction. It must not answer the newer user turn using old attachments.
+    if (existingTurn?.stale && !existingTurn.assistantEntry) return null;
     if (existingTurn?.assistantEntry) {
       if (!existingTurn.latestReceipt) {
         try {
@@ -235,6 +246,8 @@ export class ChannelDispatcher {
       }
       return null;
     }
+    this.broadcastIncoming(msg);
+    this.appendIncomingAuditLog(msg);
     const userPresentation = {
       content: msg.text,
       channelSource: {

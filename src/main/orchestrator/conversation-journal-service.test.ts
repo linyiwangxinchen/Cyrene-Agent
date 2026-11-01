@@ -30,6 +30,46 @@ function userInput(turnId: string, text: string): JournalUserInput {
   return { id: `user:${turnId}`, turnId, text, revision: 1, at: 1_000 };
 }
 
+it("压缩归档后仍识别已处理的微信轮次和投递回执", async () => {
+  const { store, journal } = createJournal();
+  await journal.appendUser("wechat-archive", userInput("wechat-user-1", "处理这个请求".repeat(80)));
+  const sink = journal.createRunSink({ conversationId: "wechat-archive", runId: "wechat-run-1", assistantTurnId: "wechat-assistant-1" });
+  await sink.appendAssistant({ message: { role: "assistant", content: "已经完成并发送" } });
+  await journal.appendDeliveryReceipt("wechat-archive", { assistantTurnId: "wechat-assistant-1", channel: "wechat", status: "delivered", revision: 1 });
+  await journal.appendUser("wechat-archive", userInput("wechat-user-2", "继续下一个问题"));
+  await new ConversationTranscriptCompactor({ store, summarize: async () => "已完成旧请求" }).compact({ conversationId: "wechat-archive", trigger: "manual", retainTokens: 1 });
+  const reopened = new ConversationJournalService(store);
+  const state = await reopened.getChannelTurnState("wechat-archive", { userTurnId: "wechat-user-1", assistantTurnId: "wechat-assistant-1" });
+  expect(state?.assistantEntry).toBeDefined();
+  expect(state?.latestReceipt?.payload.status).toBe("delivered");
+  expect((await reopened.buildModelContext("wechat-archive")).messages.at(-1)?.content).toBe("继续下一个问题");
+});
+
+it("已压缩的旧检查点按需恢复任务状态，只读取一次归档且不回填模型历史", async () => {
+  const { root, store, journal } = createJournal();
+  await journal.appendUser("legacy-recovery", userInput("goal", "旧任务正文不应重新进入模型。".repeat(80)));
+  const sink = journal.createRunSink({ conversationId: "legacy-recovery", runId: "legacy-run", assistantTurnId: "legacy-assistant" });
+  const assistantEntryId = await sink.appendAssistant({ message: { role: "assistant", content: "还有一步", toolCalls: [{ id: "todo", name: "update_todo", arguments: "{}" }] } });
+  const todos = [{ id: "remaining", content: "完成最后一步", status: "pending" as const }];
+  await sink.appendTaskState!({ assistantEntryId, toolCallId: "todo", items: todos });
+  await sink.appendToolResult({ assistantEntryId, message: { role: "tool", toolCallId: "todo", name: "update_todo", content: "已更新" }, outcome: "success" });
+  await journal.appendUser("legacy-recovery", userInput("continue", "继续"));
+  await new ConversationTranscriptCompactor({ store, summarize: async () => "有一项任务尚未完成" }).compact({ conversationId: "legacy-recovery", trigger: "manual", retainTokens: 1 });
+  // Simulate the checkpoint format written before recovery state was introduced.
+  withConversationDatabase(root, db => db.prepare("UPDATE transcript_entries SET entry_json=json_remove(entry_json,'$.payload.recoveryState') WHERE conversation_id=? AND kind='compaction_checkpoint'").run("legacy-recovery"));
+  await closeConversationDatabases();
+  const reopenedStore = new ConversationTranscriptStore(root);
+  const audit = vi.spyOn(reopenedStore, "readAuditEntries");
+  const reopened = new ConversationJournalService(reopenedStore);
+  const first = await reopened.buildModelContext("legacy-recovery");
+  const second = await reopened.buildModelContext("legacy-recovery");
+  expect(first.todoItems).toEqual(todos);
+  expect(second.todoItems).toEqual(todos);
+  expect(audit).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(first.messages)).not.toContain("旧任务正文不应重新进入模型");
+  expect(first.messages.at(-1)?.content).toBe("继续");
+});
+
 async function corruptSnapshotProjection(root: string, conversationId: string): Promise<void> {
   const { getConversationDatabase } = await import("../storage/conversation-database-client");
   // 先确保会话行存在，再把投影写坏：快照解析失败时必须能从权威条目重建

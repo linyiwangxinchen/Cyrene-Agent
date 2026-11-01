@@ -36,6 +36,9 @@ export class ConversationTranscriptStore {
   }
   read(id: string): Promise<TranscriptSnapshotV2> { return this.database.call('transcript.read', id); }
   readAuditEntries(id: string): Promise<TranscriptEntry[]> { return this.database.call('transcript.audit', id); }
+  readChannelTurnEntries(id: string, turn: { userTurnId: string; assistantTurnId: string }): Promise<{ entries: TranscriptEntry[]; stale: boolean }> {
+    return this.database.call('transcript.channelTurn', id, turn);
+  }
   readShellCompletionEntries(id: string, includeSourceBranch = false): Promise<TranscriptEntry[]> {
     return this.database.call('transcript.shellEvents', id, includeSourceBranch);
   }

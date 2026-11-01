@@ -1164,6 +1164,32 @@ describe("agui-bridge session run guard", () => {
     return { bridge, runHandler };
   }
 
+  it.each([true, false])("压缩准备阶段也能取消，指定 runId=%s", async withRunId => {
+    mocks.getSession.mockReturnValue({ id: "preflight-cancel", mode: "chat", messages: [] });
+    let entered!: () => void;
+    let rejectPreparation!: (error: Error) => void;
+    let signal: AbortSignal | undefined;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const { bridge, runHandler } = await setupBridge(async (input?: { signal?: AbortSignal }) => {
+      signal = input!.signal;
+      entered();
+      await new Promise<void>((_resolve, reject) => {
+        rejectPreparation = reject;
+        signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+      });
+      return defaultBuildOptions();
+    });
+    const pending = runHandler({ sender: makeSender() }, { sessionId: "preflight-cancel", assistantTurnId: "preflight-assistant" }).catch((error: Error) => error);
+    await started;
+    const runId = bridge.__getSessionActiveRunForTest("preflight-cancel");
+    try {
+      mocks.handlers.get(IPC.AGUI_CANCEL)!({}, withRunId ? runId : undefined);
+      expect(signal?.aborted).toBe(true);
+    } finally { rejectPreparation(new Error("test cleanup")); await pending; }
+    expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
+    expect(bridge.__getSessionActiveRunForTest("preflight-cancel")).toBeUndefined();
+  });
+
   it("serializes Learn vault runs and releases the slot after cancellation", async () => {
     mocks.getSession.mockImplementation((id: string) => ({ id, mode: "learn", messages: [], workspaceBinding: { workspaceRoot: mocks.userDataRoot, boundAt: 1 } }));
     mocks.skipDefaultRunFinished = true; mocks.neverComplete = true; mocks.completeOnAbort = true;

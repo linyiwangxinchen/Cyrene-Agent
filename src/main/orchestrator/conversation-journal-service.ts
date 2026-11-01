@@ -25,6 +25,7 @@ import type {
 } from "./conversation-transcript-types";
 import { assertValidPresentationPatch } from "./conversation-transcript-types";
 import { createTranscriptSink, type TranscriptSink } from "./transcript-sink";
+import { recoverLegacyCompactionState } from "./compaction-recovery";
 
 export interface JournalUserInput {
   turnId: string;
@@ -38,6 +39,7 @@ export interface JournalUserInput {
 
 export interface ChannelTurnState {
   userEntry: TranscriptEntry;
+  stale?: boolean;
   assistantEntry?: Extract<TranscriptEntry, { kind: "assistant" }>;
   latestReceipt?: Extract<TranscriptEntry, { kind: "delivery_receipt" }>;
 }
@@ -324,7 +326,8 @@ export class ConversationJournalService {
     await this.runReader.refresh?.();
     await this.store.waitForIdle(conversationId);
     const snapshot = await this.store.read(conversationId);
-    return buildModelContextFromCompactedView(snapshot.entries, this.runReader);
+    const recovery = await recoverLegacyCompactionState(this.store, conversationId, snapshot.entries, this.runReader);
+    return buildModelContextFromCompactedView(snapshot.entries, this.runReader, recovery);
   }
 
   /**
@@ -336,17 +339,17 @@ export class ConversationJournalService {
     conversationId: string,
     input: { userTurnId: string; assistantTurnId: string },
   ): Promise<ChannelTurnState | null> {
-    const snapshot = await this.store.read(conversationId);
-    const userEntry = snapshot.entries.find(
+    const { entries, stale } = await this.store.readChannelTurnEntries(conversationId, input);
+    const userEntry = entries.find(
       (entry) => entry.kind === "user" && entry.turnId === input.userTurnId,
     );
     if (!userEntry) return null;
-    const assistantEntry = snapshot.entries.find(
+    const assistantEntry = entries.find(
       (entry): entry is Extract<TranscriptEntry, { kind: "assistant" }> =>
         entry.kind === "assistant" && entry.turnId === input.assistantTurnId && entry.seq > userEntry.seq,
     );
-    if (!assistantEntry) return { userEntry };
-    const receipts = snapshot.entries.filter(
+    if (!assistantEntry) return { userEntry, ...(stale ? { stale: true } : {}) };
+    const receipts = entries.filter(
       (entry): entry is Extract<TranscriptEntry, { kind: "delivery_receipt" }> =>
         entry.kind === "delivery_receipt" && entry.payload.assistantTurnId === input.assistantTurnId && entry.seq > assistantEntry.seq,
     );
@@ -361,7 +364,7 @@ export class ConversationJournalService {
       },
       undefined,
     );
-    return { userEntry, assistantEntry, ...(latestReceipt ? { latestReceipt } : {}) };
+    return { userEntry, ...(stale ? { stale: true } : {}), assistantEntry, ...(latestReceipt ? { latestReceipt } : {}) };
   }
 
   /** 记录外部渠道送达结果；失败回执只由模型投影合成为内部提示。 */

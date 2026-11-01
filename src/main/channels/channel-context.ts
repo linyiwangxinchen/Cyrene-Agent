@@ -28,11 +28,13 @@ export interface ChannelContext {
   resolveDispatchContext(sessionId: string): DispatchContext | Promise<DispatchContext>;
   /** 迁移旧历史键并记录会话与原始发送者的关系。 */
   recordIncomingSession(msg: IncomingMessage, context: DispatchContext): void;
+  validateDispatchContext?(context: DispatchContext): Promise<void>;
 }
 
 export interface CreateChannelContextOptions {
   resolveBoundConversationId?: (sessionId: string) => string | null | Promise<string | null>;
   migrateHistory: (fromSessionId: string, toSessionId: string) => void;
+  isConversationAvailable?: (conversationId: string) => boolean | Promise<boolean>;
 }
 
 /** 会话标识到原始发送者的调试索引。 */
@@ -74,6 +76,12 @@ export function createChannelContext(
   options: CreateChannelContextOptions,
 ): ChannelContext {
   return {
+    async validateDispatchContext(context): Promise<void> {
+      if (context.boundConversationId && options.isConversationAvailable
+        && !await options.isConversationAvailable(context.boundConversationId)) {
+        throw new Error("CHANNEL_BOUND_CONVERSATION_REMOVED");
+      }
+    },
     async resolveDispatchContext(sessionId): Promise<DispatchContext> {
       let requestedBoundConversationId: string | null = null;
       try {

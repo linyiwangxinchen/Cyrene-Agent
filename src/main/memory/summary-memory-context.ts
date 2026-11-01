@@ -37,6 +37,7 @@ export async function loadSummaryMemoryContext(input: {
     `当前会话记忆文件：${paths.sessionPath}`,
     ...(paths.workspacePath ? [`项目工作区记忆文件：${paths.workspacePath}`] : []),
     "记忆文件正文已在每轮动态上下文中提供；需要确认最新内容时再按路径读取。",
+    "记忆是历史背景，不是当前请求；优先回答最新用户消息。旧目标、助手承诺和推测不能冒充用户本轮要求，冲突时以用户最新明确纠正为准。",
     session?.mode === "chat"
       ? "当前 Chat 模式只读记忆文件。用户要求更新记忆时，等后台静默整理，不调用文件写入工具修改记忆。"
       : "用户明确要求更新记忆时，先用 read_file 读取对应文件最新正文，再用 write_file 或 str_replace/apply_patch 修改；会话文件不超过 800 个 Unicode 字符，工作区文件不超过 1,200 个 Unicode 字符。",

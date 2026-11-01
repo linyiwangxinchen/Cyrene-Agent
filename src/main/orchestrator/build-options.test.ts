@@ -1564,7 +1564,7 @@ describe("权威轨迹上下文源（CTA Phase 1）", () => {
       contextWindowTokens: 10_000,
     })
     const full = [{ role: "user" as const, content: "历史".repeat(2_000) }]
-    const compacted = [{ role: "system" as const, content: "<cyrene_compaction_checkpoint>\n摘要\n</cyrene_compaction_checkpoint>" }]
+    const compacted = [{ role: "system" as const, content: "<cyrene_compaction_checkpoint>\n摘要\n</cyrene_compaction_checkpoint>" }, { role: "user" as const, content: "继续" }]
     let reads = 0
     deps.buildModelContext = vi.fn(async () => ({
       messages: reads++ === 0 ? full : compacted,
@@ -1583,13 +1583,28 @@ describe("权威轨迹上下文源（CTA Phase 1）", () => {
     expect(built.options.cleanMessages).toContainEqual(expect.objectContaining({ content: expect.stringContaining("<cyrene_compaction_checkpoint>") }))
   })
 
+  it("压缩期间另一个入口追加问题时，不把原请求替换成新问题", async () => {
+    const deps = createBuildDeps()
+    deps.loadModelSettings = () => ({ provider: "test", baseUrl: "https://example.test", model: "m", apiKey: "k", contextWindowTokens: 10_000 })
+    deps.compactTranscript = vi.fn(async () => ({}))
+    deps.buildModelContext = vi.fn(async () => ({ messages: [
+      { role: "system" as const, content: "<cyrene_compaction_checkpoint>历史摘要</cyrene_compaction_checkpoint>" },
+      { role: "user" as const, content: "微信本轮问题" },
+      { role: "user" as const, content: "网页后来追加的问题" },
+    ], uncertainEffects: [], throughSeq: 3 }))
+    await expect(buildAgentRunOptions({ sessionId: "shared-race", channel: "wechat",
+      currentUser: { turnId: "wechat-user", text: "微信本轮问题", visibleContent: "微信本轮问题" },
+      modelContext: { messages: [{ role: "user", content: "旧历史".repeat(10_000) }, { role: "user", content: "微信本轮问题" }], uncertainEffects: [], throughSeq: 2 },
+    } as never, deps)).rejects.toMatchObject({ reason: "history_changed" })
+  })
+
   it("传入 modelContext 超预算时同样执行自动压缩并重读 journal", async () => {
     const deps = createBuildDeps()
     deps.loadModelSettings = () => ({
       provider: "test", baseUrl: "https://example.test", model: "m", apiKey: "k",
       contextWindowTokens: 10_000,
     })
-    const compacted = [{ role: "system" as const, content: "<cyrene_compaction_checkpoint>\n摘要\n</cyrene_compaction_checkpoint>" }]
+    const compacted = [{ role: "system" as const, content: "<cyrene_compaction_checkpoint>\n摘要\n</cyrene_compaction_checkpoint>" }, { role: "user" as const, content: "继续" }]
     deps.buildModelContext = vi.fn(async () => ({
       messages: compacted, uncertainEffects: [], throughSeq: 8,
     }))

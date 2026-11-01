@@ -1376,7 +1376,12 @@ export function registerAgUiIpc(
     // 每个 run 持有独立 AbortController，cancel 一个 runId 绝不影响其他 run。
     const abortRun = (id: string): void => {
       for (const [sessionId, active] of sessionActiveRuns) {
-        if (active.runId === id) inbox.suppressWake(sessionId);
+        if (active.runId === id) {
+          inbox.suppressWake(sessionId);
+          // The session guard exists before async buildOptions/compaction;
+          // activeRuns is populated only after the model Observable starts.
+          active.abort();
+        }
       }
       const run = activeRuns.get(id);
       if (run && !run.abortController.signal.aborted) {
@@ -1391,7 +1396,7 @@ export function registerAgUiIpc(
     if (runId) {
       abortRun(runId);
     } else {
-      for (const id of [...activeRuns.keys()]) {
+      for (const id of new Set([...activeRuns.keys(), ...[...sessionActiveRuns.values()].map(run => run.runId)])) {
         abortRun(id);
       }
     }

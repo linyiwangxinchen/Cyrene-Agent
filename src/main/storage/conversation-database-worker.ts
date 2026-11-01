@@ -335,6 +335,13 @@ async function execute(method: string, args: any[]): Promise<unknown> {
     await importTranscript(id);
     if (name === 'read')
       return database.snapshot(id);
+    if (name === 'channelTurn') {
+      const entries = database.entries(id, true, undefined, args[1]);
+      const user = entries.find(entry => entry.kind === 'user');
+      const archived = Number(database.db.prepare('SELECT archived_through FROM conversations WHERE id=?').get(id)?.archived_through ?? 0);
+      const laterUser = user && database.db.prepare("SELECT 1 FROM transcript_entries WHERE conversation_id=? AND kind='user' AND seq>? LIMIT 1").get(id, user.seq);
+      return { entries, stale: Boolean(user && (user.seq <= archived || laterUser)) };
+    }
     if (name === 'shellEvents')
       return database.entries(id, true, args[1]
         ? ['background_event_pending', 'background_event', 'background_event_retired', 'user', 'assistant', 'turn_rewind', 'turn_tombstone']
@@ -355,6 +362,9 @@ async function execute(method: string, args: any[]): Promise<unknown> {
         const prefix = entries.filter(e => e.seq <= p.sourceThroughSeq);
         if (createHash('sha256').update(JSON.stringify(prefix)).digest('hex') !== p.sourceDigest || entries.some(e => e.seq > p.baseThroughSeq && ['compaction_checkpoint', 'turn_rewind', 'turn_tombstone', 'background_event_retired'].includes(e.kind)))
           throw new ConversationStoreError('TRANSCRIPT_COMPACTION_REQUIRED');
+        if (p.recoveryState && entries.some(e => e.seq > (p.recoveryThroughSeq ?? p.baseThroughSeq)
+          && ['task_state', 'tool_started', 'tool_result', 'effect_resolution'].includes(e.kind)))
+          throw new ConversationStoreError('TRANSCRIPT_COMPACTION_REQUIRED');
         return database.append(id, input);
       });
     if (name === 'archive')
@@ -370,6 +380,11 @@ async function execute(method: string, args: any[]): Promise<unknown> {
         if (!checkpoint || checkpoint.kind !== 'compaction_checkpoint')
           throw new Error('TRANSCRIPT_ARCHIVE_BOUNDARY_NOT_COMMITTED');
         if (entries.some(e => e.kind === 'background_event_retired' && e.seq > checkpoint.payload.baseThroughSeq))
+          throw new ConversationStoreError('TRANSCRIPT_COMPACTION_REQUIRED');
+        // A result may arrive between committing the checkpoint and archiving.
+        // Keep canonical rows readable until a new checkpoint includes that state.
+        if (checkpoint.payload.recoveryState && entries.some(e => e.seq > (checkpoint.payload.recoveryThroughSeq ?? checkpoint.payload.baseThroughSeq)
+          && ['task_state', 'tool_started', 'tool_result', 'effect_resolution'].includes(e.kind)))
           throw new ConversationStoreError('TRANSCRIPT_COMPACTION_REQUIRED');
         database.db.prepare('UPDATE conversations SET archived_through=? WHERE id=?').run(boundary, id);
       });

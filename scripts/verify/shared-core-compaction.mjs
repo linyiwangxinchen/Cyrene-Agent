@@ -22,6 +22,7 @@ const responsesModel = 'gpt-6.1-sol';
 const markers = ['ORIGINAL_GOAL', 'TOOL_FACT', 'FINAL_CONSTRAINT'];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 let providerMode = 'success', transientFailures = 0;
+const stalledSummaries = new Set();
 let handle, socket, baseUrl, cookie = '', clientToken = '';
 
 function estimateTextTokens(text) {
@@ -80,6 +81,13 @@ const provider = createServer(async (request, response) => {
         + (tool.function?.description ?? tool.description ?? '') + JSON.stringify(tool.function?.parameters ?? tool.parameters ?? {})), 0),
       maxOutputTokens: body.max_completion_tokens ?? body.max_tokens, bytes: Buffer.byteLength(raw), text };
     requests.push(item);
+    if (providerMode === 'hang' && body.stream !== true) {
+      stalledSummaries.add(response);
+      response.on('close', () => stalledSummaries.delete(response));
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.flushHeaders();
+      return;
+    }
     // A real provider rejects a request that exceeds its advertised context window.
     assert.ok([model, automaticModel].includes(item.model), 'must use the conversation model, not the global/profile default');
     assert.equal(item.authorization, 'Bearer fixture-compaction-key');
@@ -238,6 +246,7 @@ try {
   } }));
   for (const id of ['long-success', 'auth-failure', 'empty-failure', 'transient-retry']) await seedSession(id, id === 'long-success');
   await seedSession('automatic-run', true, true);
+  await seedSession('cancel-preflight', true);
   await seedSession('responses-success', true, false, true);
   await seedSession('responses-incomplete', false, false, true);
   await launch(true);
@@ -325,6 +334,29 @@ try {
     assert.deepEqual((await invoke('chats:get', 'responses-incomplete')).messages, before.messages);
   });
 
+  await check('Cancel during pre-run compaction closes a stalled model request and preserves the conversation', async () => {
+    providerMode = 'hang';
+    const start = events.length;
+    const before = await invoke('chats:get', 'cancel-preflight');
+    let settled = false;
+    const pending = invoke('agui:run', { sessionId: 'cancel-preflight',
+      currentUser: { turnId: randomUUID(), text: '先确认最新问题，不要继续旧任务。', visibleContent: '先确认最新问题，不要继续旧任务。' },
+      assistantTurnId: randomUUID(), styleId: 'default' })
+      .then(value => { settled = true; return value; }, error => { settled = true; return error; });
+    await waitFor(() => stalledSummaries.size > 0, 'summary request stalled before AGUI model startup');
+    await invoke('agui:cancel'); // No model-run ack exists yet.
+    await waitFor(() => settled && events.slice(start).some(event => event.channel === 'chats:compaction-phase'
+      && event.args[0]?.sessionId === 'cancel-preflight' && event.args[0]?.phase === 'finished'), 'preflight cancellation settles');
+    await pending;
+    await waitFor(() => stalledSummaries.size === 0, 'model HTTP request is aborted');
+    assert.equal(databaseSnapshot('cancel-preflight').checkpoints.length, 0);
+    const after = await invoke('chats:get', 'cancel-preflight');
+    for (const original of before.messages) assert.ok(after.messages.some(message => message.id === original.id && message.content === original.content));
+    providerMode = 'success';
+    const retry = await invoke('chats:compact', { sessionId: 'cancel-preflight', retainTokens: 1 });
+    assert.equal(retry.ok, true, JSON.stringify(retry));
+  });
+
   await check('Real AGUI Work run compacts inside Harness and continues to a successful streamed reply', async () => {
     providerMode = 'success';
     const start = events.length, logStart = logs.length, requestStart = requests.length;
@@ -384,6 +416,7 @@ try {
   console.error('Isolated data:', dataDir);
   process.exitCode = 1;
 } finally {
+  for (const response of stalledSummaries) response.destroy();
   socket?.close();
   try { if (handle) await handle.close(); }
   finally { await new Promise(resolve => provider.close(resolve)); }

@@ -16,6 +16,7 @@ import {
   type TranscriptRunReader,
 } from "./conversation-transcript-projection";
 import type { TranscriptEntry } from "./conversation-transcript-types";
+import { recoverLegacyCompactionState } from "./compaction-recovery";
 
 export type { MaterializedTranscript, TranscriptRunReader } from "./conversation-transcript-projection";
 export {
@@ -46,7 +47,8 @@ export async function buildModelContext(input: {
   // `retainTokens` remains in the compatibility signature; the budget decision
   // now belongs to the transcript compactor and never drops history implicitly.
   void input.retainTokens;
-  const materialized = buildModelContextFromCompactedView(snapshot.entries, input.runReader);
+  const recovery = await recoverLegacyCompactionState(input.store, input.conversationId, snapshot.entries, input.runReader);
+  const materialized = buildModelContextFromCompactedView(snapshot.entries, input.runReader, recovery);
   return {
     messages: materialized.messages,
     uncertainEffects: materialized.uncertainEffects,

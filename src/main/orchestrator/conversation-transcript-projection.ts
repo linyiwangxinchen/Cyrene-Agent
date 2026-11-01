@@ -18,8 +18,14 @@ import type {
   TranscriptEntry,
   TranscriptPresentationPatch,
   TranscriptCompactionImageReference,
+  TranscriptCompactionRecoveryState,
 } from "./conversation-transcript-types";
 import type { ChatMessage, ChatMessageContent, ToolCall } from "./vendors/types";
+
+export interface CompactionRecoveryFallback {
+  checkpointId: string;
+  state: TranscriptCompactionRecoveryState;
+}
 
 export interface TranscriptRunReader {
   refresh?(): Promise<void>;
@@ -327,6 +333,7 @@ function materializeRecoveryState(
   activeNodes: ActiveNode[],
   runReader: TranscriptRunReader,
   transcriptEffects: UncertainEffect[],
+  seed?: TranscriptCompactionRecoveryState,
 ): MaterializedRecoveryState {
   const activeAssistantIds = new Set(activeNodes
     .filter((node): node is Extract<ActiveNode, { kind: "assistant" }> => node.kind === "assistant")
@@ -343,7 +350,10 @@ function materializeRecoveryState(
 
   let todoItems = taskState ? taskState.payload.items : undefined;
   let todoItemsSource: MaterializedRecoveryState["todoItemsSource"] = taskState ? "transcript" : undefined;
-  if (!taskState) {
+  if (!taskState && seed?.todoItems !== undefined) {
+    todoItems = structuredClone(seed.todoItems);
+    todoItemsSource = "transcript";
+  } else if (!taskState) {
     const assistantNodes = activeNodes.filter(
       (node): node is Extract<ActiveNode, { kind: "assistant" }> => node.kind === "assistant",
     );
@@ -374,7 +384,15 @@ function materializeRecoveryState(
     }
   }
 
-  const uncertainEffects = [...transcriptEffects];
+  const confirmed = new Set(entries.filter(entry => entry.kind === "tool_result" && entry.payload.outcome !== "unknown")
+    .map(entry => `${entry.runId ?? "unknown-run"}:${(entry as Extract<TranscriptEntry, { kind: "tool_result" }>).payload.toolCallId}`));
+  const inherited = new Map((seed?.uncertainEffects ?? []).filter(effect => !confirmed.has(effect.id))
+    .map(effect => [effect.id, structuredClone(effect)]));
+  for (const effect of transcriptEffects) {
+    const previous = inherited.get(effect.id);
+    inherited.set(effect.id, previous?.fingerprint === effect.fingerprint ? { ...previous, ...effect } : { ...effect });
+  }
+  const uncertainEffects = [...inherited.values()];
   const seenEffectIds = new Set(uncertainEffects.map((effect) => effect.id));
   const assistantNodes = activeNodes.filter(
     (node): node is Extract<ActiveNode, { kind: "assistant" }> => node.kind === "assistant",
@@ -417,6 +435,7 @@ function materializeRecoveryState(
   }
 
   for (const effect of uncertainEffects) {
+    if (effect.repeatAuthorization && consumedAuthorizationIds.has(effect.repeatAuthorization.id)) delete effect.repeatAuthorization;
     const resolution = latestResolution.get(effect.id);
     if (!resolution || resolution.payload.fingerprint !== effect.fingerprint
       || consumedAuthorizationIds.has(resolution.payload.authorizationId)) continue;
@@ -594,9 +613,9 @@ function checkpointCoversActiveBranch(
     && beforeCheckpoint.every((node, index) => node.entry.id === finalCovered[index]?.entry.id);
 }
 
-function latestValidCompaction(
+export function latestValidCompaction(
   entries: TranscriptEntry[],
-  active: ActiveTranscript,
+  active: ActiveTranscript = reduceActiveTranscript(entries),
 ): Extract<TranscriptEntry, { kind: "compaction_checkpoint" }> | undefined {
   return entries
     .filter((entry): entry is Extract<TranscriptEntry, { kind: "compaction_checkpoint" }> => entry.kind === "compaction_checkpoint")
@@ -1141,6 +1160,7 @@ export function buildFullModelContextWithSources(
 export function buildCompactionSourceView(
   entries: TranscriptEntry[],
   runReader: TranscriptRunReader,
+  fallback?: CompactionRecoveryFallback,
 ): MaterializedTranscriptWithSources & { previousReplacement?: ChatMessage } {
   const active = reduceActiveTranscript(entries);
   const checkpoint = latestValidCompaction(entries, active);
@@ -1150,7 +1170,8 @@ export function buildCompactionSourceView(
   const suffix = active.nodes.filter((node) => node.entry.seq > checkpoint.payload.sourceThroughSeq);
   const materialized = materializeNodes(suffix, runReader);
   const allActiveMaterialized = materializeNodes(active.nodes, runReader);
-  const recovery = materializeRecoveryState(entries, active.nodes, runReader, allActiveMaterialized.uncertainEffects);
+  const recovery = materializeRecoveryState(entries, active.nodes, runReader, allActiveMaterialized.uncertainEffects,
+    checkpoint.payload.recoveryState ?? (fallback?.checkpointId === checkpoint.id ? fallback.state : undefined));
   const delivery = failedDeliveryNotesWithSources(entries, active.nodes, checkpoint.payload.sourceThroughSeq);
   const interruption = interruptionNotesWithSources(entries, active.nodes, checkpoint.payload.sourceThroughSeq);
   const suffixWithInternalNotes = insertInternalNotes(materialized, [...delivery.notes, ...interruption.notes]);
@@ -1241,6 +1262,7 @@ export function isUserTurnRewindableInModelView(
 export function buildModelContextFromCompactedView(
   entries: TranscriptEntry[],
   runReader: TranscriptRunReader,
+  fallback?: CompactionRecoveryFallback,
 ): MaterializedTranscript {
   const active = reduceActiveTranscript(entries);
   const checkpoint = latestValidCompaction(entries, active);
@@ -1253,7 +1275,8 @@ export function buildModelContextFromCompactedView(
   // Phase 1 guard semantics even when their originating tool round is inside
   // the compacted prefix.
   const allActiveMaterialized = materializeNodes(active.nodes, runReader);
-  const recovery = materializeRecoveryState(entries, active.nodes, runReader, allActiveMaterialized.uncertainEffects);
+  const recovery = materializeRecoveryState(entries, active.nodes, runReader, allActiveMaterialized.uncertainEffects,
+    checkpoint.payload.recoveryState ?? (fallback?.checkpointId === checkpoint.id ? fallback.state : undefined));
   const delivery = failedDeliveryNotesWithSources(entries, active.nodes, checkpoint.payload.sourceThroughSeq);
   const interruption = interruptionNotesWithSources(entries, active.nodes, checkpoint.payload.sourceThroughSeq);
   const suffixWithInternalNotes = insertInternalNotes(materialized, [...delivery.notes, ...interruption.notes]);

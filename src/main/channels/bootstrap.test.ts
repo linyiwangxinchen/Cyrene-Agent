@@ -11,6 +11,8 @@ const channelMocks = vi.hoisted(() => ({
   flush: vi.fn(),
   listSessions: vi.fn(),
   getSession: vi.fn(),
+  getSessionRecord: vi.fn(),
+  resolveSessionModelSettings: vi.fn(() => ({ provider: "bound-provider", model: "bound-model", contextWindowTokens: 16000, multimodal: true })),
   buildAndRunAgent: undefined as ((...args: unknown[]) => Promise<unknown>) | undefined,
   dispatcherDeps: [] as Array<Record<string, any>>,
   agentError: undefined as Error | undefined,
@@ -77,6 +79,7 @@ vi.mock("./conversation-binding-store", () => ({
 vi.mock("../chats/chats-store", () => ({
   listSessions: channelMocks.listSessions,
   getSession: channelMocks.getSession,
+  getSessionRecord: channelMocks.getSessionRecord,
 }));
 
 // 避免拉起真实 tool registry（会级联 import RAG 等重依赖）
@@ -113,6 +116,7 @@ vi.mock("../settings/settings-facade", () => ({
 vi.mock("../settings/model-settings", () => ({
   loadModelSettings: () => ({}),
   resolveModelSettingsProfile: () => ({ multimodal: false }),
+  resolveSessionModelSettings: channelMocks.resolveSessionModelSettings,
 }));
 vi.mock("./agent-input", () => ({
   buildChannelAttachmentInputs: async () => ({ attachments: [], imageAttachments: [] }),
@@ -161,9 +165,28 @@ beforeEach(() => {
   channelMocks.agentHarnessEvents = [];
   channelMocks.agentResult = { reply: "渠道回复", toolResults: [] };
   channelMocks.dispatcherDeps.length = 0;
+  channelMocks.getSessionRecord.mockResolvedValue(null);
 });
 
 describe("createChannelsSubsystem lifecycle", () => {
+  it("绑定微信沿用目标会话模型档案，压缩与图片路由使用同一份设置", async () => {
+    const session = { id: "desktop-1", modelProfileId: "bound-profile", model: "bound-model" };
+    channelMocks.getSessionRecord.mockResolvedValue(session);
+    const runtime = makeAgentRuntime();
+    createChannelsSubsystem({ ...makeChannelsDeps(), agentRuntime: runtime });
+    await channelMocks.buildAndRunAgent!({ channel: "wechat", senderId: "user", chatId: "user", text: "本轮问题", at: new Date() }, {
+      sessionId: "channel:wechat:test", target: { conversationId: "desktop-1" },
+      modelContext: { messages: [{ role: "user", content: "本轮问题" }], uncertainEffects: [], throughSeq: 1 },
+      runId: "bound-run", userTurnId: "bound-user", assistantTurnId: "bound-assistant",
+    });
+    expect(channelMocks.getSessionRecord).toHaveBeenCalledWith("desktop-1");
+    expect(channelMocks.resolveSessionModelSettings).toHaveBeenCalledWith({}, session);
+    expect(runtime.buildOptions).toHaveBeenCalledWith(expect.objectContaining({
+      sessionModelSettings: expect.objectContaining({ model: "bound-model", contextWindowTokens: 16000 }),
+      workspaceBindingSessionId: null,
+    }));
+    expect(vi.mocked(runtime.buildOptions).mock.calls[0]![0]).not.toHaveProperty("style");
+  });
   it("为每个子系统保留独立的调度器依赖", async () => {
     const firstRuntime = makeAgentRuntime();
     const secondRuntime = makeAgentRuntime();

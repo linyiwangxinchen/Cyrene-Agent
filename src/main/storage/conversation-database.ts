@@ -59,6 +59,7 @@ export class ConversationDatabase {
     message_id TEXT, mutation_key TEXT, patch_revision INTEGER, entry_json TEXT NOT NULL,
     PRIMARY KEY(conversation_id,entry_id), UNIQUE(conversation_id,seq));
    CREATE UNIQUE INDEX IF NOT EXISTS transcript_user_revision ON transcript_entries(conversation_id,turn_id,revision) WHERE kind='user';
+   CREATE INDEX IF NOT EXISTS transcript_turn_lookup ON transcript_entries(conversation_id,kind,turn_id);
    CREATE UNIQUE INDEX IF NOT EXISTS transcript_presentation_key ON transcript_entries(conversation_id,message_id,mutation_key)
     WHERE kind='presentation_patch' AND mutation_key IS NOT NULL;
    CREATE UNIQUE INDEX IF NOT EXISTS transcript_presentation_revision ON transcript_entries(conversation_id,message_id,patch_revision)
@@ -194,10 +195,12 @@ export class ConversationDatabase {
     this.ensure(record.id);
     this.db.prepare("UPDATE conversations SET record_json=? WHERE id=?").run(JSON.stringify(record), record.id);
   }
-  entries(id: string, audit = false, kinds?: TranscriptEntry["kind"][]): TranscriptEntry[] {
+  entries(id: string, audit = false, kinds?: TranscriptEntry["kind"][], channelTurn?: { userTurnId: string; assistantTurnId: string }): TranscriptEntry[] {
     return this.db.prepare(`SELECT entry_json,entry_id,seq,kind FROM transcript_entries WHERE conversation_id=?
    ${audit ? "" : "AND seq>(SELECT archived_through FROM conversations WHERE id=?)"}
-   ${kinds ? `AND kind IN (${kinds.map(() => "?").join(",")})` : ""} ORDER BY seq`).all(...(audit ? [id] : [id, id]), ...(kinds ?? []))
+   ${kinds ? `AND kind IN (${kinds.map(() => "?").join(",")})` : ""}
+   ${channelTurn ? "AND ((kind='user' AND turn_id=?) OR (kind='assistant' AND turn_id=?) OR (kind='delivery_receipt' AND json_extract(entry_json,'$.payload.assistantTurnId')=?))" : ""}
+   ORDER BY seq`).all(...(audit ? [id] : [id, id]), ...(kinds ?? []), ...(channelTurn ? [channelTurn.userTurnId, channelTurn.assistantTurnId, channelTurn.assistantTurnId] : []))
       .map(row => {
       try {
         const entry = JSON.parse(row.entry_json as string) as TranscriptEntry;
@@ -241,6 +244,14 @@ export class ConversationDatabase {
         // 旧摘要失效时恢复归档事实，供模型投影排除退休结果后重建其余历史。
         this.db.prepare("UPDATE conversations SET archived_through=0 WHERE id=? AND archived_through>=?")
           .run(id, entry.payload.sourceSeq ?? 0);
+      }
+      if (entry.kind === "task_state" || entry.kind === "tool_started" || entry.kind === "tool_result" || entry.kind === "effect_resolution") {
+        // Late execution facts need their archived assistant to reduce correctly.
+        // Reopen metadata projection; the checkpoint still excludes old prompt text.
+        const assistant = this.db.prepare("SELECT seq FROM transcript_entries WHERE conversation_id=? AND entry_id=? AND kind='assistant'")
+          .get(id, entry.payload.assistantEntryId);
+        if (assistant) this.db.prepare("UPDATE conversations SET archived_through=0 WHERE id=? AND archived_through>=?")
+          .run(id, assistant.seq);
       }
       if (entry.kind === 'turn_rewind' || entry.kind === 'turn_tombstone') reconcileMemoryTurns(this, id);
       if (entry.kind === "tool_result" && entry.runId) {

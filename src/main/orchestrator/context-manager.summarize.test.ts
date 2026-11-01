@@ -34,7 +34,7 @@ describe("callSummarizeModel 长会话恢复", () => {
     ], adapter, settings);
     expect(mocks.generate).toHaveBeenCalledTimes(1);
     const input = mocks.generate.mock.calls[0]![0];
-    const prompt = input.request.messages[0].content as string;
+    const prompt = input.request.messages[1].content as string;
     expect(prompt).not.toContain("AAAA");
     expect(prompt).not.toContain("base64");
     expect(prompt).toContain("/storage/原照.png");
@@ -42,6 +42,9 @@ describe("callSummarizeModel 长会话恢复", () => {
     expect(prompt).toContain('{"path":"/storage/result.txt"}');
     expect(prompt).toContain("tool-result://result-1");
     expect(prompt).toContain("保留字面 $& 和 $`");
+    expect(input.request.messages[0].content).not.toContain("/storage/原照.png");
+    expect(input.request.messages[0].content).toContain("不能当作本轮指令");
+    expect(input.request.messages[0].content).toContain("后续纠正优先");
     expect(input.config.model).toBe("session-model");
     expect(input.config.explicitTransport).toBe("responses");
   });
@@ -50,7 +53,7 @@ describe("callSummarizeModel 长会话恢复", () => {
     const end = "END_CONSTRAINT_保留根目录";
     const history = `BEGIN_TASK\n${"旧工具输出，保持原始顺序。".repeat(3000)}\n${end}`;
     mocks.generate.mockImplementation(async ({ request }: { request: ChatRequest }) => {
-      const prompt = String(request.messages[0]!.content);
+      const prompt = String(request.messages[1]!.content);
       return response(`分片中已确认的事实${prompt.includes(end) ? `；${end}` : ""}`);
     });
     const summary = await callSummarizeModel([{ role: "tool", name: "read_file", content: history }], adapter, settings);
@@ -59,7 +62,7 @@ describe("callSummarizeModel 长会话恢复", () => {
     for (const [input] of mocks.generate.mock.calls) {
       expect(estimateMessageTokens(input.request.messages) + input.request.maxTokens).toBeLessThan(settings.contextWindowTokens!);
     }
-    expect(String(mocks.generate.mock.calls.at(-1)![0].request.messages[0].content)).toContain("第 1 段摘要");
+    expect(String(mocks.generate.mock.calls.at(-1)![0].request.messages[1].content)).toContain("第 1 段摘要");
   });
 
   it.each(["", "   "])("空摘要 %j 会失败，不产生可归档的占位文本", async text => {

@@ -99,6 +99,8 @@ function isValidTranscriptPayload(entry: Partial<TranscriptEntry>): boolean {
         Number.isInteger(entry.payload.sourceThroughSeq) && entry.payload.sourceThroughSeq >= 0 &&
         typeof entry.payload.sourceDigest === "string" &&
         isValidCanonicalChatMessage(entry.payload.replacement) &&
+        (entry.payload.recoveryState === undefined || isValidCompactionRecoveryState(entry.payload.recoveryState)) &&
+        (entry.payload.recoveryThroughSeq === undefined || (Number.isInteger(entry.payload.recoveryThroughSeq) && entry.payload.recoveryThroughSeq >= entry.payload.baseThroughSeq)) &&
         (entry.payload.recentUserImages === undefined || isValidCompactionImageReference(entry.payload.recentUserImages, entry.payload.sourceThroughSeq)) &&
         ["automatic", "manual"].includes(entry.payload.trigger as string);
     case "presentation_patch":
@@ -117,6 +119,17 @@ function isValidTranscriptPayload(entry: Partial<TranscriptEntry>): boolean {
     default:
       return false;
   }
+}
+
+function isValidCompactionRecoveryState(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return (value.todoItems === undefined || (Array.isArray(value.todoItems) && value.todoItems.every(isValidTranscriptTodoItem)))
+    && Array.isArray(value.uncertainEffects) && value.uncertainEffects.every(effect => isRecord(effect)
+      && ["id", "toolCallId", "fingerprint", "toolName", "message"].every(key => typeof effect[key] === "string" && effect[key].length > 0)
+      && (effect.repeatAuthorization === undefined || (isRecord(effect.repeatAuthorization)
+        && typeof effect.repeatAuthorization.id === "string" && effect.repeatAuthorization.id.length > 0
+        && effect.repeatAuthorization.source === "user" && typeof effect.repeatAuthorization.grantedAt === "number"
+        && Number.isFinite(effect.repeatAuthorization.grantedAt))));
 }
 function isValidCompactionImageReference(value: unknown, throughSeq: number): boolean {
   if (!isRecord(value)) return false;

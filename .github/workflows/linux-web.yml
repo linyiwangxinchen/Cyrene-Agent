@@ -41,11 +41,14 @@ jobs:
         run: >-
           pnpm exec vitest run src/server
           src/main/index.test.ts
+          src/main/agui-bridge.test.ts
           src/main/browser/address-input.test.ts
           src/main/browser/browser-panel-ipc.test.ts
           src/main/channels/adapters/qq/onebot-reverse-ws.test.ts
           src/main/channels/bootstrap.test.ts
           src/main/channels/dispatcher.test.ts
+          src/main/channels/channel-context.test.ts
+          src/main/channels/wechat-compaction.integration.test.ts
           src/main/channels/outgoing-composer.test.ts
           src/main/memory/memory-background-schedulers.test.ts
           src/main/memory/memory-llm-client.test.ts
@@ -69,6 +72,7 @@ jobs:
           src/shared/transcript-compaction-error.test.ts
           src/main/orchestrator/conversation-transcript-projection.test.ts
           src/main/orchestrator/conversation-transcript-compactor.test.ts
+          src/main/orchestrator/conversation-journal-service.test.ts
           src/main/orchestrator/harness/compaction.test.ts
           src/main/orchestrator/harness/compaction.headless.test.ts
           src/main/orchestrator/harness/cyrene-harness.test.ts

@@ -15,7 +15,7 @@ import type {
   ChatMessageChannel,
   PendingChatAttachment,
 } from "../../shared/chat-types";
-import type { SideEffectKind, TodoItem, ToolCallOutcome } from "./harness/types";
+import type { SideEffectKind, TodoItem, ToolCallOutcome, UncertainEffect } from "./harness/types";
 import type { ChatMessage as CanonicalChatMessage } from "./vendors/types";
 import { isContextUsageSnapshot } from "../../shared/context-usage";
 import { normalizeMusicCardData } from "../../shared/music-card";
@@ -232,8 +232,16 @@ export type TranscriptCompactionCheckpointPayload = {
   sourceDigest: string;
   replacement: CanonicalChatMessage;
   recentUserImages?: TranscriptCompactionImageReference;
+  recoveryState?: TranscriptCompactionRecoveryState;
+  /** Execution-state snapshot boundary; may include events appended during summarization. */
+  recoveryThroughSeq?: number;
   trigger: "automatic" | "manual";
 };
+
+export interface TranscriptCompactionRecoveryState {
+  todoItems?: TodoItem[];
+  uncertainEffects: UncertainEffect[];
+}
 
 export type TranscriptToolStartedPayload = {
   assistantEntryId: string;

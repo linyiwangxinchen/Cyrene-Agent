@@ -650,6 +650,15 @@ export async function buildAgentRunOptions(
         throw failure;
       }
       transcriptContext = await requireBuildModelContext(deps)(input.sessionId, retainTokens);
+      // Another entrance (e.g. Web while WeChat is compacting) may append a new
+      // user turn. Never attach this run's files/recipient to that newer question.
+      if (input.currentUser) {
+        const latest = transcriptContext.messages.filter(message => message.role === "user" && message.visibility !== "internal").at(-1);
+        if (!latest || stripTurnModelContextForSideEffects(contentToText(latest.content))
+          !== stripTurnModelContextForSideEffects(input.currentUser.text)) {
+          throw createTranscriptCompactionRequiredError(undefined, "history_changed");
+        }
+      }
       if (estimateMessageTokens(transcriptContext.messages, messageOrigin) >= compactionTriggerTokens) {
         throw createTranscriptCompactionRequiredError();
       }
