@@ -9,9 +9,11 @@
 在仓库根目录构建：
 
 ```bash
-# 本次新功能位于独立分支；工作树干净时切换。
+# 小花园已合入 master；工作树干净时更新。
 git fetch origin
-git switch feat/cyrene-bili-garden-20261101
+git switch master
+git pull --ff-only origin master
+pnpm install --frozen-lockfile
 
 # Linux Web
 pnpm run build:web

@@ -10,8 +10,10 @@
 node --version
 pnpm --version
 sudo apt-get update
-sudo apt-get install -y git ca-certificates curl python3 build-essential pkg-config ffmpeg
+sudo apt-get install -y git ca-certificates curl python3 build-essential pkg-config ffmpeg fonts-noto-cjk
 ```
+
+`fonts-noto-cjk` 用于文档工具生成中文 PDF；已有部署可单独执行 `sudo apt-get install -y fonts-noto-cjk` 补装，无需安装桌面。
 
 原生依赖可能需要 Python/C++ 工具链；浏览器控制需要项目版本匹配的 Playwright Chromium。建议构建机至少有 4 GiB 内存，小内存服务器优先使用第 6 节异机编译。这是部署建议，运行资源还取决于模型、索引与任务规模。
 

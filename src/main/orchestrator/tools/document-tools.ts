@@ -524,6 +524,11 @@ export function registerDocumentTools(): void {
         { file: "C:\\Windows\\Fonts\\simsun.ttc", face: "SimSun" },
         { file: "C:\\Windows\\Fonts\\simhei.ttf", face: undefined },
       ];
+      // Linux Web 没有 Windows 字体；沿用同一字体回退和失败保护流程。
+      if (process.platform !== "win32") fontCandidates.push(
+        { file: "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", face: "NotoSansCJKsc-Regular" },
+        { file: "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc", face: "WenQuanYiZenHei" },
+      );
       // 系统临时目录不要求目标父目录可创建子目录；mkdtemp 创建本次独占目录（POSIX 权限 0700）。
       // 先完成生成，字体/排版失败不能截断已有目标。
       const temporaryDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cyrene-pdf-"));

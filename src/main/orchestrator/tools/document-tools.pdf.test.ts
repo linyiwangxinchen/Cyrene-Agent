@@ -19,6 +19,7 @@ vi.mock("fs", async (original) => {
     if (file === "C:\\Windows\\Fonts\\msyh.ttc") return ["ttc", "fallback"].includes(state.font) ? "collection.ttc" : null;
     if (file === "C:\\Windows\\Fonts\\simsun.ttc") return ["simsun", "fallback"].includes(state.font) ? "collection.ttc" : null;
     if (file === "C:\\Windows\\Fonts\\simhei.ttf") return state.font === "ttf" ? "standalone.ttf" : null;
+    if (String(file).startsWith("/usr/share/fonts/")) return state.font === "linux" && String(file).includes("NotoSans") ? "collection.ttc" : null;
     return undefined;
   };
   return { ...actual,
@@ -44,7 +45,7 @@ vi.mock("pdfkit", async (original) => {
     font(src: string, family?: string, size?: number) {
       if ((state.failFont && src.includes("Windows")) || (state.failFirstFont && src.endsWith("msyh.ttc"))) return super.font(Buffer.from("invalid font bytes"));
       const mapped = src.endsWith(".ttc") ? "collection.ttc" : src.endsWith(".ttf") ? "standalone.ttf" : null;
-      return super.font(mapped ? path.join(import.meta.dirname, "__fixtures__/pdf", mapped) : src, family, size);
+      return super.font(mapped ? path.join(import.meta.dirname, "__fixtures__/pdf", mapped) : src, family === "NotoSansCJKsc-Regular" ? "MicrosoftYaHei" : family, size);
     }
     text(...args: Parameters<InstanceType<typeof actual.default>["text"]>) {
       if (state.failText) throw new Error("injected render failure");
@@ -73,6 +74,11 @@ afterEach(async () => {
   }
 });
 describe("PDF 实际字体和失败输出保护", () => {
+  it("Linux 使用 Noto CJK 集合字体生成可提取中文的 PDF", async () => {
+    vi.stubGlobal("process", { ...process, platform: "linux" });
+    try { state.font = "linux"; await write(); expect(decodedStreams(fs.readFileSync(output()))).toContain("4e2d"); }
+    finally { vi.unstubAllGlobals(); }
+  });
   for (const font of ["ttc", "simsun", "ttf"]) it(`使用真实 ${font} 生成含中文 Unicode 映射的完整 PDF`, async () => {
     state.font = font;
     expect(await write()).toContain("已生成");
