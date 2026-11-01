@@ -50,6 +50,9 @@ test("基础与转写依赖共用显式镜像，隔离系统配置并记录解�
     assert.equal(call.args[call.args.indexOf("--cache-dir") + 1], path.join(root, "pip-cache"));
   }
   assert.ok(runtime.installLog.some(line => line.includes("3.11.9") && line.includes("x86_64")));
+  const asrInstall = pipCalls(calls).find(call => call.args.includes("faster-whisper>=1.2.1,<2"));
+  assert.ok(asrInstall.args.includes("modelscope>=1.40,<2"));
+  assert.ok(asrInstall.args.includes("av>=12,<19"));
   assert.ok(existsSync(path.join(root, "asr-ready.json")));
   assert.equal(runtime.installing, false);
 });
@@ -60,7 +63,7 @@ test("转写镜像找不到包时只重试一次官方源，通过导入与模�
   runtime.run = async (...args) => {
     const result = await run(...args);
     if (args[1].includes("faster-whisper>=1.2.1,<2") && args[1].includes("https://mirror.example/simple/")) throw missing();
-    if (args[1][0] === "-c" && args[1][1].includes("WhisperModel"))
+    if (args[1][0].endsWith("asr_model.py"))
       assert.equal(existsSync(path.join(root, "asr-ready.json")), false);
     return result;
   };
@@ -68,6 +71,9 @@ test("转写镜像找不到包时只重试一次官方源，通过导入与模�
   assert.deepEqual(pipCalls(calls).map(indexOf), ["https://mirror.example/simple/", "https://mirror.example/simple/", "https://pypi.org/simple/"]);
   assert.ok(runtime.installLog.some(line => line.includes("每个源最多尝试一轮")));
   assert.equal(runtime.status().asr, true);
+  const modelCall = calls.find(call => call.args[0].endsWith("asr_model.py"));
+  assert.equal(modelCall.options.env.HF_HUB_OFFLINE, "1");
+  assert.equal(JSON.parse(readFileSync(path.join(root, "asr-ready.json"))).source, "modelscope");
 });
 
 test("所有源都失败时保留基础环境，不伪报转写就绪并显示错误", async t => {
@@ -147,6 +153,19 @@ test("取消安装不会切换源重试", async t => {
   assert.equal(pipCalls(calls).length, 1);
 });
 
+test("魔搭下载或加载失败不会写入就绪标记", async t => {
+  const { runtime, root } = fixture(t);
+  const run = runtime.run;
+  runtime.run = async (...args) => {
+    const result = await run(...args);
+    if (args[1][0].endsWith("asr_model.py")) throw new Error("模型加载失败");
+    return result;
+  };
+  await assert.rejects(runtime.install({ asr: true }), /模型加载失败/);
+  assert.equal(existsSync(path.join(root, "asr-ready.json")), false);
+  assert.equal(runtime.installing, false);
+});
+
 test("权限错误不当作镜像故障；无效镜像在启动 pip 前拒绝", async t => {
   const { runtime, calls } = fixture(t);
   const run = runtime.run;
@@ -165,8 +184,8 @@ test("官方默认源不受 pip.ini 指定的镜像影响，模型就绪标记�
   const run = runtime.run;
   runtime.run = async (...args) => {
     const result = await run(...args);
-    if (args[1][0] === "-c" && args[1][1].includes("WhisperModel")) {
-      assert.equal(args[1][2], "tiny");
+    if (args[1][0].endsWith("asr_model.py")) {
+      assert.equal(args[1][args[1].indexOf("--model") + 1], "tiny");
       config.asrModel = "small";
     }
     return result;

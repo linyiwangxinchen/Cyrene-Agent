@@ -15,6 +15,9 @@ const ALIYUN_INDEX = "https://mirrors.aliyun.com/pypi/simple/";
 const ASR_PACKAGES = [
   "faster-whisper>=1.2.1,<2",
   "yt-dlp",
+  "modelscope>=1.40,<2",
+  // faster-whisper 1.2.x calls av.open(metadata_errors=...), removed by PyAV 19.
+  "av>=12,<19",
   "--only-binary=ctranslate2,av,onnxruntime,tokenizers",
 ];
 
@@ -198,7 +201,7 @@ export class PythonRuntime {
   async installAsrPackages(signal) {
     if (!this.pipHasResume) await this.ensurePip(signal);
     await this.installPackages(ASR_PACKAGES, { signal, label: "转写依赖" });
-    await this.run(this.executable(), ["-c", "import faster_whisper, ctranslate2, av, yt_dlp"], { signal });
+    await this.run(this.executable(), ["-c", "import faster_whisper, ctranslate2, av, yt_dlp; from modelscope.hub.snapshot_download import snapshot_download"], { signal });
   }
   async downloadUv(signal) {
     const platforms = {
@@ -330,20 +333,19 @@ export class PythonRuntime {
       );
       if (asr) {
         await this.installAsrPackages(signal);
-        this.installLog.push(`转写依赖检查通过，正在下载并加载 ${asrModel} 模型（与 pip 软件源独立）。`);
+        this.installLog.push(`转写依赖检查通过，正在从魔搭 ModelScope 下载并验证 ${asrModel} 模型。`);
         await this.run(
           this.executable(),
           [
-            "-c",
-            'import os,sys; os.environ["HF_HOME"]=sys.argv[2]; from faster_whisper import WhisperModel; WhisperModel(sys.argv[1],device="cpu",compute_type="int8")',
-            asrModel,
-            path.join(this.root, "model-cache"),
+            path.join(this.packageRoot, "python/asr_model.py"),
+            "--home", this.root,
+            "--model", asrModel,
           ],
-          { signal, log: true, timeout: 1800000 },
+          { signal, log: true, timeout: 1800000, env: { HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" } },
         );
         writeFileSync(
           path.join(this.root, "asr-ready.json"),
-          JSON.stringify({ model: asrModel }),
+          JSON.stringify({ model: asrModel, source: "modelscope" }),
         );
       }
       this.installLog.push("运行环境检查通过");
@@ -372,6 +374,8 @@ export class PythonRuntime {
           PYTHONUTF8: "1",
           PYTHONUNBUFFERED: "1",
           HF_HOME: path.join(this.root, "model-cache"),
+          HF_HUB_OFFLINE: "1",
+          TRANSFORMERS_OFFLINE: "1",
         },
       },
     );

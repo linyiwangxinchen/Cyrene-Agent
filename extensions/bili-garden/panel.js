@@ -774,6 +774,7 @@
       ),
     );
     account.append(
+      h("p", { class: "muted" }, "转写模型从魔搭 ModelScope 下载，下载完成后在运行昔涟的机器上离线加载。"),
       h(
         "label",
         { class: "field" },

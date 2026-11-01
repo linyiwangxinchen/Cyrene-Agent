@@ -80,7 +80,11 @@ Python 业务依赖安装在插件数据目录的 `.venv`。基础依赖和转�
 
 若转写安装报 `No matching distribution found for faster-whisper`：更新宿主并重启后，在小花园设置重新点击“安装转写环境与模型”。安装日志会列出实际 Python 版本、平台/架构和每一阶段的软件源；该错误也可能来自网络或 Python/平台兼容性，不能仅凭它断定镜像缺包。推荐使用 64 位 Python 3.11/3.12。软件包安装成功后还会单独下载并加载模型，只有全部成功才显示转写就绪。
 
-转写环境及模型另行点击安装；更换 Whisper 模型后需要重新安装所选模型。正常阅读不会偷偷下载尚未安装的权重。视频转写使用 CPU/int8，较长视频会占用较多时间，受每日次数和运行超时约束。
+转写环境及模型另行点击安装。模型默认从 **魔搭 ModelScope** 的 `pengzhendong/faster-whisper-{tiny,base,small,medium}` 下载，使用兼容 faster-whisper 的 CTranslate2 权重；文件保存到插件数据目录 `model-cache/modelscope/faster-whisper-<模型名>/`。安装会检查权重、配置、分词器和词表，真实加载 CPU/int8 模型成功后才显示就绪。界面同时显示下载来源。
+
+转写直接传入本地模型目录，并开启 Hugging Face 离线模式。已有完整的旧版 Hugging Face 本地缓存仍可离线使用；重新点击安装会获取魔搭版本。更换 Whisper 模型后需要重新安装所选模型。视频转写使用 CPU/int8，较长视频会占用较多时间，受每日次数和运行超时约束。
+
+当前 faster-whisper 1.2.x 的音频解码需要 `av<19`，安装流程会修正已安装的 PyAV 19。Windows 推荐 64 位官方 CPython 3.11/3.12；本机测试中 Conda 3.11.7 在原生推理库加载时异常退出，官方 CPython 同一份权重可正常识别。Python 路径用于首次创建 `.venv`，更换已有虚拟环境的解释器时应先停用插件，将 `.venv` 重命名备份，再保存新的 Python 路径并安装；数据库、账号和模型缓存可保留。
 
 时间窗口、静默时段、每日额度按配置的 IANA 时区计算，默认 `Asia/Shanghai`，不依赖服务器系统时区。额度 0 表示禁止；“最长视频分钟数”单独约定 0 表示不限制。
 
@@ -124,3 +128,5 @@ node scripts/verify/bili-garden-asr-install.mjs
 ```
 
 使用上述验收输出的虚拟环境 Python 运行 `scripts/verify/bili-garden-download-recovery.py`，可在本机测试服务主动截断 wheel 下载后，验证 pip 发送非零 Range 请求续传并正确安装。此测试只安装临时测试包，不访问外部站点。
+
+模型边界回归：`python extensions/bili-garden/test/asr_model_test.py`。在已经通过插件安装模型的测试数据目录，可用对应虚拟环境 Python 执行 `scripts/verify/bili-garden-modelscope.py --home <测试数据目录> --model tiny`，验证封禁网络连接时仍可加载模型并推理；`--audio <测试语音.wav>` 可验证测试句识别。

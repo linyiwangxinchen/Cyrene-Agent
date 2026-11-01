@@ -52,13 +52,14 @@ async def video_data(name, args, cred):
 
 def transcribe(args, home):
     from yt_dlp import YoutubeDL
-    from faster_whisper import WhisperModel
+    from asr_model import load_model
     import tempfile
     bvid = args['bvid']
     os.environ.setdefault('HF_HOME', str(home / 'model-cache'))
     model_name = args.get('model', 'small')
     if model_name not in ('tiny', 'base', 'small', 'medium'):
         raise ValueError('转写模型无效')
+    model = load_model(home, model_name)
     with tempfile.TemporaryDirectory(prefix='audio-', dir=home) as tmp:
         opts = {'format': 'bestaudio/best', 'outtmpl': str(Path(tmp) / 'audio.%(ext)s'), 'noplaylist': True,
                 'quiet': True, 'no_warnings': True, 'cachedir': False,
@@ -66,7 +67,6 @@ def transcribe(args, home):
         with YoutubeDL(opts) as ydl:
             info = ydl.extract_info('https://www.bilibili.com/video/' + bvid, download=True)
             audio = ydl.prepare_filename(info)
-        model = WhisperModel(model_name, device='cpu', compute_type='int8', local_files_only=True)
         items, _ = model.transcribe(audio, language='zh', vad_filter=True)
         segments = [{'from': s.start, 'to': s.end, 'text': s.text} for s in items]
         return {'bvid': bvid, 'segments': segments[:6000], 'text': '\n'.join(s['text'] for s in segments)[:180000], 'source': 'asr'}
