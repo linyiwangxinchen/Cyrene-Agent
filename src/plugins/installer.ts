@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { lstat, mkdir, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import extract from "extract-zip";
+import { extractPluginArchive } from "./extract-archive";
 import { inspectPluginDir } from "./loader";
 import type { PluginManifest } from "./types";
 
@@ -132,7 +132,7 @@ export async function preparePluginZip(
   let expandedBytes = 0;
   const entryNames = new Set<string>();
   try {
-    await extract(zipPath, {
+    await extractPluginArchive(zipPath, {
       dir: stagingDir,
       onEntry(entry) {
         const entryName = validateEntryName(entry.fileName);
@@ -160,7 +160,7 @@ export async function preparePluginZip(
           throw new Error(`ZIP 条目压缩比异常: ${entry.fileName}`);
         }
       },
-    });
+    }, PLUGIN_ZIP_LIMITS.archiveBytes);
     await assertNoLinks(stagingDir);
     const pluginDir = await locatePluginDirectory(stagingDir);
     const inspected = inspectPluginDir(pluginDir);

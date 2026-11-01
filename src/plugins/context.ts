@@ -81,6 +81,7 @@ function wrapLlmPurpose(service: PluginLlmService, pluginId: string): PluginLlmS
       purpose: options?.purpose ? `${pluginId}:${options.purpose}` : pluginId,
     }),
     ...(service.runGoal ? { runGoal: service.runGoal } : {}),
+    ...(service.listProfiles ? { listProfiles: () => service.listProfiles!() } : {}),
   };
 }
 

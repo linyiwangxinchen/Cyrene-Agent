@@ -13,6 +13,7 @@ import type { HarnessEvent } from "./orchestrator/harness/types";
 import { ExecutionLedgerStore } from "./orchestrator/execution-ledger";
 import { buildToolSystemPrompt } from "./orchestrator/system-prompt-builder";
 import type { ToolDefinition } from "./orchestrator/tools/registry/tool-registry";
+import type { ConversationJournalService } from "./orchestrator/conversation-journal-service";
 
 const DEFAULT_MAX_ROUNDS = 50;
 const DEFAULT_MAX_WALL_MS = 15 * 60_000;
@@ -29,6 +30,7 @@ export interface PluginAgentRunnerDeps {
   executionLedgers?: Pick<ExecutionLedgerStore, "forScope">;
   /** 测试替身入口；生产缺省使用 AbortSignal.timeout。 */
   createDeadline?: (maxWallMs: number) => AbortSignal;
+  journal?: Pick<ConversationJournalService, "appendUser" | "buildModelContext" | "createRunSink">;
 }
 
 type AbortSource = "external" | "plugin" | "deadline";
@@ -162,6 +164,12 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
   return async (options) => {
     const runId = requireText(options.runId, "runId", MAX_RUN_ID_LENGTH);
     const goal = requireText(options.goal, "goal", 8_000);
+    const mode = options.personaMode ?? "work";
+    if (mode !== "chat" && mode !== "work") throw new Error("personaMode 必须为 chat 或 work");
+    if (options.context !== undefined && (typeof options.context !== "string" || options.context.length > 64_000)) {
+      throw new Error("context 必须是最多 64000 字符的文本");
+    }
+    if (options.modelProfileId !== undefined) requireText(options.modelProfileId, "modelProfileId", 128);
     const maxRounds = positiveInteger(options.maxRounds, DEFAULT_MAX_ROUNDS, "maxRounds", 1_000);
     const maxWallMs = positiveInteger(options.maxWallMs, DEFAULT_MAX_WALL_MS, "maxWallMs", 24 * 60 * 60_000);
     const tools = validateAndMapTools(deps.pluginId, options.tools);
@@ -169,24 +177,34 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
 
     const deadline = deps.createDeadline?.(maxWallMs) ?? AbortSignal.timeout(maxWallMs);
     const signals = combineSignals({ external: options.signal, plugin: deps.pluginSignal, deadline });
+    const conversationId = deps.journal && deps.pluginId !== "minecraft-bot"
+      ? `plugin:${deps.pluginId}:${runId}` : `plugin:${deps.pluginId}`;
+    if (deps.journal) {
+      signals.signal.throwIfAborted();
+      await deps.journal.appendUser(conversationId, { turnId: `plugin:${runId}`, runId, text: goal });
+    }
     const built = await deps.agentRuntime.buildOptions({
-      sessionId: `plugin:${deps.pluginId}`,
+      sessionId: conversationId,
+      ...(deps.journal ? { modelContext: await deps.journal.buildModelContext(conversationId) } : {}),
       workspaceBindingSessionId: null,
-      executionMode: "work",
-      mode: "work",
+      executionMode: mode,
+      mode,
       promptSource: "plugin-agent",
-      promptChannel: "minecraft",
+      promptChannel: deps.pluginId === "minecraft-bot" ? "minecraft" : `plugin:${deps.pluginId}`,
+      ...(options.modelProfileId ? { modelProfileId: options.modelProfileId } : {}),
       currentUser: { turnId: `plugin:${runId}`, text: goal, visibleContent: goal },
     });
-    const toolSystemContent = buildToolSystemPrompt("work", tools);
+    const toolSystemContent = buildToolSystemPrompt(mode, tools);
     const promptLayers = buildHarnessPromptLayers({
       ...built.options,
-      conversationMode: "work",
+      conversationMode: mode,
+      soulRuntimeContext: [built.options.soulRuntimeContext, options.context].filter(Boolean).join("\n\n"),
       toolSystemContent,
       tools,
     });
 
     const toolNames = new Map<string, string>();
+    let usage: PluginAgentRunResult["usage"];
     console.info("[plugin-agent] 无头任务开始", { label, runId });
     const result = await runHarness({
       systemPrompt: promptLayers.stablePrefix,
@@ -195,6 +213,7 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
       messages: built.options.messages,
       runId,
       tools,
+      ...(deps.journal ? { transcriptSink: deps.journal.createRunSink({ conversationId, runId }) } : {}),
       vendorConfig: {
         provider: built.options.settings.provider,
         baseUrl: built.options.settings.baseUrl,
@@ -212,16 +231,26 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
       },
       signal: signals.signal,
       onEvent: (event) => projectEvent(options.onEvent, event, toolNames),
+      onModelUsage: (reported) => {
+        usage ??= { input: 0, output: 0, cachedInput: 0 };
+        usage.input += reported.input;
+        usage.output += reported.output;
+        usage.cachedInput += reported.cachedInput ?? 0;
+      },
       includeInteractiveTools: false,
       planState: undefined,
       taskExecutor: undefined,
-      checkPermission: async () => true,
+      checkPermission: async (toolId, args) => {
+        if (signals.signal.aborted) return false;
+        try { return options.checkTool ? await options.checkTool(toolId, args) : true; }
+        catch { return false; }
+      },
       toolContext: {
         userQuery: goal,
-        conversationId: `plugin:${deps.pluginId}`,
+        conversationId,
         runId,
         signal: signals.signal,
-        mode: "work",
+        mode,
         permissionMode: "allow_all",
         metadata: { pluginAgentDiagnosticLabel: label },
       },
@@ -236,6 +265,6 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
         result.finalState.uncertainEffects.length > 0,
       );
     console.info("[plugin-agent] 无头任务结束", { label, runId, status: terminal.status });
-    return { text: result.finalAnswer, terminal, rounds: result.rounds } as PluginAgentRunResult;
+    return { text: result.finalAnswer, terminal, rounds: result.rounds, ...(usage ? { usage } : {}) } as PluginAgentRunResult;
   };
 }

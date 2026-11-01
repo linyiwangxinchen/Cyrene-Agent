@@ -51,6 +51,9 @@ jobs:
           src/main/memory/memory-llm-client.test.ts
           src/main/memory/memory-llm-client.responses.test.ts
           src/main/network/node-request-proxy.test.ts
+          src/main/plugin-agent.garden.test.ts
+          src/main/plugin-panel-bridge.test.ts
+          src/plugins/installer.test.ts
           src/main/search-jieba.test.ts
           src/main/orchestrator/structured-output/runner.test.ts
           src/main/services/llm/llm-client.test.ts
@@ -99,6 +102,11 @@ jobs:
           NODE
       - name: Verify bundled fonts offline for Web and desktop paths
         run: pnpm run verify:fonts:offline
+      - name: Verify Bilibili garden plugin and authenticated panel
+        run: |
+          node --test extensions/bili-garden/test/*.test.mjs
+          node scripts/verify/bili-garden-agent.mjs
+          node scripts/verify/bili-garden-web.mjs "$RUNNER_TEMP/bili-garden-ui"
       - name: Verify authenticated Web business and voice MCP paths
         run: |
           pnpm run verify:shared-core

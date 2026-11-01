@@ -5,6 +5,7 @@ dist/main/
 dist/server/
 dist/headless/
 dist/plugin-panel/
+dist/plugins/
 dist/cli/
 dist/preload/
 dist/renderer/assets

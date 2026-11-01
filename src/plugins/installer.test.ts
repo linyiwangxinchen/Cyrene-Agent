@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from "node:os";
 import path from "node:path";
 import { deflateRawSync } from "node:zlib";
+import { randomBytes } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   commitPreparedPlugin,
@@ -96,6 +97,34 @@ afterEach(() => {
 });
 
 describe("plugin ZIP installer", () => {
+  it("keeps Finder metadata outside the extracted plugin directory", async () => {
+    const { root, zip } = setup();
+    createZip(zip, [{ name: "__MACOSX/._garden", data: "Finder metadata" },
+      { name: "garden/manifest.json", data: manifest() },
+      { name: "garden/index.cjs", data: "module.exports={register(){}}" }]);
+    const prepared = await preparePluginZip(zip, root);
+    expect(existsSync(path.join(prepared.stagingDir, "__MACOSX"))).toBe(false);
+    await discardPreparedPlugin(prepared);
+  });
+  it("extracts large deflated assets without the Windows Node 24 stream stall", async () => {
+    const { root, zip } = setup();
+    const asset = randomBytes(96 * 1024).toString("base64");
+    createZip(zip, [{ name: "garden/manifest.json", data: manifest() },
+      { name: "garden/index.cjs", data: "module.exports={register(){}}" },
+      { name: "garden/large.txt", data: asset, method: 8 }]);
+    const prepared = await preparePluginZip(zip, root);
+    expect(readFileSync(path.join(prepared.pluginDir, "large.txt"), "utf8")).toBe(asset);
+    await discardPreparedPlugin(prepared);
+  });
+  it("rejects a corrupted payload CRC and cleans its staging directory", async () => {
+    const { root, zip } = setup();
+    createZip(zip, [{ name: "manifest.json", data: manifest() }, { name: "index.cjs", data: "module.exports={register(){}}" }]);
+    const bytes = readFileSync(zip);
+    const central = bytes.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    bytes.writeUInt32LE(0, central + 16);
+    writeFileSync(zip, bytes);
+    await expect(preparePluginZip(zip, root)).rejects.toThrow("完整性");
+  });
   it("accepts one wrapped plugin directory and commits it by manifest id", async () => {
     const { root, zip } = setup();
     createZip(zip, [

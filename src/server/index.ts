@@ -23,6 +23,7 @@ import { normalizeReasoningPreference } from "../shared/reasoning";
 import { resolveVendorRuntimeSettings } from "../main/orchestrator/vendors/runtime-settings";
 import { WebPersonaRuntime } from "./web-persona-runtime";
 import { SharedCoreClient } from "./shared-core-client";
+import { inlinePluginPanelAssets } from "./plugin-panel-document";
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -611,8 +612,12 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
         const relative = url.pathname.slice("/api/plugin-panel/".length);
         const resource = await core.request(0, "resource", { url: `cyrene-plugin://${relative}` });
         let body = Buffer.from(resource.base64, "base64");
-        if (resource.contentType?.includes("text/html")) body = Buffer.from(body.toString("utf8").replace(/(["'])\/\.cyrene\//g, `$1/api/plugin-panel/${relative.split("/")[0]}/.cyrene/`));
-        response.writeHead(resource.status, { "Content-Type": resource.contentType || "application/octet-stream", "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "Content-Security-Policy": "sandbox allow-scripts; default-src 'self' data:; connect-src 'none'; style-src 'self' 'unsafe-inline'" }); response.end(body); return;
+        const nonce = randomBytes(18).toString("base64");
+        if (resource.contentType?.includes("text/html")) body = Buffer.from(await inlinePluginPanelAssets({
+          html: body.toString("utf8"), url: `cyrene-plugin://${relative}`, nonce,
+          read: url => core.request(0, "resource", { url }),
+        }));
+        response.writeHead(resource.status, { "Content-Type": resource.contentType || "application/octet-stream", "X-Content-Type-Options": "nosniff", "X-Frame-Options": "SAMEORIGIN", "Cache-Control": "no-store", "Content-Security-Policy": `frame-ancestors 'self'; sandbox allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads; default-src 'self' data:; script-src 'nonce-${nonce}'; connect-src 'none'; form-action 'none'; img-src 'self' data: https://*.hdslb.com https://*.bilibili.com; style-src 'self' 'unsafe-inline'` }); response.end(body); return;
       }
       if (core && url.pathname.startsWith("/api/core/")) {
         if (method !== "POST") { writeJson(response, 405, { error: "METHOD_NOT_ALLOWED" }); return; }

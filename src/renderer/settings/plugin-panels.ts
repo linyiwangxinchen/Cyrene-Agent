@@ -70,6 +70,10 @@ window.addEventListener("message", (event: MessageEvent) => {
         } else {
           postToPanel(live, pluginId, { kind: "invoke-result", seq: message.seq, ok: false, error: outcome?.error ?? "面板调用失败" });
         }
+      }).catch((error: unknown) => {
+        const live = findContentWindow(pluginId);
+        if (live) postToPanel(live, pluginId, { kind: "invoke-result", seq: message.seq, ok: false,
+          error: error instanceof Error ? error.message : "插件连接中断，请重试" });
       });
     return;
   }
@@ -100,9 +104,10 @@ function mountPanel(
   const iframe = document.createElement("iframe");
   // allow-same-origin 保留面板真实 origin，使双校验成立；
   // 跨源访问由同源策略阻挡，设置页与 cyrene-plugin:// 结构性不同源
-  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin");
+  // 用户点击外部内容和导出文件时允许打开独立页面/下载；仍不允许顶层导航。
+  iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads");
   if ((window as any).__cyreneWeb) {
-    iframe.setAttribute("sandbox", "allow-scripts");
+    iframe.setAttribute("sandbox", "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads");
     iframe.setAttribute("src", `/api/plugin-panel/${plugin.id}/${plugin.settingsPanel}`);
   } else iframe.setAttribute("src", `${PANEL_SCHEME}://${plugin.id}/${plugin.settingsPanel}`);
   iframe.className = "plugin-panel-card__frame";

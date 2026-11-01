@@ -9,6 +9,9 @@ import { loadGeneralSettings, saveGeneralSettings } from "./settings/settings-fa
 import { loadModelSettings, resolveModelSettingsProfile } from "./settings/model-settings";
 import { pluginGenerateText } from "./plugin-llm";
 import { createPluginAgentRunner } from "./plugin-agent";
+import { ConversationJournalService } from "./orchestrator/conversation-journal-service";
+import { getConversationTranscriptStore } from "./orchestrator/conversation-transcript-store";
+import { getHarnessRunStore } from "./orchestrator/harness/run-store";
 import { createHostServiceFactory } from "./plugin-host/host-services";
 import type { PluginSchedulerStore } from "./plugin-host/scheduler-service";
 import { activeChatTargetRegistry } from "./plugin-host/active-chat-target";
@@ -51,6 +54,10 @@ export interface PluginRuntimeDeps {
 export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<PluginManager> {
   const userPluginRoot = path.join(app.getPath("userData"), "plugins");
   const pluginDataRoot = path.join(app.getPath("userData"), "plugin-data");
+  const journal = new ConversationJournalService({
+    store: getConversationTranscriptStore(app.getPath("userData")),
+    runReader: getHarnessRunStore(app.getPath("userData")),
+  });
   // 插件 IPC 路由器：面板转发与既有 ipcMain 直达共用一套执行路径
   const router = createPluginIpcRouter();
   // 独占语音输入租约：全局单例，随插件运行时启动创建；
@@ -99,6 +106,15 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
         pluginDataRoot,
         channelManager: { has: (channelId) => channelManager.has(channelId as ChannelId) },
         llm: {
+          listProfiles: async () => {
+            const settings = loadModelSettings();
+            return (settings.modelProfiles ?? []).map((profile, index) => ({
+              id: profile.id,
+              name: profile.displayName || profile.model || profile.provider,
+              model: profile.model,
+              isDefault: settings.defaultModelProfileId ? settings.defaultModelProfileId === profile.id : index === 0,
+            }));
+          },
           generateText: (messages, options) => pluginGenerateText(
             messages,
             resolveModelSettingsProfile(loadModelSettings()),
@@ -112,6 +128,7 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
           pluginSignal: signal,
           userDataPath: app.getPath("userData"),
           agentRuntime: deps.agentRuntime,
+          journal,
         }),
         storage: safeStorage,
         chatsReader: chatsStore,

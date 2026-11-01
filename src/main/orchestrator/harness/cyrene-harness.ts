@@ -625,7 +625,7 @@ async function callRoundLLM(run: HarnessRun, promptLayers: PromptLayers, roundId
   let reasoningStarted = false;
   const candidateFilter = new ChatTimeStreamPrefixFilter();
   try {
-    return await callLLM(
+    const response = await callLLM(
       run.input.vendorConfig,
       promptLayers,
       run.messages,
@@ -645,6 +645,10 @@ async function callRoundLLM(run: HarnessRun, promptLayers: PromptLayers, roundId
       },
       (status) => run.input.onEvent?.({ type: "model_retry", status }),
     );
+    if (response.usage) {
+      try { run.input.onModelUsage?.(response.usage); } catch { /* 用量观察不能中断模型结果提交。 */ }
+    }
+    return response;
   } finally {
     const tail = candidateFilter.finish();
     if (tail) run.input.onEvent?.({ type: "candidate_text_delta", roundId, delta: tail });

@@ -284,6 +284,8 @@ export interface HarnessInput {
   signal?: AbortSignal;
   /** 事件回调 */
   onEvent?: (event: HarnessEvent) => void;
+  /** 模型实际用量的只读旁路；不改变全局用量存储。 */
+  onModelUsage?: (usage: NonNullable<import("../vendors/types").ChatResponse["usage"]>) => void;
   /** 工具执行前与模型可见结果提交后的持久化边界。 */
   onToolLifecycle?: (event: HarnessToolLifecycleEvent) => void;
   /** 工具结果确定后的只读观察回调；只读稳定元数据，不参与执行决策。 */

@@ -28,7 +28,7 @@ for (const rel of sources) {
   await mkdir(path.dirname(dest), { recursive: true });
   await cp(path.join(root, rel), dest);
 }
-for (const rel of ['deploy', 'dist/server', 'dist/headless', 'dist/plugin-panel', 'dist/renderer']) {
+for (const rel of ['deploy', 'dist/server', 'dist/headless', 'dist/plugin-panel', 'dist/plugins', 'dist/renderer']) {
   await cp(path.join(root, rel), path.join(output, rel), {
     recursive: true,
     filter: file => !file.endsWith('.map') && !/\.test\.(?:js|cjs|mjs)$/.test(file),

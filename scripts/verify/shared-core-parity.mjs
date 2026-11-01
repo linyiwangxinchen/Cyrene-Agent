@@ -265,7 +265,7 @@ try {
   await check('Skill instructions are invoked and reach the next model request', async () => { const start = requests.length; await run(sessions.work, 'case:skill'); assert.ok(requests.slice(start).some(request => request.messages?.some(message => message.role === 'tool' && JSON.stringify(message.content).includes('PARITY_SKILL_INSTRUCTIONS')))); });
   await check('Plugin executes and its panel bridge is served in an isolated sandbox', async () => {
     const start = requests.length; await run(sessions.work, 'case:plugin'); assert.ok(requests.slice(start).some(request => request.messages?.some(message => message.role === 'tool' && String(message.content).includes('plugin-executed'))));
-    const panel = await http('/api/plugin-panel/parity-plugin/panel.html'); assert.equal(panel.response.status, 200); assert.ok(panel.value.includes('/api/plugin-panel/parity-plugin/.cyrene/panel-bridge.js')); assert.ok(panel.response.headers.get('content-security-policy').includes('sandbox allow-scripts'));
+    const panel = await http('/api/plugin-panel/parity-plugin/panel.html'); assert.equal(panel.response.status, 200); assert.ok(panel.value.includes('window.CyrenePanel')); assert.ok(panel.value.includes('nonce=')); assert.ok(panel.response.headers.get('content-security-policy').includes('sandbox allow-scripts'));
     assert.equal((await http('/api/plugin-panel/parity-plugin/.cyrene/panel-bridge.js')).response.status, 200);
     assert.equal((await http('/api/core/resource?url=' + encodeURIComponent('cyrene-plugin://parity-plugin/panel.html'))).response.status, 403);
     await invoke('plugins:set-enabled', 'parity-plugin', false); assert.ok(!(await invoke('tool:get-catalog')).some(tool => tool.id === 'parity-plugin_echo'));

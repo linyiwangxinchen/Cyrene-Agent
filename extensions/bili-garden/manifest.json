@@ -1,0 +1,14 @@
+{
+  "apiVersion": 1,
+  "id": "bili-garden",
+  "name": "昔涟的 B 站小花园",
+  "version": "0.1.0",
+  "description": "和昔涟一起发现视频、读字幕、写手记；支持定时精选、评论守护与受控互动。",
+  "author": "Cyrene community",
+  "entry": "index.mjs",
+  "icon": "icon.svg",
+  "settingsPanel": "panel.html",
+  "settingsSection": "plugins",
+  "defaultEnabled": false,
+  "deps": ["llm", "secrets"]
+}

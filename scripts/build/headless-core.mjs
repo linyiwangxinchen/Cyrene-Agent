@@ -2,6 +2,7 @@ import { build } from 'esbuild';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cp } from 'node:fs/promises';
+import { stageBundledPlugins } from './bundled-plugins.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 await build({
   entryPoints: [path.join(root, 'src/server/core/worker.ts')], outfile: path.join(root, 'dist/headless/core.cjs'),
@@ -15,3 +16,4 @@ await build({ entryPoints: [path.join(root, 'src/main/knowledge-base/knowledge-i
 // compiled worker so production releases do not need TypeScript or esbuild.
 await build({ entryPoints: [path.join(root, 'src/main/storage/conversation-database-worker.ts')], outfile: path.join(root, 'dist/headless/conversation-database-worker.js'), bundle: true, platform: 'node', target: 'node24', format: 'cjs', packages: 'external' });
 await cp(path.join(root, 'src/main/plugin-panel'), path.join(root, 'dist/plugin-panel'), { recursive: true });
+await stageBundledPlugins(path.join(root, 'dist/plugins'));

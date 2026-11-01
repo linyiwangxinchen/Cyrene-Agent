@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>昔涟的 B 站小花园</title>
+    <link rel="stylesheet" href="panel.css" />
+  </head>
+  <body>
+    <main id="garden" aria-busy="true">
+      <header class="masthead">
+        <div>
+          <p class="eyebrow">CYRENE · BILIBILI</p>
+          <h1>昔涟的小花园<span class="flower" aria-hidden="true">✧</span></h1>
+          <p class="subline">把值得的片刻，留到一起看。</p>
+        </div>
+        <div class="toolbar">
+          <button id="refresh">刷新</button
+          ><button id="run" class="primary">去发现视频</button
+          ><button id="cancel" hidden>停止本轮</button>
+        </div>
+      </header>
+      <div id="notice" role="status" aria-live="polite"></div>
+      <section id="status" class="status">
+        <div class="skeleton">正在打开小花园…</div>
+      </section>
+      <nav id="tabs" aria-label="小花园导航"></nav>
+      <section id="page" tabindex="-1">
+        <div class="empty">正在读取你的花园记录。</div>
+      </section>
+    </main>
+    <dialog id="detail">
+      <header>
+        <h2 id="detail-title"></h2>
+        <button id="detail-close" aria-label="关闭详情">关闭</button>
+      </header>
+      <div id="detail-body"></div>
+    </dialog>
+    <script src="/.cyrene/panel-bridge.js"></script>
+    <script src="panel.js" defer></script>
+  </body>
+</html>

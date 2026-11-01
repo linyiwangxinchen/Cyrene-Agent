@@ -215,6 +215,14 @@ export interface PluginAgentRunOptions {
   runId: string;
   /** 任务目标，作为首条 user 消息。 */
   goal: string;
+  /** 默认 work；内容陪伴插件可选择 chat，复用宿主完整人格和表达风格。 */
+  personaMode?: "chat" | "work";
+  /** 本轮任务资料，放入动态上下文；不改写稳定人格前缀，最多 64000 字符。 */
+  context?: string;
+  /** 可选已保存档案 id；不向插件提供模型密钥。 */
+  modelProfileId?: string;
+  /** 插件自有策略的最后一道工具门；拒绝或异常均不执行。 */
+  checkTool?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
   /** 不注册的冻结工具集；直接复用 PluginTool 完整契约。 */
   tools: ReadonlyArray<PluginTool>;
   /** 可选任务诊断标签；宿主以 plugin:<id>:<purpose> 标记该次运行与工具上下文。 */
@@ -237,9 +245,13 @@ export interface PluginAgentRunResult {
     externalEffectsMayContinue: boolean;
   };
   rounds: number;
+  /** 仅累计模型实际返回的用量；未上报时缺省。 */
+  usage?: { input: number; output: number; cachedInput: number };
 }
 
 export interface PluginLlmService {
+  /** 档案的公开摘要，不含地址、凭据或其他敏感字段。 */
+  listProfiles?(): Promise<Array<{ id: string; name: string; model: string; isDefault: boolean }>>;
   generateText(
     messages: PluginLlmMessage[],
     options?: PluginLlmGenerateOptions,

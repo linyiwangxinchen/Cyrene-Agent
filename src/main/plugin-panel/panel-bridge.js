@@ -19,6 +19,8 @@
   var seq = 0;
   var pending = new Map();
   var themeCallbacks = [];
+  var initialized = false;
+  var queued = [];
 
   function post(message) {
     message.protocol = PROTOCOL;
@@ -42,12 +44,14 @@
   }
 
   window.addEventListener("message", function (event) {
+    if (event.source !== window.parent) return;
     var data = event.data;
     if (!data || data.protocol !== PROTOCOL) return;
     if (data.kind === "invoke-result") {
       var entry = pending.get(data.seq);
       if (entry) {
         pending.delete(data.seq);
+        clearTimeout(entry.timer);
         if (data.ok) entry.resolve(data.data);
         else entry.reject(new Error(typeof data.error === "string" ? data.error : "面板调用失败"));
       }
@@ -55,6 +59,11 @@
     }
     if (data.kind === "init" || data.kind === "theme-changed") {
       applyTheme(data.theme);
+      if (data.kind === "init" && !initialized) {
+        initialized = true;
+        queued.splice(0).forEach(function (message) { if (pending.has(message.seq)) post(message); });
+        reportHeight();
+      }
     }
   });
 
@@ -74,8 +83,15 @@
       var args = Array.prototype.slice.call(arguments, 1);
       return new Promise(function (resolve, reject) {
         var id = ++seq;
-        pending.set(id, { resolve: resolve, reject: reject });
-        post({ kind: "invoke", seq: id, channel: channel, args: args });
+        var timer = setTimeout(function () {
+          pending.delete(id);
+          queued = queued.filter(function (message) { return message.seq !== id; });
+          reject(new Error("插件面板请求超时，请确认插件已启用后重试"));
+        }, 30000);
+        pending.set(id, { resolve: resolve, reject: reject, timer: timer });
+        var message = { kind: "invoke", seq: id, channel: channel, args: args };
+        if (initialized) post(message);
+        else queued.push(message);
       });
     },
     onTheme: function (cb) {
