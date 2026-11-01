@@ -11,6 +11,7 @@ import { devNull } from "node:os";
 import { createHash } from "node:crypto";
 
 const PYPI_INDEX = "https://pypi.org/simple/";
+const ALIYUN_INDEX = "https://mirrors.aliyun.com/pypi/simple/";
 const ASR_PACKAGES = [
   "faster-whisper>=1.2.1,<2",
   "yt-dlp",
@@ -56,6 +57,8 @@ export class PythonRuntime {
     this.installing = false;
     this.worker = null;
     this.installLog = [];
+    this.pipHasResume = false;
+    this.pipSource = null;
   }
   executable() {
     return path.join(
@@ -142,32 +145,58 @@ export class PythonRuntime {
     const preferred = packageIndex(
       process.env.CYRENE_BILI_PIP_INDEX || process.env.PIP_INDEX_URL || PYPI_INDEX,
     );
-    const indexes = preferred === PYPI_INDEX ? [preferred] : [preferred, PYPI_INDEX];
+    const previous = this.pipSource?.preferred === preferred ? this.pipSource.index : null;
+    const indexes = [...new Set([previous, preferred, PYPI_INDEX, ALIYUN_INDEX].filter(Boolean))];
     for (const [attempt, index] of indexes.entries()) {
       signal?.throwIfAborted();
       this.installLog.push(`${label}安装源：${index}`);
       try {
-        return await this.run(this.executable(), [
+        const result = await this.run(this.executable(), [
           "-m", "pip", "--isolated", "install", "--disable-pip-version-check",
-          "--no-input", "--progress-bar", "off", "--retries", "1", "--timeout", "25",
+          "--no-input", "--progress-bar", "off", "--retries", "3", "--timeout", "120",
+          "--cache-dir", path.join(this.root, "pip-cache"),
+          ...(this.pipHasResume ? ["--resume-retries", "5"] : []),
           "--index-url", index, ...packages,
         ], {
-          signal, log: true, timeout: 600000,
+          signal, log: true, timeout: 900000,
           // Disable inherited pip.ini/pip.conf (including extra-index/no-index).
           // Keep proxy and certificate environment; never change global pip config.
           env: { PIP_CONFIG_FILE: devNull },
         });
+        // Reuse a reachable source in subsequent phases of this runtime. A new
+        // explicit source setting takes priority over this in-memory preference.
+        this.pipSource = { preferred, index };
+        return result;
       } catch (error) {
         signal?.throwIfAborted();
         if (this.closed) throw error;
         const output = String(error.output || error.message);
-        const sourceFailure = /No matching distribution|Could not find a version|Could not fetch URL|ConnectionError|Connection refused|Connection reset|NewConnectionError|ConnectTimeout|ReadTimeout|SSLError|CERTIFICATE_VERIFY_FAILED|Temporary failure in name resolution|Network is unreachable|Max retries exceeded|HTTP (?:403|404|429|5\d\d)|Cannot fetch index/i.test(output);
+        const sourceFailure = /No matching distribution|Could not find a version|Could not fetch URL|ConnectionError|Connection refused|Connection reset|NewConnectionError|ConnectTimeout|ReadTimeout|Read timed out|SSLError|CERTIFICATE_VERIFY_FAILED|Temporary failure in name resolution|Network is unreachable|Max retries exceeded|HTTP (?:403|404|429|5\d\d)|Cannot fetch index|incomplete-download|IncompleteRead|not enough bytes|download failed.*received/i.test(output);
         if (attempt + 1 >= indexes.length || !sourceFailure) throw error;
-        this.installLog.push(`${label}镜像未能提供可安装的软件包，使用官方 PyPI 重试一次。`);
+        this.installLog.push(`${label}在当前源查找或下载失败，切换到 ${indexes[attempt + 1]}（每个源最多尝试一轮）。`);
       }
     }
   }
+  async ensurePip(signal) {
+    const version = async () => {
+      const output = await this.run(this.executable(), ["-m", "pip", "--version"], { signal, timeout: 15000 });
+      const match = /^pip (\d+)\.(\d+)(?:\.\d+)?\b/m.exec(output);
+      if (!match) throw new Error("无法读取插件虚拟环境中的 pip 版本");
+      return { version: match[0], resume: Number(match[1]) > 25 || (Number(match[1]) === 25 && Number(match[2]) >= 2) };
+    };
+    let info = await version();
+    this.pipHasResume = info.resume;
+    if (!info.resume) {
+      this.installLog.push(`${info.version} 不支持默认断点续传，正在升级插件虚拟环境内的 pip。`);
+      await this.installPackages(["--upgrade", "pip>=25.2,<27"], { signal, label: "下载器" });
+      info = await version();
+      if (!info.resume) throw new Error("插件 pip 升级未生效，需要 pip 25.2 或更高版本以恢复中断下载");
+    }
+    this.pipHasResume = true;
+    this.installLog.push(`${info.version}：网络读取超时 120 秒，中断续传最多 5 次；完整下载缓存保存在插件目录。`);
+  }
   async installAsrPackages(signal) {
+    if (!this.pipHasResume) await this.ensurePip(signal);
     await this.installPackages(ASR_PACKAGES, { signal, label: "转写依赖" });
     await this.run(this.executable(), ["-c", "import faster_whisper, ctranslate2, av, yt_dlp"], { signal });
   }
@@ -286,6 +315,7 @@ export class PythonRuntime {
         throw new Error("运行环境需要 Python 3.10 或更高版本，建议使用 64 位 Python 3.11/3.12 创建插件环境");
       if (asr && interpreter.bits !== 64)
         throw new Error("本地转写需要 64 位 Python，请使用 64 位 Python 3.11/3.12 创建插件环境");
+      await this.ensurePip(signal);
       await this.installPackages(["-r", path.join(this.packageRoot, "python/requirements.txt")], {
         signal, label: "基础依赖",
       });

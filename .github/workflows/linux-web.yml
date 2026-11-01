@@ -105,8 +105,9 @@ jobs:
       - name: Verify Bilibili garden plugin and authenticated panel
         run: |
           python3 -m venv "$RUNNER_TEMP/garden-backend"
-          "$RUNNER_TEMP/garden-backend/bin/pip" install -r extensions/bili-garden/python/requirements.txt
+          "$RUNNER_TEMP/garden-backend/bin/pip" install 'pip>=25.2,<27' -r extensions/bili-garden/python/requirements.txt
           "$RUNNER_TEMP/garden-backend/bin/python" extensions/bili-garden/test/backend_test.py
+          "$RUNNER_TEMP/garden-backend/bin/python" scripts/verify/bili-garden-download-recovery.py
           node --test extensions/bili-garden/test/*.test.mjs
           node scripts/verify/bili-garden-agent.mjs
           node scripts/verify/bili-garden-web.mjs "$RUNNER_TEMP/bili-garden-ui"

@@ -74,7 +74,9 @@ sudo apt-get update
 sudo apt-get install -y python3 python3-venv
 ```
 
-Python 业务依赖安装在插件数据目录的 `.venv`。基础依赖和转写依赖使用同一安装源：优先取服务环境变量 `CYRENE_BILI_PIP_INDEX`，其次 `PIP_INDEX_URL`，未设置时使用官方 `https://pypi.org/simple/`。地址必须为 HTTPS；插件安装时隔离系统的 pip.ini/pip.conf 和额外索引，不修改全局 pip 配置。镜像找不到包或连接失败时仅切换官方源重试一次，取消、权限和磁盘错误不会触发切换。后端 Node 请求沿用宿主代理设置，Python 子进程保留 HTTP 代理环境。
+Python 业务依赖安装在插件数据目录的 `.venv`。基础依赖和转写依赖使用同一安装源：优先取服务环境变量 `CYRENE_BILI_PIP_INDEX`，其次 `PIP_INDEX_URL`，未设置时使用官方 `https://pypi.org/simple/`。地址必须为 HTTPS；插件安装时隔离系统的 pip.ini/pip.conf 和额外索引，不修改全局 pip 配置。首选源找不到包、连接失败或下载中断时，依次尝试尚未用过的官方 PyPI、阿里云 HTTPS 镜像，每个源最多一轮，不混合额外索引。当前插件运行期间，后续安装阶段优先沿用已成功的源；显式源设置改变后重新选源。取消、权限和磁盘错误不会触发切换。后端 Node 请求沿用宿主代理设置，Python 子进程保留 HTTP 代理环境。
+
+下载前会把插件虚拟环境中低于 25.2 的 pip 升级到支持恢复下载的版本，不升级系统 pip。读取超时为 120 秒，连接重试 3 次，中断续传最多 5 次，每个源最多运行 15 分钟。已完整下载的文件缓存在插件数据目录 `pip-cache/`；同一条 pip 命令中可续传中断的文件，切换源或重启安装后不保证保留未完成部分。失败后可直接重试，不要先删除 `.venv` 或缓存。相关行为见 [pip 下载选项](https://pip.pypa.io/en/stable/cli/pip/)。
 
 若转写安装报 `No matching distribution found for faster-whisper`：更新宿主并重启后，在小花园设置重新点击“安装转写环境与模型”。安装日志会列出实际 Python 版本、平台/架构和每一阶段的软件源；该错误也可能来自网络或 Python/平台兼容性，不能仅凭它断定镜像缺包。推荐使用 64 位 Python 3.11/3.12。软件包安装成功后还会单独下载并加载模型，只有全部成功才显示转写就绪。
 
@@ -120,3 +122,5 @@ python extensions/bili-garden/test/backend_test.py
 ```bash
 node scripts/verify/bili-garden-asr-install.mjs
 ```
+
+使用上述验收输出的虚拟环境 Python 运行 `scripts/verify/bili-garden-download-recovery.py`，可在本机测试服务主动截断 wheel 下载后，验证 pip 发送非零 Range 请求续传并正确安装。此测试只安装临时测试包，不访问外部站点。
