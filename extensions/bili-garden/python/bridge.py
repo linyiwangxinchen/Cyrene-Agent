@@ -1,35 +1,20 @@
 """Private stdio bridge. No listening socket, credential file or arbitrary tool name."""
 import asyncio
 import base64
-import importlib.util
 import io
 import json
 import os
 from pathlib import Path
 import sys
-import traceback
 
-ROOT = Path(__file__).resolve().parent.parent
 ALLOWED = {
     'bili_search', 'bili_comments', 'bili_user_info', 'bili_user_videos',
     'bili_reply', 'bili_send_message', 'bili_like', 'bili_fav', 'bili_guard_scan',
 }
-backend = None
-
-
 def get_backend(credential):
-    global backend
-    if backend is None:
-        # Import the library without running its FastMCP server; never expose its registry.
-        os.environ['BILI_MCP_TOOLS'] = ','.join(sorted(ALLOWED))
-        os.environ.pop('BILI_GUARD_LOG', None)
-        os.environ.pop('BILI_CIRCLE_MODE', None)
-        spec = importlib.util.spec_from_file_location('garden_bili_vendor', ROOT / 'vendor' / 'bilibili-mcp' / 'mcp_server.py')
-        backend = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(backend)
+    import bilibili_backend as backend
     from bilibili_api import Credential
     cred = Credential(**{k: str(credential.get(k, '')) for k in ('sessdata', 'bili_jct', 'buvid3', 'dedeuserid')})
-    backend.load_credential = lambda: cred
     return backend, cred
 
 
@@ -110,8 +95,12 @@ async def dispatch(message):
     for key in ('receiver_uid', 'uid', 'rpid', 'root'):
         if key in args:
             args[key] = int(args[key])
-    result = await getattr(module, name)(**args)
-    return json.loads(result) if isinstance(result, str) else result
+    token = module.credential_context.set(cred)
+    try:
+        result = await getattr(module, name)(**args)
+        return json.loads(result) if isinstance(result, str) else result
+    finally:
+        module.credential_context.reset(token)
 
 
 async def main():

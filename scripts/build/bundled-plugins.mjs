@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const root = path.resolve(
@@ -15,6 +15,8 @@ export async function stageBundledPlugins(destination) {
     if (manifest.id !== id || manifest.defaultEnabled !== false)
       throw new Error("Bundled plugin must be opt-in");
     await mkdir(destination, { recursive: true });
+    // Staging owns this generated plugin directory; remove obsolete backend files on rebuild.
+    await rm(path.join(destination, id), { recursive: true, force: true });
     await cp(source, path.join(destination, id), {
       recursive: true,
       filter: (file) => {

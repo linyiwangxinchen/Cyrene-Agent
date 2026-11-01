@@ -248,7 +248,7 @@ export class PythonRuntime {
       });
       await this.run(
         this.executable(),
-        ["-c", "import bilibili_api, aiohttp, mcp, qrcode"],
+        ["-c", "import bilibili_api, aiohttp, qrcode"],
         { signal },
       );
       writeFileSync(

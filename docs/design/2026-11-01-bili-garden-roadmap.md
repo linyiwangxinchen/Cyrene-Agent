@@ -51,13 +51,13 @@ extensions/bili-garden/index.mjs  原生 register/unregister
               ├─ runner.mjs       选片/追问/守护的冻结工具和昔涟运行
               ├─ bilibili.mjs     登录、账号、API 结果归一化
               ├─ python.mjs       依赖安装、stdio 请求、超时与进程取消
-              └─ python/bridge.py + vendor/bilibili-mcp
+              └─ python/bridge.py + python/bilibili_backend.py
                        │ 受限操作集合，凭据仅通过 stdin 传入
                        ▼
                  B站 SDK / 可选 ASR
 ```
 
-可复用代码的版权、来源提交和本地修改写入 NOTICE。DSH 的配置 overlay、CLI/profile、ModuleLoader、全局页面插槽全部不带入。保留 Python 上游作为隔离的第三方库，只通过小型 bridge 调用明确名单；不把它的全部工具直接暴露给模型。
+可复用代码的版权、来源提交和本地修改写入 NOTICE。DSH 的配置 overlay、CLI/profile、ModuleLoader、全局页面插槽全部不带入。只提取必要 B 站 API 函数到昔涟自己的适配层，通过私有 bridge 调用明确名单；删除完整第三方服务入口和 DSH 文件/配置逻辑，vendor 仅保留许可证。
 
 宿主改动保持小范围：
 

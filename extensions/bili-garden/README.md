@@ -31,6 +31,10 @@ node scripts/packaging/bili-garden.mjs
 
 Linux 服务更新后按现有部署文档重启 `cyrene-web`，然后浏览器刷新。服务运行期间不需要桌面、DISPLAY 或 DSH。
 
+## 完全由昔涟运行
+
+人格、模型调用、定时调度、记忆、配置、密钥和发送记录均由昔涟管理。B 站请求由本插件的 `python/bilibili_backend.py` 直接调用 `bilibili-api-python`；不安装或运行 DSH，也不启动独立 MCP 服务。Python 只是昔涟管理的子进程，Windows/Linux Web 使用相同接口。`vendor/` 仅保留必要许可证和来源声明。
+
 ## 第一次使用
 
 1. 面板的“设置”中点击 **安装运行环境**。进度在本页显示。
@@ -101,3 +105,10 @@ node scripts/verify/bili-garden-runtime.mjs
 ```
 
 功能设计和开发路线见 `docs/design/2026-11-01-bili-garden-roadmap.md`；实际验收范围见 `docs/changes/bili-garden-20261101.md`。
+
+底层适配回归（安装 Python 运行依赖后，无需账号、不发网络请求）：
+
+```bash
+python -m pip install -r extensions/bili-garden/python/requirements.txt
+python extensions/bili-garden/test/backend_test.py
+```
