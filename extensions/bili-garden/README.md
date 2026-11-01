@@ -74,7 +74,9 @@ sudo apt-get update
 sudo apt-get install -y python3 python3-venv
 ```
 
-Python 业务依赖安装在插件数据目录的 `.venv`。可通过服务环境变量 `CYRENE_BILI_PIP_INDEX` 指定 HTTPS pip 镜像。后端 Node 请求沿用宿主代理设置，Python 子进程继承服务环境。网络访问失败会显示原因，不把模型错误统一误报成账号失效。
+Python 业务依赖安装在插件数据目录的 `.venv`。基础依赖和转写依赖使用同一安装源：优先取服务环境变量 `CYRENE_BILI_PIP_INDEX`，其次 `PIP_INDEX_URL`，未设置时使用官方 `https://pypi.org/simple/`。地址必须为 HTTPS；插件安装时隔离系统的 pip.ini/pip.conf 和额外索引，不修改全局 pip 配置。镜像找不到包或连接失败时仅切换官方源重试一次，取消、权限和磁盘错误不会触发切换。后端 Node 请求沿用宿主代理设置，Python 子进程保留 HTTP 代理环境。
+
+若转写安装报 `No matching distribution found for faster-whisper`：更新宿主并重启后，在小花园设置重新点击“安装转写环境与模型”。安装日志会列出实际 Python 版本、平台/架构和每一阶段的软件源；该错误也可能来自网络或 Python/平台兼容性，不能仅凭它断定镜像缺包。推荐使用 64 位 Python 3.11/3.12。软件包安装成功后还会单独下载并加载模型，只有全部成功才显示转写就绪。
 
 转写环境及模型另行点击安装；更换 Whisper 模型后需要重新安装所选模型。正常阅读不会偷偷下载尚未安装的权重。视频转写使用 CPU/int8，较长视频会占用较多时间，受每日次数和运行超时约束。
 
@@ -111,4 +113,10 @@ node scripts/verify/bili-garden-runtime.mjs
 ```bash
 python -m pip install -r extensions/bili-garden/python/requirements.txt
 python extensions/bili-garden/test/backend_test.py
+```
+
+真实安装验收（临时虚拟环境，无需账号，不下载 Whisper 模型）：
+
+```bash
+node scripts/verify/bili-garden-asr-install.mjs
 ```

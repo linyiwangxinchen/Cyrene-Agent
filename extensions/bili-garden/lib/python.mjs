@@ -7,7 +7,24 @@ import {
   chmodSync,
 } from "node:fs";
 import path from "node:path";
+import { devNull } from "node:os";
 import { createHash } from "node:crypto";
+
+const PYPI_INDEX = "https://pypi.org/simple/";
+const ASR_PACKAGES = [
+  "faster-whisper>=1.2.1,<2",
+  "yt-dlp",
+  "--only-binary=ctranslate2,av,onnxruntime,tokenizers",
+];
+
+function packageIndex(value) {
+  let url;
+  try { url = new URL(value.trim()); } catch { /* validated below */ }
+  if (!url || url.protocol !== "https:" || url.username || url.password || url.search || url.hash)
+    throw new Error("pip 镜像必须是完整的 HTTPS 索引地址，不能包含账号密码、查询参数或片段");
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/`;
+  return url.href;
+}
 
 export function stopProcess(child, force = false) {
   if (!child || child.exitCode !== null || child.signalCode !== null) return;
@@ -63,7 +80,7 @@ export class PythonRuntime {
       asr,
     };
   }
-  run(command, args, { signal, timeout = 300000, log = false } = {}) {
+  run(command, args, { signal, timeout = 300000, log = false, env = {} } = {}) {
     if (this.closed) return Promise.reject(new Error("插件已停止"));
     return new Promise((resolve, reject) => {
       signal?.throwIfAborted();
@@ -74,7 +91,7 @@ export class PythonRuntime {
         windowsHide: true,
         detached: process.platform !== "win32",
         stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1" },
+        env: { ...process.env, PYTHONUTF8: "1", PYTHONUNBUFFERED: "1", ...env },
       });
       this.children.add(child);
       const finish = (error) => {
@@ -116,10 +133,43 @@ export class PythonRuntime {
         finish(
           code === 0
             ? null
-            : new Error(`Python 退出 ${code}：${output.slice(-600)}`),
+            : Object.assign(new Error(`Python 退出 ${code}：${output.slice(-600)}`), { output }),
         ),
       );
     });
+  }
+  async installPackages(packages, { signal, label = "依赖" } = {}) {
+    const preferred = packageIndex(
+      process.env.CYRENE_BILI_PIP_INDEX || process.env.PIP_INDEX_URL || PYPI_INDEX,
+    );
+    const indexes = preferred === PYPI_INDEX ? [preferred] : [preferred, PYPI_INDEX];
+    for (const [attempt, index] of indexes.entries()) {
+      signal?.throwIfAborted();
+      this.installLog.push(`${label}安装源：${index}`);
+      try {
+        return await this.run(this.executable(), [
+          "-m", "pip", "--isolated", "install", "--disable-pip-version-check",
+          "--no-input", "--progress-bar", "off", "--retries", "1", "--timeout", "25",
+          "--index-url", index, ...packages,
+        ], {
+          signal, log: true, timeout: 600000,
+          // Disable inherited pip.ini/pip.conf (including extra-index/no-index).
+          // Keep proxy and certificate environment; never change global pip config.
+          env: { PIP_CONFIG_FILE: devNull },
+        });
+      } catch (error) {
+        signal?.throwIfAborted();
+        if (this.closed) throw error;
+        const output = String(error.output || error.message);
+        const sourceFailure = /No matching distribution|Could not find a version|Could not fetch URL|ConnectionError|Connection refused|Connection reset|NewConnectionError|ConnectTimeout|ReadTimeout|SSLError|CERTIFICATE_VERIFY_FAILED|Temporary failure in name resolution|Network is unreachable|Max retries exceeded|HTTP (?:403|404|429|5\d\d)|Cannot fetch index/i.test(output);
+        if (attempt + 1 >= indexes.length || !sourceFailure) throw error;
+        this.installLog.push(`${label}镜像未能提供可安装的软件包，使用官方 PyPI 重试一次。`);
+      }
+    }
+  }
+  async installAsrPackages(signal) {
+    await this.installPackages(ASR_PACKAGES, { signal, label: "转写依赖" });
+    await this.run(this.executable(), ["-c", "import faster_whisper, ctranslate2, av, yt_dlp"], { signal });
   }
   async downloadUv(signal) {
     const platforms = {
@@ -177,6 +227,7 @@ export class PythonRuntime {
     if (this.installing) throw new Error("运行环境正在安装");
     this.installing = true;
     this.installLog = [];
+    const asrModel = this.config().asrModel;
     try {
       if (!existsSync(this.executable())) {
         let python = "";
@@ -227,24 +278,16 @@ export class PythonRuntime {
           );
         }
       }
-      const pip = [
-        "-m",
-        "pip",
-        "install",
-        "--disable-pip-version-check",
-        "-r",
-        path.join(this.packageRoot, "python/requirements.txt"),
-      ];
-      const index = process.env.CYRENE_BILI_PIP_INDEX;
-      if (index) {
-        if (!index.startsWith("https://"))
-          throw new Error("pip 镜像必须使用 HTTPS");
-        pip.push("--index-url", index);
-      }
-      await this.run(this.executable(), pip, {
-        signal,
-        log: true,
-        timeout: 600000,
+      const interpreter = JSON.parse(await this.run(this.executable(), [
+        "-c", "import json,sys,platform,struct; print(json.dumps({'version':list(sys.version_info[:3]),'platform':sys.platform,'arch':platform.machine(),'bits':struct.calcsize('P')*8}))",
+      ], { signal, timeout: 15000 }));
+      this.installLog.push(`Python ${interpreter.version.join(".")} · ${interpreter.platform}/${interpreter.arch} · ${interpreter.bits} 位`);
+      if (interpreter.version[0] !== 3 || interpreter.version[1] < 10)
+        throw new Error("运行环境需要 Python 3.10 或更高版本，建议使用 64 位 Python 3.11/3.12 创建插件环境");
+      if (asr && interpreter.bits !== 64)
+        throw new Error("本地转写需要 64 位 Python，请使用 64 位 Python 3.11/3.12 创建插件环境");
+      await this.installPackages(["-r", path.join(this.packageRoot, "python/requirements.txt")], {
+        signal, label: "基础依赖",
       });
       await this.run(
         this.executable(),
@@ -256,28 +299,28 @@ export class PythonRuntime {
         JSON.stringify({ ready: true, at: Date.now() }),
       );
       if (asr) {
-        await this.run(
-          this.executable(),
-          ["-m", "pip", "install", "faster-whisper", "yt-dlp", "av>=12,<17"],
-          { signal, log: true, timeout: 600000 },
-        );
+        await this.installAsrPackages(signal);
+        this.installLog.push(`转写依赖检查通过，正在下载并加载 ${asrModel} 模型（与 pip 软件源独立）。`);
         await this.run(
           this.executable(),
           [
             "-c",
             'import os,sys; os.environ["HF_HOME"]=sys.argv[2]; from faster_whisper import WhisperModel; WhisperModel(sys.argv[1],device="cpu",compute_type="int8")',
-            this.config().asrModel,
+            asrModel,
             path.join(this.root, "model-cache"),
           ],
           { signal, log: true, timeout: 1800000 },
         );
         writeFileSync(
           path.join(this.root, "asr-ready.json"),
-          JSON.stringify({ model: this.config().asrModel }),
+          JSON.stringify({ model: asrModel }),
         );
       }
       this.installLog.push("运行环境检查通过");
       return this.status();
+    } catch (error) {
+      this.installLog.push(`安装未完成：${error.message}`);
+      throw error;
     } finally {
       this.installing = false;
     }
