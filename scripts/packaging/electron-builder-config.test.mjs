@@ -21,6 +21,10 @@ test("the assisted installer exposes Cyrene setup choices and an uninstall entry
   assert.match(source, /menuCategory:\s+Cyrene/);
 });
 
+test("the bundled Bili Garden Python scripts are unpacked for external interpreters", () => {
+  assert.match(source, /-\s+"dist\/main\/plugins\/bili-garden\/python\/\*\*"/);
+});
+
 test("the assisted installer stores launch preferences under the application package name", () => {
   assert.match(
     installerInclude,

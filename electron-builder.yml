@@ -22,6 +22,8 @@ asarUnpack:
   - "**/node_modules/diff/**"
   - "**/node_modules/glob/**"
   - "**/node_modules/minimatch/**"
+  # 小花园由外部 Python 执行脚本，必须提供真实磁盘文件。
+  - "dist/main/plugins/bili-garden/python/**"
 electronDist: node_modules/electron/dist
 files:
   - dist/**/*

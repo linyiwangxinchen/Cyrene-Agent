@@ -49,7 +49,12 @@ export function stopProcess(child, force = false) {
 export class PythonRuntime {
   constructor(root, packageRoot, { config, credentials, log = () => {} }) {
     this.root = root;
-    this.packageRoot = packageRoot;
+    const archiveSegment = `${path.sep}app.asar${path.sep}`;
+    const unpackedRoot = packageRoot.replace(archiveSegment, `${path.sep}app.asar.unpacked${path.sep}`);
+    if (unpackedRoot !== packageRoot && !existsSync(path.join(unpackedRoot, "python", "bridge.py"))) {
+      throw new Error("安装包缺少小花园 Python 脚本，请重新安装应用");
+    }
+    this.packageRoot = unpackedRoot;
     this.config = config;
     this.credentials = credentials;
     this.log = log;

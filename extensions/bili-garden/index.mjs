@@ -9,11 +9,12 @@ export async function register(ctx) {
     !ctx.deps.secrets
   )
     throw new Error("请先更新并重新编译支持小花园宿主接口的昔涟版本");
-  service = new GardenService(
+  const activeService = new GardenService(
     ctx,
     fileURLToPath(new URL(".", import.meta.url)),
   );
-  ctx.onDispose(() => service.close());
+  service = activeService;
+  ctx.onDispose(() => activeService.close());
   ctx.registerIpc("garden", (command, args) => service.dispatch(command, args));
   ctx.registerTool({
     id: "bili-garden_reading",

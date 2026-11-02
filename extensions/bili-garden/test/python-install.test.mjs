@@ -37,6 +37,25 @@ const missing = () => Object.assign(new Error("No matching distribution found fo
   output: "ERROR: Could not find a version that satisfies the requirement faster-whisper (from versions: none)",
 });
 
+test("打包应用将外部 Python 使用的脚本定位到解包目录", async t => {
+  const root = mkdtempSync(path.join(tmpdir(), "garden-asar-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const suffix = path.join("dist", "main", "plugins", "bili-garden");
+  const archivedRoot = path.join(root, "app.asar", suffix);
+  const unpackedRoot = path.join(root, "app.asar.unpacked", suffix);
+  const options = { config: () => ({}), credentials: async () => ({}) };
+  assert.throws(() => new PythonRuntime(root, archivedRoot, options), /缺少小花园 Python 脚本/);
+  mkdirSync(path.join(unpackedRoot, "python"), { recursive: true });
+  const bridge = path.join(unpackedRoot, "python", "bridge.py");
+  writeFileSync(bridge, "fixture");
+  const runtime = new PythonRuntime(root, archivedRoot, options);
+  t.after(() => runtime.close());
+  assert.equal(runtime.packageRoot, unpackedRoot);
+  const result = await runtime.run(process.execPath, ["-e", "console.log(require('node:fs').readFileSync(process.argv[1], 'utf8'))", bridge]);
+  assert.equal(result.trim(), "fixture");
+  assert.equal(new PythonRuntime(root, path.join(root, "source"), options).packageRoot, path.join(root, "source"));
+});
+
 test("基础与转写依赖共用显式镜像，隔离系统配置并记录解释器", async t => {
   const { runtime, calls, root } = fixture(t);
   await runtime.install({ asr: true });
