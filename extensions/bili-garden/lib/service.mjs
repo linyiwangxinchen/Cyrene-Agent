@@ -114,6 +114,7 @@ export class GardenService {
       questions: this.store.list("question", 30),
       events: this.store.list("event", 35),
       cooldown: this.store.get("meta", "cooldown"),
+      guard: this.guardStatus(account),
       stats: {
         day,
         picked: this.store.picked(day),
@@ -125,6 +126,19 @@ export class GardenService {
       charter: this.charter(),
     };
   }
+  guardStatus(account) {
+    const cfg = this.store.config();
+    const clock = localClock(new Date(this.now()), cfg.timezone);
+    const paused = !cfg.guardOn ? "评论守护未开启"
+      : !account.loggedIn ? "尚未登录 B 站"
+      : this.active ? "当前任务结束后继续扫描"
+      : withinWindow(clock.minute, cfg.quietStart, cfg.quietEnd) ? "静默时段内，后台扫描暂停"
+      : !cfg.guardPerRound || this.store.countActions("reply", clock.day) >= cfg.guardPerDay ? "回复额度已用完或设为 0"
+      : "按设置的间隔扫描 @ 和评论";
+    return { message: paused, autoSend: cfg.autoSend, whitelistEmpty: !cfg.guardWhitelist.length,
+      lastScan: account.uid ? this.store.get("guard-scan", account.uid) : null,
+      retryable: account.uid ? this.store.retryableMentions(account.uid).filter(item => cfg.guardWhitelist.includes(String(item.uid))).length : 0 };
+  }
   async start({
     source = "manual",
     kind = "discover",
@@ -133,8 +147,8 @@ export class GardenService {
     guardItems,
   } = {}) {
     if (this.closed) throw new Error("插件已停止");
-    if (this.active || this.runtime.status().installing)
-      throw new Error("已有任务或环境安装正在运行");
+    if (this.active || this.scanBusy || this.runtime.status().installing)
+      throw new Error("已有任务、评论扫描或环境安装正在运行");
     if (!["discover", "question", "guard"].includes(kind))
       throw new Error("任务类型无效");
     if (bvid) bvid = videoId(bvid);
@@ -207,7 +221,7 @@ export class GardenService {
     return { cancelled: true };
   }
   async tick() {
-    if (this.closed || this.active || this.runtime.status().installing) return;
+    if (this.closed || this.active || this.scanBusy || this.runtime.status().installing) return;
     const cfg = this.store.config();
     if (!cfg.autoRun && !cfg.guardOn) return;
     const account = await this.account();
@@ -254,38 +268,42 @@ export class GardenService {
         cfg.guardPerRound,
         Math.max(0, cfg.guardPerDay - this.store.countActions("reply", day)),
       );
-      if (!room) return { items: [] };
+      if (!room) return { items: [], message: "回复额度已用完或设为 0，本次未扫描" };
       const owner = cfg.guardOwnerUid || account.uid;
-      const videos = await this.client.call(
-        "bili_user_videos",
-        { uid: Number(owner), pn: 1, ps: cfg.guardVideos, order: "pubdate" },
-        { signal: this.ctx.signal },
-      );
-      const bvids = (videos.videos ?? videos.list ?? [])
-        .map((v) => v.bvid)
-        .filter(Boolean)
-        .slice(0, cfg.guardVideos);
+      const errors = [];
+      let bvids = [];
+      try {
+        const videos = await this.client.call("bili_user_videos",
+          { uid: Number(owner), pn: 1, ps: cfg.guardVideos, order: "pubdate" }, { signal: this.ctx.signal });
+        bvids = (videos.videos ?? videos.list ?? []).map(v => v.bvid).filter(Boolean).slice(0, cfg.guardVideos);
+      } catch {
+        this.ctx.signal.throwIfAborted();
+        errors.push("UP 视频列表读取失败；本轮仍扫描 @ 我的");
+      }
       const cursor = this.store.get("cursor", account.uid, {
         id: 0,
         time: 0,
         ctimes: {},
       });
-      const scan = await this.client.call(
-        "bili_guard_scan",
-        {
-          bvids,
-          since_at_id: cursor.id,
-          since_at_time: cursor.time,
-          since_ctimes: cursor.ctimes,
-          max_pages: 3,
-        },
-        { signal: this.ctx.signal },
-      );
-      if (scan.errors?.length)
-        this.log("部分评论扫描失败，将保留游标重试", "error");
+      let scan;
+      try {
+        scan = await this.client.call("bili_guard_scan", {
+          bvids, since_at_id: cursor.id, since_at_time: cursor.time,
+          since_ctimes: cursor.ctimes, at_resume: cursor.atResume ?? null, max_pages: 3,
+        }, { signal: this.ctx.signal });
+      } catch {
+        this.ctx.signal.throwIfAborted();
+        scan = { at: [], comments: [], errors: ["scan: failed"], at_cursor: cursor, at_resume: cursor.atResume ?? null };
+      }
+      if (scan.errors?.length) errors.push("部分通知或评论读取失败，将保留未完成进度重试");
+      const atItems = scan.at ?? [];
+      const allowedAt = atItems.filter(it => cfg.guardWhitelist.includes(String(it.uid)));
+      const stats = { at: this.now(), receivedAt: scan.at_stats?.received ?? atItems.length,
+        allowedAt: allowedAt.length, filteredAt: atItems.length - allowedAt.length,
+        unsupported: scan.at_stats?.unsupported ?? 0, invalid: 0, queued: 0,
+        errors, backlog: Boolean(scan.at_resume) };
       const incoming = [
-        ...(scan.at ?? [])
-          .filter((it) => cfg.guardWhitelist.includes(String(it.uid)))
+        ...allowedAt
           .map((it) => ({ ...it, kind: "at", root: it.root_id || 0 })),
         ...(scan.comments ?? [])
           .filter(
@@ -296,34 +314,40 @@ export class GardenService {
           )
           .map((it) => ({ ...it, kind: "comment" })),
       ];
-      for (const it of incoming) {
-        if (!it.bvid || !it.rpid || String(it.uid) === account.uid) continue;
-        const id = `${account.uid}:${it.rpid}`;
-        if (!this.store.get("guard", id))
-          this.store.put("guard", id, {
-            ...it,
-            status: "pending",
-            attempts: 0,
-            accountUid: account.uid,
-            ownerUid: owner,
-            seenAt: this.now(),
-          });
-      }
-      // Queue all eligible items durably before moving cursors; excess items remain pending.
-      if (!scan.errors?.length) {
+      this.store.transaction(() => {
+        for (const it of incoming) {
+          if (!/^BV[0-9A-Za-z]{10}$/.test(it.bvid || "") || !/^[1-9]\d*$/.test(String(it.rpid || ""))) {
+            stats.invalid++;
+            continue;
+          }
+          if (String(it.uid) === account.uid) continue;
+          const id = `${account.uid}:${it.rpid}`;
+          if (!this.store.get("guard", id)) {
+            this.store.put("guard", id, {
+              ...it, status: "pending", attempts: 0, accountUid: account.uid,
+              ownerUid: owner, seenAt: this.now(),
+            });
+            stats.queued++;
+          }
+        }
+        // Queue eligible items and cursor progress in one transaction.
         const ctimes = { ...cursor.ctimes };
-        for (const c of scan.comments ?? [])
+        if (!scan.errors?.length) for (const c of scan.comments ?? [])
           ctimes[c.bvid] = Math.max(ctimes[c.bvid] || 0, Number(c.ctime) || 0);
         this.store.put("cursor", account.uid, {
           id: scan.at_cursor?.id ?? cursor.id,
           time: scan.at_cursor?.time ?? cursor.time,
+          atResume: scan.at_resume ?? null,
           ctimes,
         });
-      }
+        this.store.put("guard-scan", account.uid, stats);
+      });
+      if (errors.length) this.log(errors.join("；"), "error");
+      this.log(`扫描 @ ${stats.receivedAt} 条，白名单通过 ${stats.allowedAt} 条，新入队 ${stats.queued} 条${stats.backlog ? "；还有历史通知待扫描" : ""}`);
       const pending = this.store.pendingGuard(account.uid, room);
       for (const it of pending)
         this.store.put("guard", it.id, { ...it, attempts: it.attempts + 1 });
-      return { items: pending };
+      return { items: pending, message: `扫描完成：读取 @ ${stats.receivedAt} 条，白名单通过 ${stats.allowedAt} 条，本轮待处理 ${pending.length} 条${errors.length ? "；部分读取失败，详情见扫描状态" : ""}` };
     } finally {
       this.scanBusy = false;
     }
@@ -502,7 +526,20 @@ export class GardenService {
         const r = await this.scanGuard();
         return r.items.length
           ? this.start({ kind: "guard", guardItems: r.items })
-          : { started: false, message: "没有需要回复的新评论" };
+          : { started: false, message: r.message || "没有需要回复的新评论" };
+      }
+      case "guard-retry": {
+        if (this.active || this.scanBusy) throw new Error("请等待本轮任务或扫描结束");
+        const account = await this.account();
+        if (!account.loggedIn) throw new Error("请先登录");
+        const cfg = this.store.config();
+        if (!cfg.guardOn) throw new Error("评论守护未启用");
+        const retry = this.store.retryableMentions(account.uid).filter(item => cfg.guardWhitelist.includes(String(item.uid)));
+        this.store.transaction(() => {
+          for (const item of retry) this.store.put("guard", item.id, { ...item, attempts: 0 });
+          this.store.put("meta", "last-guard", 0);
+        });
+        return { message: `已将 ${retry.length} 条白名单内未回复的 @ 放回队列，下一轮扫描时处理` };
       }
       default:
         throw new Error("未知小花园操作");

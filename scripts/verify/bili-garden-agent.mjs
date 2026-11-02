@@ -17,10 +17,18 @@ const model = createServer(async (req, res) => {
   requests.push(body);
   const names = body.tools?.map((t) => t.function.name) ?? [],
     toolMessages = body.messages.filter((m) => m.role === "tool");
+  const guard = JSON.stringify(body.messages).includes("本轮是评论守护");
   let name, args;
   if (toolMessages.length === 0) {
     name = names.find((n) => n.endsWith("_read_video"));
-    args = { bvid: "BV1JcnW6pEFT" };
+    args = { bvid: guard ? "BV17x411w7KC" : "BV1JcnW6pEFT" };
+  } else if (guard && toolMessages.length === 1) {
+    name = names.find((n) => n.endsWith("_propose_interaction"));
+    args = { kind: "reply", bvid: "BV17x411w7KC", rpid: "100", reason: "回应白名单用户的直接提问",
+      text: "我是昔涟，我在呀。这条视频暂时没有可读字幕，你想聊哪一段？" };
+  } else if (guard && toolMessages.length === 2) {
+    name = names.find((n) => n.endsWith("_finish_report"));
+    args = { items: [], summary: "已回复原评论并说明无法读取视频" };
   } else if (toolMessages.length === 1) {
     name = names.find((n) => n.endsWith("_finish_report"));
     args = {
@@ -91,7 +99,8 @@ await writeFile(
 await writeFile(
   path.join(dir, "index.mjs"),
   `import { GardenService } from ${JSON.stringify(pathToFileURL(path.resolve("extensions/bili-garden/lib/service.mjs")).href)};
-export function register(ctx){const client={account:async()=>({loggedIn:true,uid:'fixture',name:'Fixture'}),info:async()=>({bvid:'BV1JcnW6pEFT',title:'养花',owner:'UP',duration:300}),subtitle:async()=>({bvid:'BV1JcnW6pEFT',text:'花需要合适的阳光',segments:[{from:12,text:'花需要合适的阳光'}]})};
+export function register(ctx){const client={account:async()=>({loggedIn:true,uid:'123',name:'Fixture'}),info:async(bvid)=>({bvid,title:'养花',owner:'UP',duration:300}),subtitle:async(bvid)=>bvid==='BV17x411w7KC'?{bvid,text:'',segments:[]}:{bvid,text:'花需要合适的阳光',segments:[{from:12,text:'花需要合适的阳光'}]},
+call:async(name)=>{if(name==='bili_user_videos')return {videos:[]};if(name==='bili_guard_scan')return {at:[{bvid:'BV17x411w7KC',rpid:'100',uid:'456',root_id:0,text:'@昔涟 你在吗？'}],comments:[],at_cursor:{id:1,time:1},at_resume:null};if(name==='bili_reply')return {success:true,rpid:'200'};throw new Error('Unexpected fixture call: '+name)}};
 const runtime={status:()=>({installed:true}),stopWorker(){},async close(){}};
 const s=new GardenService(ctx,${JSON.stringify(path.resolve("extensions/bili-garden"))},{client,runtime,schedule:false});ctx.registerIpc('garden',(c,a)=>s.dispatch(c,a));ctx.onDispose(()=>s.close());}`,
 );
@@ -211,9 +220,28 @@ try {
   assert.ok(run.usage.cachedInput > 0);
   assert.equal(snapshot.profiles[0].id, "fixture");
   assert.ok(!JSON.stringify(snapshot.profiles).includes("fixture-local-only"));
+  await call("config", { guardOn: true, autoSend: true, guardWhitelist: ["456"], quietStart: "00:00", quietEnd: "00:00" });
+  const guardStarted = await call("guard");
+  assert.equal(guardStarted.started, true);
+  for (let i = 0; i < 200; i++) {
+    snapshot = await call("snapshot");
+    if (!snapshot.run) break;
+    await delay(100);
+  }
+  const guardRun = snapshot.runs.find(item => item.id === guardStarted.runId);
+  assert.equal(guardRun.status, "success", JSON.stringify({ guardRun, logs }));
+  assert.equal(snapshot.guard.lastScan.allowedAt, 1);
+  assert.equal(snapshot.actions.length, 1);
+  assert.equal(snapshot.actions[0].status, "sent");
+  assert.equal(snapshot.actions[0].rpid, "100");
+  assert.equal(snapshot.actions[0].evidenceSource, "comment");
+  assert.ok(requests.some(request => JSON.stringify(request.messages).includes("没有可读字幕/语音")));
+  const beforeDuplicate = requests.length;
+  assert.equal((await call("guard")).started, false);
+  assert.equal(requests.length, beforeDuplicate);
   await invoke("plugins:set-enabled", id, false);
   console.log(
-    `PASS real headless Agent, persona, tools, report, memory, usage and shutdown: ${data}`,
+    `PASS real headless Agent, persona, mention reply without subtitles, replay suppression, report, memory, usage and shutdown: ${data}`,
   );
 } catch (e) {
   console.error(logs.slice(-35).join("\n"));

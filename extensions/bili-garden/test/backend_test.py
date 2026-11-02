@@ -77,5 +77,76 @@ class BackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["at_cursor"], {"id": 12, "time": 34})
         self.assertTrue(result["errors"])
 
+    def mention(self, ident, at_time, **item):
+        return {"id": ident, "at_time": at_time, "user": {"mid": 456, "nickname": "用户"},
+                "item": {"type": "reply", "business_id": 1, "subject_id": 170001,
+                         "source_id": ident + 1000, "root_id": 0,
+                         "uri": "https://www.bilibili.com/video/BV17x411w7KC", "source_content": "@昔涟 你怎么看？", **item}}
+
+    async def test_guard_checks_latest_page_instead_of_using_watermark_as_page_cursor(self):
+        at = AsyncMock(return_value={"items": [self.mention(110, 110), self.mention(90, 90)],
+                                    "cursor": {"id": 90, "time": 90, "is_end": True}})
+        with patch.object(backend.session, "get_at", at):
+            first = await bridge.dispatch(self.request("bili_guard_scan", since_at_id=100, since_at_time=100))
+            self.assertIsNone(at.call_args.kwargs.get("last_id"))
+            self.assertIsNone(at.call_args.kwargs.get("at_time"))
+            self.assertEqual([it["id"] for it in first["at"]], [110])
+            self.assertEqual(first["at_cursor"], {"id": 110, "time": 110})
+            at.return_value = {"items": [self.mention(120, 120), self.mention(110, 110)],
+                               "cursor": {"id": 110, "time": 110, "is_end": True}}
+            second = await bridge.dispatch(self.request("bili_guard_scan", since_at_id=110, since_at_time=110))
+        self.assertIn(120, [it["id"] for it in second["at"]])
+
+    async def test_guard_resolves_av_link_and_does_not_treat_dynamic_as_video_reply(self):
+        at = AsyncMock(return_value={"items": [
+            self.mention(10, 10, uri="https://www.bilibili.com/video/av170001", root_id=999),
+            self.mention(11, 11, business_id=17, type="dynamic"),
+        ], "cursor": {"is_end": True}})
+        with patch.object(backend.session, "get_at", at):
+            result = await bridge.dispatch(self.request("bili_guard_scan"))
+        self.assertEqual(len(result["at"]), 1)
+        self.assertEqual(result["at"][0]["bvid"], "BV17x411w7KC")
+        self.assertEqual(result["at"][0]["root_id"], 999)
+
+    async def test_guard_backlog_resumes_after_restart_without_skipping_unread_pages(self):
+        at = AsyncMock(side_effect=[
+            {"items": [self.mention(30, 30)], "cursor": {"id": 30, "time": 30, "is_end": False}},
+            {"items": [self.mention(20, 20), self.mention(10, 10)], "cursor": {"id": 10, "time": 10, "is_end": True}},
+        ])
+        with patch.object(backend.session, "get_at", at):
+            first = await bridge.dispatch(self.request("bili_guard_scan", since_at_id=10, since_at_time=10, max_pages=1))
+            self.assertEqual(first["at_cursor"], {"id": 10, "time": 10})
+            self.assertEqual(first["at_resume"]["id"], 30)
+            second = await bridge.dispatch(self.request("bili_guard_scan", since_at_id=10, since_at_time=10,
+                                                       at_resume=first["at_resume"], max_pages=1))
+        self.assertEqual(at.call_args.kwargs["last_id"], 30)
+        self.assertIn(20, [it["id"] for it in second["at"]])
+        self.assertEqual(second["at_cursor"], {"id": 30, "time": 30})
+        self.assertIsNone(second["at_resume"])
+
+    async def test_guard_partial_page_failure_keeps_progress_and_retries_missing_page(self):
+        at = AsyncMock(side_effect=[
+            {"items": [self.mention(120, 120)], "cursor": {"id": 120, "time": 120, "is_end": False}},
+            RuntimeError("offline"),
+            {"items": [self.mention(110, 110), self.mention(90, 90)], "cursor": {"id": 90, "time": 90, "is_end": True}},
+        ])
+        with patch.object(backend.session, "get_at", at):
+            first = await bridge.dispatch(self.request("bili_guard_scan", since_at_id=100, since_at_time=100))
+            self.assertEqual(first["at_cursor"], {"id": 100, "time": 100})
+            self.assertEqual(first["at_resume"]["id"], 120)
+            self.assertTrue(first["errors"])
+            second = await bridge.dispatch(self.request("bili_guard_scan", since_at_id=100, since_at_time=100, at_resume=first["at_resume"]))
+        self.assertEqual(second["at_cursor"], {"id": 120, "time": 120})
+        self.assertEqual([item["id"] for item in second["at"]], [110])
+
+    async def test_guard_same_second_mentions_on_next_page_are_not_dropped(self):
+        at = AsyncMock(side_effect=[
+            {"items": [self.mention(100, 100)], "cursor": {"id": 100, "time": 100, "is_end": False}},
+            {"items": [self.mention(90, 100), self.mention(80, 99)], "cursor": {"id": 80, "time": 99, "is_end": True}},
+        ])
+        with patch.object(backend.session, "get_at", at):
+            result = await bridge.dispatch(self.request("bili_guard_scan", since_at_id=100, since_at_time=100))
+        self.assertEqual([item["id"] for item in result["at"]], [100, 90])
+
 if __name__ == "__main__":
     unittest.main()

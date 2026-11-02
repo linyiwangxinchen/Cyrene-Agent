@@ -8,6 +8,7 @@ import json
 import re
 from contextvars import ContextVar
 from bilibili_api import video, search, comment, Credential, user, session
+from mention_scan import scan_mentions
 
 credential_context = ContextVar("cyrene_bili_credential", default=None)
 
@@ -450,14 +451,13 @@ async def bili_send_message(receiver_uid: int, text: str) -> str:
     except Exception as e:
         return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
 
-_BV_PATTERN = re.compile(r"BV[0-9A-Za-z]{10}")
-
 async def bili_guard_scan(
     bvids: list[str] = None,
     since_at_id: int = 0,
     since_at_time: int = 0,
     since_ctimes: dict = None,
     max_pages: int = 3,
+    at_resume: dict = None,
 ) -> str:
     """
     值班扫描：一次拿回「谁 @ 了我」+「我最近视频下的新评论」，供守护评论区的一轮使用。
@@ -468,18 +468,20 @@ async def bili_guard_scan(
     Args:
         bvids: 要盯评论区的视频 BV 号列表。**只传自己/最近发的几个**，别把整个列表倒进来 ——
                每个 BV 至少要一次 get_info + 一页评论，越界会招风控。传 None/[] 时只扫 @ 通道。
-        since_at_id: @ 通道的水位之一，上一轮返回的 at_cursor.id。0 = 从头/按 at_time 算。
+        since_at_id: 已完成扫描的通知水位，不是 get_at 的翻页参数。
         since_at_time: @ 通道的时间水位（unix 秒），上一轮返回的 at_cursor.time。0 = 不限。
         since_ctimes: {bvid: ctime} 的评论水位，只回 ctime 比它新的顶层评论。
                       没给过的视频当 0（= 这一轮把 max_pages 页全给你）。
         max_pages: 每个视频最多翻几页评论（每页 20 条，按时间倒序）。默认 3，即最多 60 条。
+        at_resume: 上轮未完成的 @ 历史分页进度；只用于补扫，不作为新通知水位。
 
     Returns:
         JSON 字符串：
           {
             "at": [{"id","at_time","uid","uname","kind","title","bvid","aid","rpid","root_id","text"}],
             "comments": [{"bvid","rpid","uid","uname","text","ctime","root"}],
-            "at_cursor": {"id": int, "time": int},   ← 下一轮原样传回 since_at_id / since_at_time
+            "at_cursor": {"id": int, "time": int},   ← 已完成扫描的最新通知水位
+            "at_resume": dict | None,               ← 未完成的历史分页，下一轮原样传回
             "errors": ["at: ...", "BV1xx: ..."]      ← 抓失败的部分；**非空不等于整次失败**
           }
 
@@ -494,58 +496,10 @@ async def bili_guard_scan(
     at_list = []
     comments = []
 
-    # ⚠️ 水位先回填成入参：万一 get_at 抛错，返回的 at_cursor 必须还是**旧水位**。
-    #    如果这里直接给 {"id":0,"time":0}，调用方存下来就等于把水位清零 ——
-    #    下一轮会把历史上的 @ 全捞一遍，重复回复就是这么来的。
-    at_cursor = {"id": int(since_at_id or 0), "time": int(since_at_time or 0)}
-
     # ---------- 通道 1：@ 我的 ----------
-    try:
-        at_resp = await session.get_at(
-            credential=cred,
-            last_id=since_at_id or None,
-            at_time=since_at_time or None,
-        )
-    except Exception as e:
-        # @ 通道挂了不该拖累评论通道：两个通道的失败要能分开看（errors 里分前缀）。
-        errors.append(f"at: {type(e).__name__}: {e}")
-        at_resp = None
-
-    if at_resp:
-        cursor = at_resp.get("cursor") or {}
-        # 服务端没给游标时保留旧水位，理由同上。
-        at_cursor = {
-            "id": int(cursor.get("id") or 0) or at_cursor["id"],
-            "time": int(cursor.get("time") or 0) or at_cursor["time"],
-        }
-
-        for it in (at_resp.get("items") or []):
-            at_user = it.get("user") or {}
-            at_item = it.get("item") or {}
-            at_time = int(it.get("at_time") or 0)
-            # SDK 已经按 last_id/at_time 做了服务端增量，这里再挡一道：
-            # 用 >= 而不是 >，因为 at_time 只到秒，同一秒内的多条 @ 会被 > 误杀；
-            # 多回来的那条靠 rpid 去重更稳（调用方做，见 docstring）。
-            if at_time and at_time < since_at_time:
-                continue
-            uri = at_item.get("uri") or ""
-            bv_match = _BV_PATTERN.search(uri)
-            at_list.append({
-                "id": int(it.get("id") or 0),
-                "at_time": at_time,
-                "uid": int(at_user.get("mid") or 0),
-                "uname": at_user.get("nickname", ""),
-                "kind": at_item.get("type", ""),
-                # title 是视频标题（评论/动态类 @ 也可能为空），只用于让模型判断"要不要回"。
-                "title": at_item.get("title", ""),
-                "bvid": bv_match.group(0) if bv_match else "",
-                # subject_id 就是视频 aid；source_id 是被 @ 的那条评论 rpid ——
-                # 这两个不是同一个东西，回复时要用 rpid，对账时要用 aid。
-                "aid": int(at_item.get("subject_id") or 0),
-                "rpid": int(at_item.get("source_id") or 0),
-                "root_id": int(at_item.get("root_id") or 0),
-                "text": at_item.get("source_content", ""),
-            })
+    mentions = await scan_mentions(cred, session.get_at, since_at_id, since_at_time, at_resume, max_pages)
+    at_list = mentions["at"]
+    errors.extend(mentions["errors"])
 
     # ---------- 通道 2：指定视频的新评论 ----------
     page_limit = max(1, int(max_pages or 1))
@@ -604,6 +558,8 @@ async def bili_guard_scan(
     return json.dumps({
         "at": at_list,
         "comments": comments,
-        "at_cursor": at_cursor,
+        "at_cursor": mentions["at_cursor"],
+        "at_resume": mentions["at_resume"],
+        "at_stats": mentions["at_stats"],
         "errors": errors,
     }, ensure_ascii=False)

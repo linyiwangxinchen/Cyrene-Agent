@@ -25,6 +25,12 @@ export class InteractionPolicy {
     Object.assign(this, { store, client, config, account, now });
     this.tail = Promise.resolve();
   }
+  commentEvidence(input, bvid, accountUid) {
+    if (input.kind !== "reply" || !input.guard) return false;
+    const pending = this.store.get("guard", `${accountUid}:${input.rpid}`);
+    return Boolean(pending && pending.kind === "at" && pending.bvid === bvid
+      && pending.status === "pending" && String(pending.text || "").trim());
+  }
   async draft(input, run) {
     const config = this.config(),
       account = await this.account();
@@ -47,7 +53,9 @@ export class InteractionPolicy {
       (!text || text.length > (kind === "dm" ? 500 : 300))
     )
       throw new Error("发送正文为空或过长");
-    if (kind !== "dm" && !this.store.get("evidence", bvid)?.text)
+    const evidenceSource = this.store.get("evidence", bvid)?.text ? "video"
+      : this.commentEvidence(input, bvid, account.uid) ? "comment" : null;
+    if (kind !== "dm" && !evidenceSource)
       throw new Error("还没有这条视频的内容证据，请先读字幕或转写");
     const target =
       kind === "dm"
@@ -74,6 +82,7 @@ export class InteractionPolicy {
       accountUid: account.uid,
       guard: Boolean(input.guard),
       invited: Boolean(input.invited),
+      evidenceSource,
     });
     const pending = input.guard
       ? this.store.get("guard", `${account.uid}:${target}`)
@@ -110,7 +119,8 @@ export class InteractionPolicy {
       this.now()
     )
       throw new Error("B站风控冷却中，请稍后再试");
-    if (a.kind !== "dm" && !this.store.get("evidence", a.bvid)?.text)
+    if (a.kind !== "dm" && !this.store.get("evidence", a.bvid)?.text
+      && !(a.evidenceSource === "comment" && this.commentEvidence(a, a.bvid, account.uid)))
       throw new Error("没有有效内容证据");
     let daily = 0,
       round,

@@ -117,6 +117,7 @@ jobs:
           node --test extensions/bili-garden/test/*.test.mjs
           node scripts/verify/bili-garden-agent.mjs
           node scripts/verify/bili-garden-web.mjs "$RUNNER_TEMP/bili-garden-ui"
+          node scripts/verify/bili-garden-mentions.mjs "$RUNNER_TEMP/bili-mention-ui"
       - name: Verify authenticated Web business and voice MCP paths
         run: |
           pnpm run verify:shared-core

@@ -159,6 +159,15 @@ export class GardenStore {
       .all(accountUid, accountUid, limit)
       .map((r) => ({ id: r.id, ...JSON.parse(r.data) }));
   }
+  retryableMentions(accountUid) {
+    return this.db.prepare(`SELECT g.id,g.data FROM records g WHERE g.kind='guard'
+      AND json_extract(g.data,'$.accountUid')=? AND json_extract(g.data,'$.kind')='at'
+      AND json_extract(g.data,'$.status')='pending' AND json_extract(g.data,'$.attempts')>=3
+      AND NOT EXISTS(SELECT 1 FROM actions a
+        WHERE a.idem=?||':reply:'||json_extract(g.data,'$.bvid')||':'||json_extract(g.data,'$.rpid')
+        AND a.status IN ('draft','sending','uncertain','sent','cancelled'))`)
+      .all(accountUid, accountUid).map(row => ({ id: row.id, ...JSON.parse(row.data) }));
+  }
   draft({ idem, day, runId = null, kind, ...data }) {
     const old = this.db
       .prepare("SELECT id FROM actions WHERE idem=?")

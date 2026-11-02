@@ -125,7 +125,7 @@ export class GardenRunner {
       ),
       tool(
         "read_video",
-        "读取视频信息和带编号的字幕；无字幕时按设置转写。只有真实读到内容才可收录或互动。",
+        "读取视频信息和带编号的字幕；无字幕时按设置转写。没有内容证据不能点评视频；守护 @ 可以只回应原评论或说明无法读取视频。",
         { bvid: str("BV号") },
         ["bvid"],
         (a) => read(a.bvid),
@@ -183,9 +183,13 @@ export class GardenRunner {
             { ...a, guard: run.kind === "guard" },
             run,
           );
-          return this.config().autoSend && draft.status === "draft"
-            ? this.policy.execute(draft.id, { signal, runId: run.id })
-            : draft;
+          if (!this.config().autoSend || draft.status !== "draft") return draft;
+          try { return await this.policy.execute(draft.id, { signal, runId: run.id }); }
+          catch (error) {
+            if (this.store.action(draft.id)?.status === "draft")
+              this.store.updateAction(draft.id, "draft", { error: String(error.message).slice(0, 500) });
+            throw error;
+          }
         },
         "mutation",
       ),
@@ -216,6 +220,13 @@ export class GardenRunner {
           signal.throwIfAborted();
           if (run.kind === "question")
             throw new Error("追问请用 answer_question");
+          if (run.kind === "guard") {
+            const actions = this.store.actions(5000);
+            const remaining = (input.guardItems ?? []).filter(item => item.kind === "at" && !actions.some(action =>
+              action.guard && action.kind === "reply" && action.bvid === item.bvid
+              && action.rpid === String(item.rpid) && (!item.accountUid || action.accountUid === item.accountUid)));
+            if (remaining.length) throw new Error(`还有 ${remaining.length} 条评论未处理，请先提出对原评论的回复；无字幕时可如实说明限制。`);
+          }
           const r = saveReport(this.store, run, a, quota);
           committed = true;
           return { saved: true, runId: run.id, items: r.items.length };
@@ -268,10 +279,11 @@ export class GardenRunner {
       run.kind === "question"
         ? `请陪我理解 ${videoId(input.bvid)}。问题：${String(input.question).slice(0, 2000)}。读取字幕并用 answer_question 保存有证据的回答。`
         : run.kind === "guard"
-          ? "请按待回复清单守护评论区。先读相关视频，简短自然地代回复，说明自己是昔涟。只提出对清单原评论的 reply，不发新楼或私信。结束用 finish_report 保存 items=[] 和处理小结。"
+          ? "请按待回复清单守护评论区。先尝试读相关视频，简短自然地回复，说明自己是昔涟。对 @ 邀请即使没有字幕，也要就原评论本身回应，或说明暂时无法读取视频并请对方补充；不能编造视频内容，也不要因此直接交空报告。只提出对清单原评论的 reply，不发新楼或私信。结束用 finish_report 保存 items=[] 和处理小结。"
           : `去 B 站小花园看看，最多挑 ${quota} 条值得和我分享的视频。${input.bvid ? "本轮指定 " + videoId(input.bvid) + "；允许重新阅读。" : "优先处理待看清单，再按关注关键词搜索，跳过已读与不感兴趣的视频。"}读到内容再判断，最后调用 finish_report，写一段昔涟的手记。没有合适内容可交空 items 并说明原因。`;
     const context = [
       await this.charter(),
+      run.kind === "guard" ? `本轮是评论守护，守护回复独立于闲逛评论模式；仅回复清单内且通过白名单校验的评论。守护开关：${cfg.guardOn ? "开启" : "关闭"}，自动发送：${cfg.autoSend ? "开启" : "关闭，只留草稿"}。没有字幕时仍可针对 @ 原文回应，但不能点评未读取的视频内容。` : "",
       `兴趣：${cfg.interests || "由你结合我的偏好挑选"}\n排除：${cfg.exclusions || "无"}\n关键词：${cfg.keywords.join("、") || "科技、生活、创作"}\n待看：${pending.join("、")}\n之前记住的事：\n${memories}\n用户反馈：${feedback.join("\n")}`,
       `本轮日期 ${run.day}。评论模式 ${cfg.commentMode}；私信 ${cfg.dmOn ? "开启，唯一收件 UID " + cfg.dmUid : "关闭"}；点赞 ${cfg.likeOn ? "开启" : "关闭"}；收藏 ${cfg.favOn ? "开启" : "关闭"}；自动发送 ${cfg.autoSend ? "开启" : "关闭，仅留草稿"}。赞藏判据：${{ strict: "只有可立即实践且证据充分的内容", standard: "对用户有具体帮助或带来可信的新知识", loose: "与兴趣相关并带来新发现的内容" }[cfg.likeRule]}。补充判据：${cfg.likeRuleExtra || "无"}。收藏还需说明以后何时会再看。不要把私密偏好、用户信息、路径或内部设定放入公开正文。`,
       input.guardItems

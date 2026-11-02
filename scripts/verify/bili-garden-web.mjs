@@ -240,6 +240,10 @@ try {
     true,
     "mobile panel overflows horizontally",
   );
+  await frame.getByRole("button", { name: "互动", exact: true }).click();
+  await frame.getByRole("region", { name: "评论守护扫描状态" }).getByText(/评论守护未开启/).waitFor();
+  await frame.getByRole("button", { name: "扫描 @ 与评论" }).click();
+  await frame.getByRole("status").getByText("评论守护未启用", { exact: true }).waitFor();
   await frame.getByRole("button", { name: "手记", exact: true }).click();
   await frame.getByText("你喜欢轻松的园艺实操", { exact: true }).waitFor();
   await frame.getByRole("button", { name: "导出全部", exact: true }).click();
@@ -302,6 +306,7 @@ try {
           "queue",
           "persist-config",
           "mobile-layout",
+          "mention-status-and-disabled-gate",
           "settings-search-web",
           "settings-search-mobile",
         "dark-theme",

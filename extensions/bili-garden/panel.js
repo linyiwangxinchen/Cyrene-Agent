@@ -51,7 +51,7 @@
   async function action(command, args = {}, message = "已完成") {
     try {
       const r = await invoke(command, args);
-      notice(message);
+      notice(["guard", "guard-retry"].includes(command) && r?.message ? r.message : message);
       await refresh(true);
       return r;
     } catch (e) {
@@ -507,7 +507,7 @@
           { class: "section-head" },
           h("h2", {}, "互动与回音"),
           button(
-            "扫描守护评论",
+            "扫描 @ 与评论",
             safely(() => action("guard", {}, "评论扫描已完成")),
           ),
         ),
@@ -517,6 +517,22 @@
           "开关在设置中。每一条是否发出，以平台回执为准；结果不明的动作不会自动重发。",
         ),
       );
+    if (d.guard) {
+      const scan = d.guard.lastScan;
+      box.append(h("section", { class: "entry", "aria-label": "评论守护扫描状态" },
+        h("strong", {}, "评论守护扫描状态"),
+        h("p", {}, `${d.guard.message} · ${d.guard.autoSend ? "自动发送已开启" : "仅生成草稿，需确认发送"}`),
+        d.guard.whitelistEmpty ? h("p", { class: "muted" }, "允许 @ 的用户 UID 为空，目前不会处理其他视频中的 @。") : null,
+        scan ? h("p", { class: "muted" }, `最近扫描：${fmtTime(scan.at)}；读取 @ ${scan.receivedAt} 条，白名单通过 ${scan.allowedAt} 条，白名单外 ${scan.filteredAt} 条，新入队 ${scan.queued} 条。`) : h("p", { class: "muted" }, "尚无扫描记录。"),
+        scan?.unsupported || scan?.invalid ? h("p", { class: "muted" }, `跳过 ${Number(scan.unsupported || 0) + Number(scan.invalid || 0)} 条非视频评论或无法定位的通知。`) : null,
+        scan?.backlog ? h("p", { class: "muted" }, "还有历史 @ 待扫描，下轮继续；已入队的消息不会丢失。") : null,
+        ...(scan?.errors ?? []).map(message => h("p", { class: "error" }, message)),
+        d.guard.retryable ? h("div", { class: "buttons" },
+          h("span", {}, `${d.guard.retryable} 条 @ 多次处理未成功，已暂停重试。`),
+          button("重试未回复的 @", safely(() => action("guard-retry"))),
+        ) : null,
+      ));
+    }
     if (d.cooldown?.until > Date.now())
       box.append(
         h("p", { class: "error" }, `互动冷却至 ${fmtTime(d.cooldown.until)}`),
@@ -695,13 +711,13 @@
     [
       "评论守护",
       [
-        ["guardOn", "开启后台评论守护", "checkbox"],
+        ["guardOn", "开启后台评论守护", "checkbox", "同时扫描其他视频中白名单用户发来的 @；不要求当前账号自己投稿。"],
         ["guardOwnerUid", "守护哪位 UP 的视频", "text", "留空时使用当前账号。"],
         [
           "guardWhitelist",
           "允许 @ 的用户 UID",
           "textarea",
-          "每行一个；只回复这些用户的 @。",
+          "填写发起 @ 的用户 UID，每行一个；这些用户可以在其他 UP 的视频评论中呼唤昔涟。",
         ],
         ["guardOwnAll", "目标 UP 的视频下回复有内容的评论", "checkbox"],
         ["guardVideos", "最近几条视频", "number"],
