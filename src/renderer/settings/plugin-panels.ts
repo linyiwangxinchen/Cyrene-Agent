@@ -29,13 +29,6 @@ function postToPanel(contentWindow: Window, pluginId: string, payload: Record<st
   contentWindow.postMessage({ protocol: PANEL_PROTOCOL, ...payload }, panelOriginFor(pluginId));
 }
 
-function findContentWindow(pluginId: string): Window | undefined {
-  for (const [contentWindow, id] of panelRegistry) {
-    if (id === pluginId) return contentWindow;
-  }
-  return undefined;
-}
-
 function findIframeByContentWindow(contentWindow: Window): HTMLIFrameElement | null {
   for (const iframe of Array.from(document.querySelectorAll<HTMLIFrameElement>(".plugin-panels iframe"))) {
     if (iframe.contentWindow === contentWindow) return iframe;
@@ -63,16 +56,14 @@ window.addEventListener("message", (event: MessageEvent) => {
           result && typeof result === "object" && "ok" in result
             ? result as { ok: boolean; data?: unknown; error?: string }
             : null;
-        const live = findContentWindow(pluginId);
-        if (!live) return;
+        if (panelRegistry.get(contentWindow) !== pluginId) return;
         if (outcome?.ok) {
-          postToPanel(live, pluginId, { kind: "invoke-result", seq: message.seq, ok: true, data: outcome.data });
+          postToPanel(contentWindow, pluginId, { kind: "invoke-result", seq: message.seq, ok: true, data: outcome.data });
         } else {
-          postToPanel(live, pluginId, { kind: "invoke-result", seq: message.seq, ok: false, error: outcome?.error ?? "面板调用失败" });
+          postToPanel(contentWindow, pluginId, { kind: "invoke-result", seq: message.seq, ok: false, error: outcome?.error ?? "面板调用失败" });
         }
       }).catch((error: unknown) => {
-        const live = findContentWindow(pluginId);
-        if (live) postToPanel(live, pluginId, { kind: "invoke-result", seq: message.seq, ok: false,
+        if (panelRegistry.get(contentWindow) === pluginId) postToPanel(contentWindow, pluginId, { kind: "invoke-result", seq: message.seq, ok: false,
           error: error instanceof Error ? error.message : "插件连接中断，请重试" });
       });
     return;
@@ -116,20 +107,23 @@ function mountPanel(
   card.append(header, iframe);
 
   // 注册表登记与 init 下发都在 load 后（此时 contentWindow 才可寻址）
+  let registeredWindow: Window | undefined;
   const onLoad = () => {
     if (!iframe.contentWindow) return;
-    panelRegistry.set(iframe.contentWindow, plugin.id);
+    if (registeredWindow && registeredWindow !== iframe.contentWindow) panelRegistry.delete(registeredWindow);
+    registeredWindow = iframe.contentWindow;
+    panelRegistry.set(registeredWindow, plugin.id);
     const theme = buildPanelTheme(
       document.documentElement.dataset.uiTheme || "default",
       getComputedStyle(document.documentElement),
     );
-    postToPanel(iframe.contentWindow, plugin.id, { kind: "init", theme });
+    postToPanel(registeredWindow, plugin.id, { kind: "init", theme });
   };
   iframe.addEventListener("load", onLoad);
   container.append(card);
   return () => {
     iframe.removeEventListener("load", onLoad);
-    if (iframe.contentWindow) panelRegistry.delete(iframe.contentWindow);
+    if (registeredWindow && panelRegistry.get(registeredWindow) === plugin.id) panelRegistry.delete(registeredWindow);
     card.remove();
   };
 }

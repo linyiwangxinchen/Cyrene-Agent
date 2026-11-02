@@ -5,6 +5,7 @@ import { resumeCoreConnection } from "./core-transport";
 import { WebHostDialogs } from "./WebHostDialogs";
 import { WebNotifications } from "./WebNotifications";
 import { WebAudioOutput } from "./WebAudioOutput";
+import { WebConsentGate } from "./WebConsentGate";
 import "./styles.css";
 
 type AuthState = { initialized: boolean; authenticated: boolean; username?: string };
@@ -44,7 +45,7 @@ export function WebAuthGate() {
   }, []);
 
   if (state?.authenticated) {
-    return <div className="cy-web-auth__workspace"><div className="cy-web-auth__bar"><span>{state.username}</span><button type="button" onClick={() => { void webAuth.logout().then(refresh); }}>退出</button></div><App /><WebHostDialogs /><WebNotifications /><WebAudioOutput /></div>;
+    return <WebConsentGate onDecline={async () => { await webAuth.logout(); await refresh(); }}><div className="cy-web-auth__workspace"><div className="cy-web-auth__bar"><span>{state.username}</span><button type="button" onClick={() => { void webAuth.logout().then(refresh); }}>退出</button></div><App /><WebHostDialogs /><WebNotifications /><WebAudioOutput /></div></WebConsentGate>;
   }
 
   const initializing = state !== null && !state.initialized;

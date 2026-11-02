@@ -59,6 +59,15 @@ jobs:
           src/renderer/react/features/settings/settings-search-fork.test.ts
           src/plugins/installer.test.ts
           src/main/search-jieba.test.ts
+          src/main/sticker-storage.test.ts
+          src/main/memory/sticker-delete-ipc.test.ts
+          src/renderer/react/features/settings/StickerManagerModal.test.tsx
+          src/renderer/web/WebConsentGate.test.tsx
+          src/renderer/settings/plugin-panels.test.ts
+          src/main/settings/disclaimer-consent.test.ts
+          src/renderer/react/components/ui/FullAccessConfirmation.test.tsx
+          src/renderer/react/features/onboarding/StandaloneOnboarding.test.tsx
+          src/renderer/react/features/settings/ToolSettingsPanel.permission.test.tsx
           src/main/orchestrator/structured-output/runner.test.ts
           src/main/services/llm/llm-client.test.ts
           src/main/proactive/proactive-lifecycle.test.ts

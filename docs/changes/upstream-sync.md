@@ -4,7 +4,7 @@
 
 ## 修改清单和提交主题
 
-最近一次上游同步：[2026-11-01 集成与验收记录](upstream-integration-20261101.md)。合入 `50f060fe` 的 10 个提交，保留小花园与魔搭下载，解决 4 个文本冲突及自动合并产生的导航重复；补齐 Web/手机设置搜索和本分支功能索引。633 个测试文件、6674 项测试、Windows/Web 构建和认证后的业务验收通过。此前同日的[小花园集成记录](upstream-garden-integration-20261101.md)、[2026-10-31 集成记录](upstream-integration-20261031.md)及更早日期的记录用于追溯。
+最近一次上游同步：[2026-11-02 集成与验收记录](upstream-integration-20261102.md)。合入 `b547d669` 的 8 个上游提交，更新至 `1.3.5`，适配 Web 条款确认与表情包删除，并修复插件面板切换后的回包问题。此前的[2026-11-01 集成记录](upstream-integration-20261101.md)、[小花园集成记录](upstream-garden-integration-20261101.md)、[2026-10-31 集成记录](upstream-integration-20261031.md)及更早日期的记录用于追溯。
 
 [linux-web-changes.md](linux-web-changes.md) 给出每一个新增/修改文件的作用。提交按 10 个主题组织，commit body 也逐文件描述用途：
 

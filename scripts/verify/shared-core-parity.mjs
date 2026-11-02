@@ -296,7 +296,15 @@ try {
     assert.equal((await http('/api/core/dialog', 'POST', { dialogId: dialog.id, value: { canceled: false, filePaths: [imagePath] } }, { 'X-Cyrene-Client': clientToken })).value, true); await pending;
     const avatar = await invoke('cyrene-avatar:get'); assert.ok(avatar?.startsWith('data:image/png;base64,'));
     await invoke('stickers:add', { sourcePath: imagePath, id: 'parity-sticker', description: 'Parity sticker', phrases: ['parity'] });
-    const sticker = (await invoke('stickers:get-config')).find(item => item.id === 'parity-sticker'); assert.ok(sticker); assert.equal((await http('/api/core/resource?url=' + encodeURIComponent(sticker.src))).response.status, 200);
+    const config = await invoke('stickers:get-config'), sticker = config.find(item => item.id === 'parity-sticker');
+    assert.ok(sticker); assert.equal((await http('/api/core/resource?url=' + encodeURIComponent(sticker.src))).response.status, 200);
+    const builtin = config.find(item => item.builtIn); assert.ok(builtin);
+    await assert.rejects(() => invoke('stickers:delete', builtin.id));
+    assert.ok((await invoke('stickers:get-config')).find(item => item.id === builtin.id));
+    assert.equal((await invoke('stickers:delete', sticker.id)).some(item => item.id === sticker.id), false);
+    assert.equal((await invoke('stickers:get-config')).some(item => item.id === sticker.id), false);
+    assert.equal(existsSync(path.join(data, 'stickers', 'parity-sticker.png')), false);
+    assert.equal((await http('/api/core/resource?url=' + encodeURIComponent(sticker.src))).response.status, 404);
   });
   await check('Local music imports, streams with ranges and accepts browser playback feedback', async () => {
     const wavePath = path.join(workspace, 'parity-audio.wav'), wave = Buffer.alloc(16044);
@@ -379,6 +387,7 @@ try {
     socket = new WebSocket(base.replace('http:', 'ws:') + '/ws', { headers: { Cookie: cookie } });
     socket.on('message', raw => { const event = JSON.parse(String(raw)); if (event.type === 'ready') clientToken = event.clientToken; if (event.type === 'CORE_EVENT') events.push(event); });
     await waitFor(() => clientToken, 'restart websocket handshake'); await handle.startChannels();
+    assert.equal((await invoke('stickers:get-config')).some(item => item.id === 'parity-sticker'), false);
     assert.deepEqual(shellRecord(backgroundJobId), stopped, 'normal shutdown history must survive startup recovery');
     const after = await invoke('chats:get', sessions.chat.id); assert.deepEqual(after.messages, before.messages);
     assert.deepEqual(await invoke('token-usage:get', 366), usage);

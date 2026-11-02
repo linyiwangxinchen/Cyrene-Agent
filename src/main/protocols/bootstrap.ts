@@ -41,6 +41,7 @@ export function registerProtocolHandlers(): void {
 
     const filePath = resolveLocalStickerPath(getStickersDir(), file);
     if (!filePath) return new Response("Invalid sticker path", { status: 403 });
+    if (!fs.existsSync(filePath)) return new Response("Sticker not found", { status: 404 });
 
     return net.fetch(pathToFileURL(filePath).toString());
   });

@@ -140,12 +140,16 @@ try {
     panel.r.headers.get("content-security-policy"),
     /connect-src 'none'/,
   );
+  const consentBefore = (await invoke("settings:get-general")).disclaimerAcceptedVersion;
+  const stickerFixture = path.join(data, "ui-sticker.png");
+  await writeFile(stickerFixture, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==", "base64"));
+  for (const id of ["ui-desktop-sticker", "ui-mobile-sticker"]) {
+    await invoke("stickers:add", { sourcePath: stickerFixture, id, description: id, phrases: [id] });
+  }
   browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     viewport: { width: 1280, height: 1000 },
   });
-  const [name, ...v] = cookie.split("=");
-  await context.addCookies([{ name, value: v.join("="), url: base }]);
   page = await context.newPage();
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -160,9 +164,75 @@ try {
     logs.push(`request-failed ${r.url()} ${r.failure()?.errorText}`),
   );
   await page.goto(base + "/web/");
+  async function browserLogin() {
+    await page.getByLabel("账号", { exact: true }).fill("garden-admin");
+    await page.getByLabel("密码", { exact: true }).fill("GardenFixture-123");
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await page.getByRole("button", { name: "查看免责声明", exact: true }).waitFor({ timeout: 20000 });
+  }
+  await browserLogin();
+  await page.getByRole("button", { name: "查看免责声明", exact: true }).click();
+  await page.getByRole("heading", { name: "Cyrene 免责声明与使用条款" }).waitFor();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.screenshot({ path: path.join(evidence, "consent-mobile.png"), fullPage: true });
+  assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= element.clientWidth + 1), true);
+  await page.getByRole("button", { name: "拒绝并退出", exact: true }).click();
+  await page.getByRole("heading", { name: "登录 Cyrene" }).waitFor();
+  assert.equal((await invoke("settings:get-general")).disclaimerAcceptedVersion, consentBefore);
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await browserLogin();
+  await page.getByRole("button", { name: "查看免责声明", exact: true }).click();
+  await page.getByRole("button", { name: "接受并继续", exact: true }).click();
+  await page.getByRole("button", { name: "设置", exact: true }).waitFor({ timeout: 20000 });
+  const consentVersion = (await invoke("settings:get-general")).disclaimerAcceptedVersion;
+  assert.equal(typeof consentVersion, "string");
+  assert.ok(consentVersion.length > 0 && consentVersion !== consentBefore);
+  await page.reload();
   await page
     .getByRole("button", { name: "设置", exact: true })
     .click({ timeout: 20000 });
+  await page.getByRole("button", { name: "昔涟设置", exact: true }).click();
+  await page.getByRole("button", { name: "管理表情包", exact: true }).click();
+  const stickers = page.getByRole("dialog", { name: "表情包管理", exact: true });
+  const desktopDelete = stickers.getByRole("button", { name: "删除 ui-desktop-sticker" });
+  await desktopDelete.waitFor();
+  const customImage = desktopDelete.locator("..").locator("img");
+  assert.match(await customImage.getAttribute("src"), /^\/api\/core\/resource\?/);
+  await desktopDelete.click();
+  let confirmDelete = page.getByRole("dialog", { name: "删除表情包", exact: true });
+  await confirmDelete.locator(".ant-modal-footer .ant-btn-default").click();
+  await desktopDelete.waitFor();
+  await desktopDelete.click();
+  await confirmDelete.locator(".ant-modal-footer .ant-btn-primary").click();
+  await confirmDelete.waitFor({ state: "hidden" });
+  await desktopDelete.waitFor({ state: "hidden" });
+  assert.equal((await invoke("stickers:get-config")).some(item => item.id === "ui-desktop-sticker"), false);
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobileDelete = stickers.getByRole("button", { name: "删除 ui-mobile-sticker" });
+  await mobileDelete.waitFor();
+  await mobileDelete.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, "stickers-mobile.png"), fullPage: true });
+  await mobileDelete.click();
+  confirmDelete = page.getByRole("dialog", { name: "删除表情包", exact: true });
+  await confirmDelete.locator(".ant-modal-footer .ant-btn-primary").click();
+  await confirmDelete.waitFor({ state: "hidden" });
+  await mobileDelete.waitFor({ state: "hidden" });
+  assert.equal((await invoke("stickers:get-config")).some(item => item.id === "ui-mobile-sticker"), false);
+  await stickers.locator(".ant-modal-close").click();
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  await page.getByRole("button", { name: "工具配置", exact: true }).click();
+  await page.getByRole("button", { name: /^完\s*全$/ }).click();
+  const permissionDialog = page.getByRole("dialog", { name: "启用完全访问？" });
+  await permissionDialog.getByText(/不可恢复的数据损失/).waitFor();
+  await permissionDialog.locator(".ant-modal-footer .ant-btn-default").click();
+  await permissionDialog.waitFor({ state: "hidden" });
+  assert.equal((await page.evaluate(() => window.settings.getPermissionLevel())).level, "read-only");
+  await page.getByRole("button", { name: /^完\s*全$/ }).click();
+  await permissionDialog.getByRole("button", { name: "我理解风险，启用完全访问", exact: true }).click({ timeout: 10000 });
+  await permissionDialog.waitFor({ state: "hidden" });
+  assert.equal((await page.evaluate(() => window.settings.getPermissionLevel())).level, "full");
+  await page.getByRole("button", { name: /^只\s*读$/ }).click();
+  await page.waitForFunction(async () => (await window.settings.getPermissionLevel()).level === "read-only");
   // The shared upstream settings search must work in authenticated desktop/mobile Web.
   const search = page.getByRole("button", { name: "搜索设置", exact: true });
   await search.click();
@@ -340,6 +410,9 @@ try {
           "queue-mobile-scroll-stability",
           "settings-search-web",
           "settings-search-mobile",
+          "web-consent-decline-accept-and-reload",
+          "sticker-delete-desktop-and-mobile",
+          "permission-confirmation-accept-cancel-and-revert",
         "dark-theme",
         "markdown-download",
         "external-link",
