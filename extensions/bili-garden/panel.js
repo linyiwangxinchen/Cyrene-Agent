@@ -1,7 +1,10 @@
 /* Native panel, no external scripts, HTML injection or desktop APIs. */
 (() => {
   const $ = (id) => document.getElementById(id),
-    state = { tab: "discover", data: null, dirty: false, busy: false };
+    state = { tab: "discover", data: null, dirty: false, busy: false, queueDraft: "" };
+  let pageSignature = "", statusSignature = "", queueView = null;
+  const videoView = (v) => [v.bvid, v.cover, v.title, v.owner, v.duration, v.summary,
+    v.reason, v.queueStatus, v.available, v.picked, v.feedback];
   const tabs = [
     ["discover", "发现"],
     ["queue", "一起看"],
@@ -270,7 +273,10 @@
     const d = state.data;
     if (!d) return;
     $("garden").setAttribute("aria-busy", "false");
-    replace(
+    const elapsed = d.run ? Math.floor((Date.now() - d.run.started) / 1000) : null;
+    const signature = JSON.stringify([d.account, d.stats.picked, d.config.perDay,
+      d.environment.installing, d.environment.installed, d.config.autoRun, d.run?.id, d.run?.phase, elapsed]);
+    if (signature !== statusSignature) replace(
       $("status"),
       h(
         "span",
@@ -319,15 +325,17 @@
             "昔涟正在忙：",
             d.run.phase,
             " · ",
-            Math.floor((Date.now() - d.run.started) / 1000),
+            elapsed,
             " 秒",
           )
         : null,
     );
+    statusSignature = signature;
     $("run").disabled = Boolean(d.run || d.environment.installing);
     $("cancel").hidden = !d.run && !d.environment.installing;
     if ($("environment-log")) {
-      $("environment-log").textContent = (d.environment.log || []).join("\n");
+      const log = (d.environment.log || []).join("\n");
+      if ($("environment-log").textContent !== log) $("environment-log").textContent = log;
       $("environment-log").hidden = !d.environment.log?.length;
     }
   }
@@ -336,7 +344,8 @@
       $("tabs"),
       tabs.map(([id, label]) =>
         button(label, () => {
-          if (state.dirty && id !== state.tab) {
+          if (id === state.tab) return;
+          if (state.dirty) {
             notice("设置尚未保存，请先保存或放弃修改。", true);
             return;
           }
@@ -403,9 +412,15 @@
     return box;
   }
   function queue() {
+    if (queueView?.box.isConnected) {
+      updateQueue();
+      return queueView.box;
+    }
     const input = h("input", {
       placeholder: "BV 号或 B 站视频链接",
       "aria-label": "添加视频",
+      value: state.queueDraft,
+      onInput: (event) => { state.queueDraft = event.target.value; },
     });
     const box = h(
       "div",
@@ -422,20 +437,43 @@
           class: "row",
           onSubmit: safely(async (e) => {
             e.preventDefault();
-            await action("queue", { bvid: input.value }, "已收进待看清单");
+            const submitted = input.value;
+            await action("queue", { bvid: submitted }, "已收进待看清单");
+            // Keep a different link typed while this request was in flight.
+            if (state.queueDraft === submitted) {
+              state.queueDraft = "";
+              if (queueView) queueView.input.value = "";
+            }
           }),
         },
         input,
         h("button", { type: "submit", class: "primary" }, "加入待看"),
       ),
     );
-    const items = state.data.videos.filter((v) => v.queueStatus === "queued");
-    box.append(
-      items.length
-        ? h("div", { class: "grid" }, items.map(videoCard))
-        : empty("遇到想一起看的视频，把链接放在这里。"),
-    );
+    const list = h("div");
+    queueView = { box, input, list, cards: new Map(), empty: empty("遇到想一起看的视频，把链接放在这里。") };
+    box.append(list);
+    updateQueue();
     return box;
+  }
+  function updateQueue() {
+    const items = state.data.videos.filter(v => v.queueStatus === "queued");
+    const cards = new Map();
+    const nodes = items.map(v => {
+      const signature = JSON.stringify(videoView(v));
+      const previous = queueView.cards.get(v.bvid);
+      const card = previous?.signature === signature ? previous : { signature, node: videoCard(v) };
+      cards.set(v.bvid, card);
+      return card.node;
+    });
+    if (!nodes.length) nodes.push(queueView.empty);
+    queueView.list.className = items.length ? "grid" : "";
+    // Reuse unchanged nodes, including covers; inserting another card never detaches the form.
+    for (const child of [...queueView.list.children]) if (!nodes.includes(child)) child.remove();
+    nodes.forEach((node, index) => {
+      if (queueView.list.children[index] !== node) queueView.list.insertBefore(node, queueView.list.children[index] ?? null);
+    });
+    queueView.cards = cards;
   }
   function notes() {
     const d = state.data,
@@ -876,7 +914,7 @@
         h("button", { type: "submit", class: "primary" }, "保存设置"),
         button("放弃修改", () => {
           state.dirty = false;
-          render();
+          render(true);
           notice("已恢复为保存的设置");
         }),
         h("span", { class: "muted" }, "额度 0 表示禁止；时长上限 0 表示不限。"),
@@ -983,28 +1021,43 @@
     };
     setTimeout(poll, 2500);
   }
-  function render() {
+  function render(force = false) {
     if (!state.data) return;
-    $("page").replaceChildren(
-      { discover, queue, notes, actions: interactions, settings }[state.tab](),
-    );
+    const d = state.data;
+    // Polling unrelated task progress must not redraw the user's current page.
+    const view = state.tab === "queue" ? d.videos.filter(v => v.queueStatus === "queued").map(videoView)
+      : state.tab === "discover" ? [d.videos.filter(v => v.picked && v.feedback !== "dislike").map(videoView), d.questions.slice(0, 8)]
+      : state.tab === "notes" ? [d.reports, d.memories]
+      : state.tab === "actions" ? [d.actions, d.guard, d.cooldown?.until > Date.now() ? d.cooldown : null]
+      : [d.config, d.account, d.environment, d.profiles, d.charter, d.runs, d.events];
+    const signature = JSON.stringify([state.tab, view]);
+    if (!force && signature === pageSignature) return;
+    const content = { discover, queue, notes, actions: interactions, settings }[state.tab]();
+    if ($("page").firstElementChild !== content) $("page").replaceChildren(content);
+    if (state.tab !== "queue") queueView = null;
+    pageSignature = signature;
   }
-  let refreshing = false;
-  async function refresh(force = false) {
-    if (refreshing) return;
-    refreshing = true;
-    try {
-      state.data = await invoke("snapshot");
-      renderStatus();
-      if (!state.dirty && (force || state.tab !== "settings")) render();
-    } catch (e) {
-      notice(
-        `无法读取小花园：${e.message}。请确认插件仍已启用，然后重试。`,
-        true,
-      );
-    } finally {
-      refreshing = false;
+  let refreshPromise = null, forceRefreshRequested = false;
+  function refresh(force = false) {
+    if (refreshPromise) {
+      if (force) forceRefreshRequested = true;
+      return refreshPromise;
     }
+    refreshPromise = (async () => {
+      do {
+        const updateForm = force || forceRefreshRequested;
+        force = false;
+        forceRefreshRequested = false;
+        try {
+          state.data = await invoke("snapshot");
+          renderStatus();
+          if (!state.dirty && (updateForm || state.tab !== "settings")) render(updateForm);
+        } catch (e) {
+          notice(`无法读取小花园：${e.message}。请确认插件仍已启用，然后重试。`, true);
+        }
+      } while (forceRefreshRequested);
+    })().finally(() => { refreshPromise = null; });
+    return refreshPromise;
   }
   $("detail-close").onclick = () => $("detail").close();
   $("refresh").onclick = () => refresh(true);

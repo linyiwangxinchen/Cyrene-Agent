@@ -217,8 +217,27 @@ try {
     document.documentElement.dataset.uiTheme = "default";
   });
   await frame.getByRole("button", { name: "一起看", exact: true }).click();
-  await frame.getByRole("textbox", { name: "添加视频" }).fill("BV1bNns6BEEA");
+  const queueInput = frame.getByRole("textbox", { name: "添加视频" });
+  const originalQueueInput = await queueInput.elementHandle();
+  await queueInput.fill("BV1bN");
+  await queueInput.evaluate(element => element.setSelectionRange(2, 4));
+  await page.waitForTimeout(8500); // Two real four-second snapshot intervals.
+  assert.equal(await originalQueueInput.evaluate(element => element.isConnected), true, "idle polling replaced the queue input");
+  assert.equal(await queueInput.inputValue(), "BV1bN", "polling cleared the unfinished video link");
+  assert.deepEqual(await queueInput.evaluate(element => [document.activeElement === element, element.selectionStart, element.selectionEnd]), [true, 2, 4]);
+  // A real queue mutation from another client must update cards without replacing the form.
+  await invoke("plugin:bili-garden:garden", "queue", { bvid: "BV1bNns6BEEA" });
+  await frame.getByRole("heading", { name: "BV1bNns6BEEA", exact: true }).waitFor({ timeout: 10000 });
+  assert.equal(await originalQueueInput.evaluate(element => element.isConnected), true);
+  assert.equal(await queueInput.inputValue(), "BV1bN");
+  const queueCard = await frame.locator("article.card").first().elementHandle();
+  await page.waitForTimeout(4500);
+  assert.equal(await queueCard.evaluate(element => element.isConnected), true, "unchanged video card was recreated");
+  await queueInput.fill("BV1bNns6BEEA");
+  const submitQueue = await frame.getByRole("button", { name: "加入待看", exact: true }).elementHandle();
   await frame.getByRole("button", { name: "加入待看", exact: true }).click();
+  await submitQueue.waitForElementState("enabled");
+  assert.equal(await queueInput.inputValue(), "", "successful submission should clear only its own draft");
   await frame
     .getByRole("heading", { name: "BV1bNns6BEEA", exact: true })
     .waitFor();
@@ -244,6 +263,15 @@ try {
   await frame.getByRole("region", { name: "评论守护扫描状态" }).getByText(/评论守护未开启/).waitFor();
   await frame.getByRole("button", { name: "扫描 @ 与评论" }).click();
   await frame.getByRole("status").getByText("评论守护未启用", { exact: true }).waitFor();
+  await frame.getByRole("button", { name: "一起看", exact: true }).click();
+  await queueInput.fill("https://www.bilibili.com/video/");
+  const mobileInput = await queueInput.elementHandle();
+  const scroll = await frame.locator("body").evaluate(() => { window.scrollTo(0, 80); return window.scrollY; });
+  await page.waitForTimeout(4500);
+  assert.equal(await mobileInput.evaluate(element => element.isConnected), true);
+  assert.equal(await queueInput.inputValue(), "https://www.bilibili.com/video/");
+  assert.equal(await frame.locator("body").evaluate(() => window.scrollY), scroll);
+  await page.screenshot({ path: path.join(evidence, "queue-mobile-stable.png"), fullPage: true });
   await frame.getByRole("button", { name: "手记", exact: true }).click();
   await frame.getByText("你喜欢轻松的园艺实操", { exact: true }).waitFor();
   await frame.getByRole("button", { name: "导出全部", exact: true }).click();
@@ -307,6 +335,9 @@ try {
           "persist-config",
           "mobile-layout",
           "mention-status-and-disabled-gate",
+          "queue-polling-preserves-input-focus-and-selection",
+          "queue-updates-preserve-form-and-unchanged-cards",
+          "queue-mobile-scroll-stability",
           "settings-search-web",
           "settings-search-mobile",
         "dark-theme",
