@@ -35,7 +35,9 @@ describe("Web persona parity and continuity", () => {
     expect(built.metadata.stablePrefix.startsWith(expected)).toBe(true);
     expect(built.promptFiles).toEqual(MODE_PROMPT_FILES[mode]);
     const soul = (await readFile(path.join(shippedPromptRoot(), "soul.md"), "utf8")).trim();
-    expect(built.metadata.stablePrefix.includes(soul)).toBe(mode === "chat");
+    expect(built.metadata.stablePrefix.includes(soul)).toBe(true);
+    expect(built.metadata.stablePrefix).toContain("虚拟女友");
+    expect(built.metadata.stablePrefix).toContain("关系亲密度不能自动扩大工具");
     expect(built.metadata.stablePrefix).not.toContain("可委托的黄金裔");
     expect(built.metadata.stablePrefix).toContain("不得声称已操作文件");
   });
@@ -85,7 +87,7 @@ describe("Web persona parity and continuity", () => {
     await writeFile(path.join(f.dataDir, "prompts", "chat_identity.md"), "");
     await expect(f.build()).rejects.toThrow(/chat_identity.md/);
     const empty = new WebPersonaRuntime(f.dataDir, { promptRoot: path.join(f.dataDir, "empty") });
-    await expect(empty.build({ session: f.session, settings: await f.store.getSettings(), config: f.config, prompt: "你好" })).rejects.toThrow(/chat_system.md/);
+    await expect(empty.build({ session: f.session, settings: await f.store.getSettings(), config: f.config, prompt: "你好" })).rejects.toThrow(/soul.md/);
   });
 
   it("injects persistent profile/memory on every request and respects memory off", async () => {
@@ -106,6 +108,17 @@ describe("Web persona parity and continuity", () => {
     const off = String((await f.build({ settings })).messages.at(-2)?.content);
     expect(off).toContain("称呼偏好：夏夏");
     expect(off).not.toContain("菜园项目"); expect(off).not.toContain("【近期关系线索】");
+  });
+
+  it("exposes the same persona contract and user-editable relationship preferences", async () => {
+    const f = await fixture();
+    const initial = await f.runtime.getPersonaState();
+    expect(initial.spec.displayName).toBe("昔涟");
+    expect(initial.relationshipState.stage).toBe("new");
+    const updated = await f.runtime.updateRelationshipPreferences({ userLabel: "小夏", boundaries: ["少打断"] });
+    expect(updated.userLabel).toBe("小夏");
+    expect(updated.boundaries).toEqual(["少打断"]);
+    expect(updated.trust).toBe(0.5);
   });
 
   it("loads original session/workspace summary files without advertising nonexistent write tools", async () => {

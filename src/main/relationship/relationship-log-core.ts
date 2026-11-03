@@ -1,6 +1,14 @@
 import * as fs from "fs"
 import * as path from "path"
 import type { ChannelId } from "../channels/types"
+import {
+  advanceAffectState,
+  advanceRelationshipState,
+  createDefaultAffectState,
+  createDefaultRelationshipState,
+  type AffectState,
+  type RelationshipState,
+} from "../persona/persona-spec"
 
 export type RelationshipChannel = "desktop" | "web" | ChannelId
 
@@ -28,14 +36,20 @@ export interface RelationshipDailySummary {
   nextCareCue: string
 }
 
+export type RelationshipPreferencesPatch = Partial<Pick<RelationshipState, "userLabel" | "sharedGoals" | "milestones" | "boundaries">>
+
 interface RelationshipLogData {
   entries: RelationshipLogEntry[]
   dailySummaries: RelationshipDailySummary[]
+  relationshipState: RelationshipState
+  affectState: AffectState
 }
 
 const EMPTY_DATA: RelationshipLogData = {
   entries: [],
   dailySummaries: [],
+  relationshipState: createDefaultRelationshipState(0),
+  affectState: createDefaultAffectState(0),
 }
 
 const MAX_ENTRIES = 500
@@ -114,14 +128,16 @@ function deriveSignal(userText: string, userMood: string): {
 
 function readData(filePath: string): RelationshipLogData {
   try {
-    if (!fs.existsSync(filePath)) return { ...EMPTY_DATA, entries: [], dailySummaries: [] }
+    if (!fs.existsSync(filePath)) return { ...EMPTY_DATA, entries: [], dailySummaries: [], relationshipState: createDefaultRelationshipState(), affectState: createDefaultAffectState() }
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<RelationshipLogData>
     return {
       entries: Array.isArray(parsed.entries) ? parsed.entries : [],
       dailySummaries: Array.isArray(parsed.dailySummaries) ? parsed.dailySummaries : [],
+      relationshipState: parsed.relationshipState ?? createDefaultRelationshipState(),
+      affectState: parsed.affectState ?? createDefaultAffectState(),
     }
   } catch {
-    return { ...EMPTY_DATA, entries: [], dailySummaries: [] }
+    return { ...EMPTY_DATA, entries: [], dailySummaries: [], relationshipState: createDefaultRelationshipState(), affectState: createDefaultAffectState() }
   }
 }
 
@@ -152,6 +168,31 @@ function summarizeDate(date: string, entries: RelationshipLogEntry[]): Relations
 export class RelationshipLogStore {
   constructor(private readonly filePath: string) {}
 
+  async getState(): Promise<{ relationshipState: RelationshipState; affectState: AffectState }> {
+    const data = readData(this.filePath)
+    return { relationshipState: structuredClone(data.relationshipState), affectState: structuredClone(data.affectState) }
+  }
+
+  async updatePreferences(patch: RelationshipPreferencesPatch): Promise<RelationshipState> {
+    const data = readData(this.filePath)
+    const cleanList = (value: unknown): string[] | undefined => {
+      if (!Array.isArray(value)) return undefined
+      return value.map(item => String(item).trim().slice(0, 200)).filter(Boolean).slice(0, 30)
+    }
+    const next: RelationshipState = {
+      ...data.relationshipState,
+      ...(typeof patch.userLabel === "string" ? { userLabel: patch.userLabel.trim().slice(0, 80) || undefined } : {}),
+      ...(cleanList(patch.sharedGoals) ? { sharedGoals: cleanList(patch.sharedGoals)! } : {}),
+      ...(cleanList(patch.milestones) ? { milestones: cleanList(patch.milestones)! } : {}),
+      ...(cleanList(patch.boundaries) ? { boundaries: cleanList(patch.boundaries)! } : {}),
+      updatedAt: Date.now(),
+      version: data.relationshipState.version + 1,
+    }
+    data.relationshipState = next
+    writeData(this.filePath, data)
+    return structuredClone(next)
+  }
+
   async recordTurn(input: RelationshipTurnInput): Promise<RelationshipLogEntry | null> {
     const userText = input.userText.trim()
     const assistantText = input.assistantText.trim()
@@ -176,6 +217,8 @@ export class RelationshipLogStore {
     const data = readData(this.filePath)
     data.entries.push(entry)
     data.entries = data.entries.slice(-MAX_ENTRIES)
+    data.relationshipState = advanceRelationshipState(data.relationshipState, userMood, now)
+    data.affectState = advanceAffectState(data.affectState, userMood, now)
 
     const entriesForDate = data.entries.filter((item) => item.date === entry.date)
     const summary = summarizeDate(entry.date, entriesForDate)
@@ -201,6 +244,8 @@ export class RelationshipLogStore {
     const lines = [
       "【近期关系线索】",
       `- 用户最近状态：${lastMood}`,
+      `- 关系阶段：${data.relationshipState.stage}；相处温度：${Math.round(data.relationshipState.warmth * 100)}/100`,
+      `- 昔涟当前感受：${data.affectState.renderedFeeling}`,
     ]
     if (latestSummary) lines.push(`- 最近日记摘要：${latestSummary}`)
     if (preference) lines.push(`- 重要互动偏好：${preference}`)

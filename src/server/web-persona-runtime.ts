@@ -16,6 +16,8 @@ import { resolveApprovedStyleSampling } from "../main/orchestrator/vendors/style
 import type { VendorConfig } from "../main/orchestrator/vendors/types";
 import { WebFeatureStore, type WebFeatureData } from "./web-feature-store";
 import type { WebSettings } from "./web-store";
+import { XILIAN_PERSONA_SPEC } from "../main/persona/persona-spec";
+import type { RelationshipPreferencesPatch } from "../main/relationship/relationship-log-core";
 
 /** Source and compiled entry points both resolve shipped content independently of cwd. */
 export function shippedPromptRoot(): string {
@@ -96,6 +98,14 @@ export class WebPersonaRuntime {
     this.promptRoot = path.resolve(options.promptRoot ?? process.env.CYRENE_PROMPTS_DIR ?? shippedPromptRoot());
     this.features = options.features ?? new WebFeatureStore(dataDir);
     this.relationship = new RelationshipLogStore(path.join(dataDir, "relationship-log.json"));
+  }
+
+  async getPersonaState() {
+    return { spec: XILIAN_PERSONA_SPEC, ...(await this.relationship.getState()) };
+  }
+
+  async updateRelationshipPreferences(patch: RelationshipPreferencesPatch) {
+    return this.relationship.updatePreferences(patch);
   }
 
   readPrompt(filename: string, required = true): string {

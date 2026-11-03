@@ -51,6 +51,8 @@ describe("relationship log", () => {
     expect(context).toContain("用户最近状态")
     expect(context).toContain("疲惫")
     expect(context).toContain("下次回应提示")
+    expect(context).toContain("关系阶段")
+    expect(context).toContain("昔涟当前感受")
   })
 
   it("does not misread common words as boundary signals", async () => {
@@ -70,5 +72,26 @@ describe("relationship log", () => {
       entries: Array<{ userMood: string }>
     }
     expect(data.entries.every((e) => e.userMood === "未知")).toBe(true)
+  })
+
+  it("persists relationship and affect state separately from permission", async () => {
+    const { RelationshipLogStore } = await import("./relationship-log")
+    const store = new RelationshipLogStore(filePath)
+    await store.recordTurn({ userText: "太好了，终于完成了！", assistantText: "我也替你开心。", cyreneFeeling: "开心", channel: "desktop" })
+    const data = JSON.parse(fs.readFileSync(filePath, "utf8")) as { relationshipState: { stage: string; warmth: number }; affectState: { renderedFeeling: string } }
+    expect(data.relationshipState.stage).toBe("familiar")
+    expect(data.relationshipState.warmth).toBeGreaterThan(0.55)
+    expect(data.affectState.renderedFeeling).toBe("平静")
+  })
+
+  it("lets the user edit relationship preferences without writing scores", async () => {
+    const { RelationshipLogStore } = await import("./relationship-log")
+    const store = new RelationshipLogStore(filePath)
+    const state = await store.updatePreferences({ userLabel: "小夏", sharedGoals: ["一起完成项目"], boundaries: ["少打断"] })
+    expect(state.userLabel).toBe("小夏")
+    expect(state.sharedGoals).toEqual(["一起完成项目"])
+    expect(state.boundaries).toEqual(["少打断"])
+    expect(state.trust).toBe(0.5)
+    expect(state.closeness).toBe(0.35)
   })
 })
