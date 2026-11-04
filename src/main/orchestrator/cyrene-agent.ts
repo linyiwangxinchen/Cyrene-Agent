@@ -128,6 +128,9 @@ export interface CyreneRunOptions {
     chatType?: ChannelChatType;
     threadId?: string;
     sessionId: string;
+    conversationId?: string;
+    /** 宿主冻结的当前轮可用工具，用于授权未来任务；不接受模型传入。 */
+    allowedToolIds?: string[];
   };
   /** CITA 保留的用户原始 Query；旧调用方未传时从最后一条 user 消息读取。 */
   originalQuery?: string;

@@ -28,6 +28,25 @@ it("loads the shared preload bridge on HTTP origins without native randomUUID", 
   expect(api.chatStore).toBeDefined();
   expect(globalThis.crypto.randomUUID()).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
 });
+it("routes channel recovery actions through the authenticated shared Web IPC bridge", async () => {
+  const calls: Array<{ channel: string; args: unknown[] }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (_url: string, request: RequestInit) => {
+    const call = JSON.parse(String(request.body)); calls.push(call);
+    expect(request.headers).toMatchObject({ "X-Cyrene-Client": "test-client" });
+    return new Response(JSON.stringify(call.channel.endsWith(":list") ? [] : { ok: true }), { headers: { "content-type": "application/json" } });
+  }));
+  const api = await runtime();
+  await api.settings.channelsRecoveryList();
+  await api.settings.channelsRecoveryResolve({ id: "operation", index: 1, outcome: "not_sent", confirmed: true });
+  await api.settings.channelsRecoveryRetry({ id: "operation", confirmed: true });
+  await api.settings.channelsRecoveryCancel({ id: "operation" });
+  expect(calls).toEqual([
+    { channel: "channels:recovery:list", args: [] },
+    { channel: "channels:recovery:resolve", args: [{ id: "operation", index: 1, outcome: "not_sent", confirmed: true }] },
+    { channel: "channels:recovery:retry", args: [{ id: "operation", confirmed: true }] },
+    { channel: "channels:recovery:cancel", args: [{ id: "operation" }] },
+  ]);
+});
 it("only refreshes conversations and sidebar for their own original IPC events", async () => {
   const api = await runtime(), { dispatch } = await import("./core-transport");
   const sessions = vi.fn(), sidebar = vi.fn();

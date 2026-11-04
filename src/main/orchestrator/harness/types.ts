@@ -80,6 +80,7 @@ export interface UncertainEffect {
 
 export interface AgentState {
   todoItems: TodoItem[];
+  continuity?: import("./task-continuity").TaskContinuity;
   uncertainEffects: UncertainEffect[];
   /**
    * 同工具连续失败计数（熔断用）：failure 递增、success 清零、not_executed/unknown 不动。

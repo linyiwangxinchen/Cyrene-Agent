@@ -1185,6 +1185,32 @@ describe("CyreneHarness completion", () => {
     expect(second.messages.some((message) => String(message.content).includes("CURRENT_TODO_NOTEBOOK"))).toBe(false);
   });
 
+  it("persists continuity changes even when the todo list stays empty", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "harness-continuity-"));
+    try {
+      const store = new ConversationTranscriptStore(root);
+      const journal = new ConversationJournalService(store);
+      await journal.appendUser("notes", { turnId: "user", text: "先记录，再继续" });
+      const continuity = { goal: "生成报告", constraints: [], artifacts: ["/storage/report.pdf"], openQuestions: [], nextStep: "核对文件" };
+      const { fn } = fakeFetchSequencer([
+        assistantResponse({ toolCalls: [{ id: "notes-only", name: "update_todo", arguments: JSON.stringify({ todos: [], continuity }) }] }),
+        assistantResponse({ text: "已记录" }),
+      ]);
+      vi.stubGlobal("fetch", fn);
+      mockedDispatch.mockImplementation(async (call, context) => {
+        context.state.continuity = continuity;
+        await context.onTaskState?.({ toolCallId: call.id, items: [], continuity });
+        return { outcome: "success", tool: "update_todo", message: "已记录", output: "{}" };
+      });
+      await runCyreneHarness({ systemPrompt: "test", messages: [{ role: "user", content: "先记录" }], tools: [], vendorConfig,
+        conversationId: "notes", runId: "notes-run", transcriptSink: journal.createRunSink({ conversationId: "notes", runId: "notes-run" }),
+        initialState: { todoItems: [], uncertainEffects: [] },
+      });
+      expect((await journal.buildModelContext("notes")).continuity).toEqual(continuity);
+      expect((await store.read("notes")).entries.filter(entry => entry.kind === "task_state")).toHaveLength(1);
+    } finally { await closeConversationDatabases(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
   it("emits non-sensitive cache diagnostics for every model request", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ toolCalls: [mutationToolCall("cache-1")] }),

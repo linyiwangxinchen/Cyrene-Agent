@@ -25,6 +25,8 @@ export interface ToolContext {
     chatType?: ChannelChatType;
     threadId?: string;
     sessionId: string;
+    conversationId?: string;
+    allowedToolIds?: string[];
   };
   /** One Agent execution; resolved-only candidates must not cross this boundary. */
   runId?: string;

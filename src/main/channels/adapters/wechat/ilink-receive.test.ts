@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ getUpdates: vi.fn(), pollQrStatus: vi.fn(), writeFile: vi.fn(), loadContexts: vi.fn(() => [] as Array<{ targetId: string; token: string; at: number }>), rememberContext: vi.fn(), clearContexts: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getUpdates: vi.fn(), pollQrStatus: vi.fn(), writeFile: vi.fn(), loadContexts: vi.fn(() => [] as Array<{ targetId: string; token: string; at: number }>), rememberContext: vi.fn(), clearContexts: vi.fn(), recovery: undefined as { getCursor: ReturnType<typeof vi.fn>; setCursor: ReturnType<typeof vi.fn> } | undefined }));
+vi.mock("../../recovery-store", () => ({ getChannelRecoveryStore: () => mocks.recovery }));
 vi.mock("./reply-context-store", () => ({ WechatReplyContextStore: class { load = mocks.loadContexts; remember = mocks.rememberContext; clear = mocks.clearContexts; } }));
 vi.mock("electron", () => ({ app: { getPath: () => "C:/tmp/cyrene-test-user-data" } }));
 vi.mock("node:fs", async original => {
@@ -14,10 +15,30 @@ import { promises as fs } from "node:fs";
 
 let adapter: ILinkBotAdapter;
 function pendingPoll(_buf: string, signal: AbortSignal) { return new Promise<never>((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true })); }
-beforeEach(() => { vi.clearAllMocks(); mocks.loadContexts.mockReturnValue([]); mocks.getUpdates.mockImplementation(pendingPoll); adapter = new ILinkBotAdapter(); });
+beforeEach(() => { vi.clearAllMocks(); mocks.recovery = undefined; mocks.loadContexts.mockReturnValue([]); mocks.getUpdates.mockImplementation(pendingPoll); adapter = new ILinkBotAdapter(); });
 afterEach(async () => { await adapter.stop(); vi.useRealTimers(); });
 
 describe("WeChat receive lifecycle", () => {
+  it("restores its durable cursor and advances it only after the inbox acknowledges persistence", async () => {
+    mocks.recovery = { getCursor: vi.fn(() => "prior"), setCursor: vi.fn() };
+    let accept!: () => void;
+    adapter.onMessageAccepted = vi.fn(() => new Promise<void>(resolve => { accept = resolve; }));
+    adapter.onMessage = vi.fn(async () => null);
+    mocks.getUpdates.mockResolvedValueOnce({ messages: [{ msgId: "durable", fromUserId: "user", content: "hello", items: [], contextToken: "ctx" }], buf: "next" });
+    await adapter.start(); await vi.waitFor(() => expect(adapter.onMessageAccepted).toHaveBeenCalledOnce());
+    expect(mocks.getUpdates).toHaveBeenCalledWith("prior", expect.any(AbortSignal));
+    expect(mocks.recovery.setCursor).not.toHaveBeenCalled(); expect(adapter.onMessage).not.toHaveBeenCalled();
+    accept(); await vi.waitFor(() => expect(mocks.recovery!.setCursor).toHaveBeenCalledWith("wechat:bot", "next"));
+    expect(mocks.getUpdates).toHaveBeenLastCalledWith("next", expect.any(AbortSignal));
+  });
+  it("keeps the previous cursor when durable acceptance fails", async () => {
+    mocks.recovery = { getCursor: vi.fn(() => "prior"), setCursor: vi.fn() };
+    adapter.onMessageAccepted = vi.fn(async () => { throw new Error("disk full"); });
+    mocks.getUpdates.mockResolvedValueOnce({ messages: [{ msgId: "durable", fromUserId: "user", content: "hello", items: [], contextToken: "ctx" }], buf: "next" });
+    await adapter.start(); await vi.waitFor(() => expect(adapter.getStatus().phase).toBe("error"));
+    expect(mocks.recovery.setCursor).not.toHaveBeenCalled();
+    await adapter.stop();
+  });
   it("restores reply context before polling without clearing it on first startup", async () => {
     mocks.loadContexts.mockReturnValue([{ targetId: "user", token: "restored-context", at: Date.now() }]);
     mocks.getUpdates.mockResolvedValueOnce({ messages: [], buf: "next" });

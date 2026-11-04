@@ -116,6 +116,7 @@ function normalizeDelivery(value: unknown): ScheduledTask["delivery"] {
     channel,
     targetId,
     sessionId,
+    ...(typeof delivery.conversationId === "string" && delivery.conversationId.trim() ? { conversationId: delivery.conversationId.trim() } : {}),
     ...(delivery.chatType === "private" || delivery.chatType === "group" ? { chatType: delivery.chatType } : {}),
     ...(typeof delivery.threadId === "string" && delivery.threadId.trim() ? { threadId: delivery.threadId.trim() } : {}),
   };
@@ -133,7 +134,7 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
     : undefined;
   const workspaceBinding = normalizeWorkspaceBinding(task.workspaceBinding);
   const delivery = normalizeDelivery(task.delivery);
-  const kind = delivery ? "reminder" : "agent";
+  const kind = delivery && task.kind !== "agent" ? "reminder" : "agent";
   return {
     id: task.id,
     title: task.title.trim(),
@@ -152,8 +153,10 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
     ...(typeof task.endAt === "string" && Number.isFinite(Date.parse(task.endAt)) ? { endAt: task.endAt } : {}),
     ...(workspaceBinding ? { workspaceBinding } : {}),
     ...(delivery ? { kind, delivery } : {}),
-    toolMode: ownerPluginId ? "allow-list" : normalizeToolMode(task.toolMode),
+    toolMode: ownerPluginId || delivery ? "allow-list" : normalizeToolMode(task.toolMode),
     allowedToolIds: uniq(Array.isArray(task.allowedToolIds) ? task.allowedToolIds : []),
+    permissionMode: task.permissionMode === "allow_all" ? "allow_all" : "normal",
+    ...normalizeMissedPolicy(task),
     createdAt: typeof task.createdAt === "string" ? task.createdAt : new Date(0).toISOString(),
     updatedAt: typeof task.updatedAt === "string" ? task.updatedAt : new Date(0).toISOString(),
     ...(ownerPluginId ? {
@@ -163,23 +166,38 @@ function normalizeLoadedTask(raw: unknown): ScheduledTask | null {
       approvalFingerprint: typeof task.approvalFingerprint === "string" ? task.approvalFingerprint : "",
     } : {}),
     // 渠道提醒保持 Chat；工作区用户任务恢复原模式，旧任务按 Work 执行。
-    ...(!ownerPluginId ? { mode: delivery ? "chat" as const : (task.mode === "code" ? "code" as const : "work" as const) } : {}),
+    ...(!ownerPluginId ? { mode: kind === "reminder" ? "chat" as const : (task.mode === "code" ? "code" as const : "work" as const) } : {}),
   };
+}
+
+function normalizeMissedPolicy(input: { missedPolicy?: string; missedGraceMinutes?: number }) {
+  const grace = input.missedGraceMinutes;
+  return {
+    missedPolicy: input.missedPolicy === "run-within-grace" ? "run-within-grace" as const : "skip" as const,
+    missedGraceMinutes: Number.isInteger(grace) && grace! >= 1 && grace! <= 1440 ? grace! : 15,
+  };
+}
+
+function validateMissedPolicy(input: { missedPolicy?: string; missedGraceMinutes?: number }): void {
+  if (input.missedPolicy !== undefined && input.missedPolicy !== "skip" && input.missedPolicy !== "run-within-grace") throw new Error("错过执行策略无效");
+  if (input.missedGraceMinutes !== undefined && (!Number.isInteger(input.missedGraceMinutes) || input.missedGraceMinutes < 1 || input.missedGraceMinutes > 1440)) throw new Error("补执行宽限必须为 1-1440 分钟");
 }
 
 export function createSchedulerStore(deps: StoreDeps) {
   let tasks: ScheduledTask[] = [];
-  let listeners: Array<(next: ScheduledTask[]) => void> = [];
+  let listeners: Array<(next: ScheduledTask[], changedTaskIds?: readonly string[]) => void> = [];
 
   function persistTasks(): void {
     ensureParent(deps.tasksFile);
-    fs.writeFileSync(deps.tasksFile, JSON.stringify({ tasks }, null, 2), "utf8");
+    const temporary = `${deps.tasksFile}.tmp`;
+    fs.writeFileSync(temporary, JSON.stringify({ tasks }, null, 2), "utf8");
+    fs.renameSync(temporary, deps.tasksFile);
   }
 
-  function notify(): void {
-    const snapshot = tasks.map(t => ({ ...t, allowedToolIds: [...t.allowedToolIds] }));
+  function notify(changedTaskIds?: readonly string[]): void {
+    const snapshot = structuredClone(tasks);
     for (const listener of listeners) {
-      try { listener(snapshot); } catch (err) { console.warn("[SchedulerStore] listener failed:", err); }
+      try { listener(snapshot, changedTaskIds); } catch (err) { console.warn("[SchedulerStore] listener failed:", err); }
     }
   }
 
@@ -192,10 +210,16 @@ export function createSchedulerStore(deps: StoreDeps) {
     } catch {
       tasks = [];
     }
+    // 进程中断后没有完成回执的运行不能假定失败或盲目重做。
+    for (const entry of readAllHistory().filter(item => item.status === "running")) {
+      recordHistory({ ...entry, status: "unknown", finishedAt: deps.now().toISOString(), errorMessage: "运行时服务中断，结果未知；请核对工具与渠道记录后手动处理，系统不会自动重试。" });
+      tasks = tasks.map(task => task.id === entry.taskId ? { ...task, enabled: false, pluginUserEnabled: false, nextFireAt: null } : task);
+      persistTasks();
+    }
   }
 
   function getTasks(): ScheduledTask[] {
-    return tasks.map(t => ({ ...t, allowedToolIds: [...t.allowedToolIds] }));
+    return structuredClone(tasks);
   }
 
   function nextTaskId(): string {
@@ -220,7 +244,8 @@ export function createSchedulerStore(deps: StoreDeps) {
       : undefined;
     const workspaceBinding = normalizeWorkspaceBinding(input.workspaceBinding);
     const delivery = normalizeDelivery(input.delivery);
-    const kind = delivery ? "reminder" : "agent";
+    const kind = delivery && input.kind !== "agent" ? "reminder" : "agent";
+    validateMissedPolicy(input);
     if (!ownerPluginId && !workspaceBinding && !delivery) throw new Error("用户定时任务必须绑定工作区或投递目标");
     if (input.mode !== undefined && normalizeMode(input.mode) === undefined) throw new Error("会话模式无效");
     if (!ownerPluginId && input.mode !== undefined && input.mode !== "work" && input.mode !== "code" && !(delivery && input.mode === "chat")) {
@@ -246,8 +271,10 @@ export function createSchedulerStore(deps: StoreDeps) {
       ...(endAt ? { endAt: endAt.toISOString() } : {}),
       ...(workspaceBinding ? { workspaceBinding } : {}),
       ...(delivery ? { kind, delivery } : {}),
-      toolMode: ownerPluginId ? "allow-list" : normalizeToolMode(input.toolMode),
+      toolMode: ownerPluginId || delivery ? "allow-list" : normalizeToolMode(input.toolMode),
       allowedToolIds: uniq(input.allowedToolIds ?? []),
+      permissionMode: input.permissionMode === "allow_all" ? "allow_all" : "normal",
+      ...normalizeMissedPolicy(input),
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
       ...(ownerPluginId ? {
@@ -256,12 +283,12 @@ export function createSchedulerStore(deps: StoreDeps) {
         mode: normalizeMode(input.mode),
         approvalFingerprint: typeof input.approvalFingerprint === "string" ? input.approvalFingerprint : "",
       } : {}),
-      ...(!ownerPluginId ? { mode: delivery ? "chat" as const : (input.mode === "code" ? "code" as const : "work" as const) } : {}),
+      ...(!ownerPluginId ? { mode: kind === "reminder" ? "chat" as const : (input.mode === "code" ? "code" as const : "work" as const) } : {}),
     };
     tasks = [...tasks, task];
     persistTasks();
-    notify();
-    return { ...task, allowedToolIds: [...task.allowedToolIds] };
+    notify([task.id]);
+    return structuredClone(task);
   }
 
   function updateTask(id: string, patch: ScheduledTaskPatch): ScheduledTask {
@@ -273,7 +300,8 @@ export function createSchedulerStore(deps: StoreDeps) {
       ? current.workspaceBinding
       : normalizeWorkspaceBinding(patch.workspaceBinding);
     const delivery = patch.delivery === undefined ? current.delivery : normalizeDelivery(patch.delivery);
-    const kind = delivery ? "reminder" : (workspaceBinding ? "agent" : current.kind);
+    const kind = delivery ? ((patch.kind ?? current.kind) === "agent" ? "agent" : "reminder") : (workspaceBinding ? "agent" : current.kind);
+    validateMissedPolicy(patch);
     if (!isPluginTask && patch.enabled === true && !workspaceBinding && !delivery) {
       throw new Error("启用用户定时任务前必须绑定工作区或投递目标");
     }
@@ -342,14 +370,16 @@ export function createSchedulerStore(deps: StoreDeps) {
       lastFiredAt,
       // 插件任务的 enabled 与 toolMode 是宿主不变量：任何 patch 都改不掉。
       enabled: isPluginTask ? false : (patch.enabled ?? current.enabled),
-      toolMode: isPluginTask ? "allow-list" : normalizeToolMode(patch.toolMode ?? current.toolMode),
+      toolMode: isPluginTask || delivery ? "allow-list" : normalizeToolMode(patch.toolMode ?? current.toolMode),
       allowedToolIds: patch.allowedToolIds ? uniq(patch.allowedToolIds) : [...current.allowedToolIds],
+      permissionMode: (patch.permissionMode ?? current.permissionMode) === "allow_all" ? "allow_all" : "normal",
+      ...normalizeMissedPolicy({ missedPolicy: patch.missedPolicy ?? current.missedPolicy, missedGraceMinutes: patch.missedGraceMinutes ?? current.missedGraceMinutes }),
       updatedAt: now.toISOString(),
     };
     tasks = [...tasks.slice(0, idx), updated, ...tasks.slice(idx + 1)];
     persistTasks();
-    notify();
-    return { ...updated, allowedToolIds: [...updated.allowedToolIds] };
+    notify([id]);
+    return structuredClone(updated);
   }
 
   function deleteTask(id: string): boolean {
@@ -357,7 +387,7 @@ export function createSchedulerStore(deps: StoreDeps) {
     tasks = tasks.filter(t => t.id !== id);
     if (tasks.length === before) return false;
     persistTasks();
-    notify();
+    notify([id]);
     return true;
   }
 
@@ -383,7 +413,7 @@ export function createSchedulerStore(deps: StoreDeps) {
       return fs.readFileSync(deps.historyFile, "utf8")
         .split(/\r?\n/)
         .filter(Boolean)
-        .map(line => JSON.parse(line) as ScheduledTaskHistoryEntry)
+        .flatMap(line => { try { return [JSON.parse(line) as ScheduledTaskHistoryEntry]; } catch { return []; } })
         .filter(item => item && typeof item.taskId === "string");
     } catch {
       return [];
@@ -404,7 +434,9 @@ export function createSchedulerStore(deps: StoreDeps) {
       .flatMap(group => group.sort((a, b) => a.firedAt.localeCompare(b.firedAt)).slice(-50))
       .sort((a, b) => a.firedAt.localeCompare(b.firedAt))
       .slice(-1000);
-    fs.writeFileSync(deps.historyFile, compacted.map(item => JSON.stringify(item)).join("\n") + (compacted.length ? "\n" : ""), "utf8");
+    const temporary = `${deps.historyFile}.tmp`;
+    fs.writeFileSync(temporary, compacted.map(item => JSON.stringify(item)).join("\n") + (compacted.length ? "\n" : ""), "utf8");
+    fs.renameSync(temporary, deps.historyFile);
   }
 
   function getHistory(taskId: string, limit = 10): ScheduledTaskHistoryEntry[] {
@@ -414,7 +446,7 @@ export function createSchedulerStore(deps: StoreDeps) {
       .slice(0, limit);
   }
 
-  function onChange(listener: (next: ScheduledTask[]) => void): () => void {
+  function onChange(listener: (next: ScheduledTask[], changedTaskIds?: readonly string[]) => void): () => void {
     listeners.push(listener);
     return () => { listeners = listeners.filter(l => l !== listener); };
   }

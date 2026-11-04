@@ -152,6 +152,10 @@ async function runReflection(): Promise<void> {
   try {
     const l0 = await memoryStore.getL0();
     const l1 = await memoryStore.getL1();
+    const forgettingVersion = JSON.stringify((await memoryStore.load()).forgetting);
+    const assertNotForgotten = async () => {
+      if (JSON.stringify((await memoryStore.load()).forgetting) !== forgettingVersion) throw new Error("MEMORY_SOURCE_FORGOTTEN");
+    };
 
     if (l0.isPinned) {
       console.log("[PMRS/Recap] L0 已锁定，跳过更新建议");
@@ -229,7 +233,7 @@ async function runReflection(): Promise<void> {
       if (!item.content || !item.confidence || item.confidence < 0.6) continue;
 
       if (item.layer === "L0" && item.field && validFields.includes(item.field) && !l0.isPinned) {
-        await memoryStore.upsertL0Field(item.field as L0WritableField, item.content.trim());
+        await memoryStore.upsertL0Field(item.field as L0WritableField, item.content.trim(), assertNotForgotten);
         await memoryStore.appendReflectionLog({
           type: "l0_update",
           summary: `L0.${item.field} 更新为 "${item.content.slice(0, 30)}"（置信度 ${item.confidence.toFixed(2)}）`,
@@ -238,7 +242,7 @@ async function runReflection(): Promise<void> {
         console.log(`[PMRS/Recap] L0.${item.field} 更新: "${item.content.slice(0, 30)}"`);
       } else if (item.layer === "L1") {
         const l1Field = resolveL1Field(item.field, item.content)
-        await memoryStore.replaceL1Field(l1Field, item.content.trim());
+        await memoryStore.replaceL1Field(l1Field, item.content.trim(), assertNotForgotten);
         await memoryStore.appendReflectionLog({
           type: "l1_update",
           summary: `L1.${l1Field} 更新为 "${item.content.slice(0, 30)}"（置信度 ${item.confidence.toFixed(2)}）`,

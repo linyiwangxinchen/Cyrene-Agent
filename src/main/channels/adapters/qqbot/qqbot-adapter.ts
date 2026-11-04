@@ -17,6 +17,7 @@ import type {
   ChannelAttachment,
   ChannelCapability,
   ChannelStatus,
+  ChannelSendOptions,
   IncomingMessage,
   MessageHandler,
   OutgoingMessage,
@@ -135,6 +136,7 @@ export class QqBotAdapter implements ChannelAdapter {
   readonly displayName = "QQ 机器人（官方）";
   readonly capability = CAPABILITY;
   onMessage: MessageHandler | null = null;
+  onMessageAccepted: ((msg: IncomingMessage) => Promise<void>) | null = null;
 
   private api: QqBotApiClient | null = null;
   private ws: QqBotWsClient | null = null;
@@ -228,7 +230,7 @@ export class QqBotAdapter implements ChannelAdapter {
     }
   }
 
-  async send(msg: OutgoingMessage): Promise<{ ok: boolean; error?: string }> {
+  async send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string }> {
     const api = this.api;
     if (!api || !this.wsReady) return { ok: false, error: "QQ 机器人网关未连接" };
     const chatType = msg.chatType ?? "private";
@@ -256,6 +258,9 @@ export class QqBotAdapter implements ChannelAdapter {
 
     let sent = 0;
     for (const chunk of chunks) {
+      if (this.api !== api || !this.getStatus().enabled || options?.signal?.aborted || (options?.canContinue && !options.canContinue())) {
+        lastError = "channel_delivery_cancelled"; break;
+      }
       if (inbound.seqUsed >= seqLimit) {
         lastError = `回复次数达上限，余下 ${chunks.length - sent} 段未发送`;
         break;
@@ -275,7 +280,7 @@ export class QqBotAdapter implements ChannelAdapter {
     if (sent > 0 && lastError) {
       console.warn("[QqBotAdapter] QQ Bot 消息部分发送失败:", lastError);
     }
-    return sent > 0 ? { ok: true } : { ok: false, error: lastError || "QQ Bot 发送失败" };
+    return sent > 0 && !lastError ? { ok: true } : { ok: false, error: lastError || "QQ Bot 发送失败" };
   }
 
   getConnectionInfo(): Record<string, unknown> {
@@ -330,8 +335,10 @@ export class QqBotAdapter implements ChannelAdapter {
   private async deliverIncoming(incoming: IncomingMessage): Promise<void> {
     try {
       await this.downloadAttachments(incoming);
-      await this.onMessage?.(incoming);
+      if (this.onMessageAccepted) await this.onMessageAccepted(incoming);
+      else await this.onMessage?.(incoming);
     } catch (error) {
+      this.dedupe.delete(`${incoming.messageId}`);
       console.warn("[QqBotAdapter] QQ Bot 消息处理失败:", error instanceof Error ? error.message : String(error));
     }
   }

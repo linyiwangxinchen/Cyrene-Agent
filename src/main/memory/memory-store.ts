@@ -1,6 +1,8 @@
 import { ConflictLog, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
 import { isImportingMemory } from "./obsidian-sync-flag"
+import type { MemorySourceLocator } from "../../shared/memory-governance"
+import { candidateSources, isForgottenSource, memorySourceKey } from "./memory-source-policy"
 import {
   CURRENT_MEMORY_SCHEMA_VERSION,
   boundMemorySnippet,
@@ -84,6 +86,35 @@ class MemoryStoreManager {
   }
 
   async save(store: MemoryStore): Promise<void> {
+    // Forget markers are monotonic. A writer that loaded an older snapshot must
+    // not resurrect records after a concurrent UI deletion.
+    if (store.forgetting || this.cache?.forgetting) {
+      const previous = this.cache?.forgetting
+      store.forgetting = {
+        memoryIds: [...new Set([...(previous?.memoryIds ?? []), ...(store.forgetting?.memoryIds ?? [])])],
+        sourceKeys: [...new Set([...(previous?.sourceKeys ?? []), ...(store.forgetting?.sourceKeys ?? [])])],
+        wikiClaimKeys: [...new Set([...(previous?.wikiClaimKeys ?? []), ...(store.forgetting?.wikiClaimKeys ?? [])])],
+        profileRecords: [...new Map([...(previous?.profileRecords ?? []), ...(store.forgetting?.profileRecords ?? [])].map(record => [JSON.stringify(record), record])).values()],
+      }
+      const removed = new Set(store.forgetting.memoryIds)
+      let expanded = true
+      while (expanded) {
+        expanded = false
+        for (const memory of store.l2) if (!removed.has(memory.id) && memory.subEntryIds?.some(id => removed.has(id))) { removed.add(memory.id); expanded = true }
+      }
+      store.forgetting.memoryIds = [...removed]
+      store.l2 = store.l2.filter(memory => !removed.has(memory.id))
+      store.evidence = store.evidence?.filter(evidence => !removed.has(evidence.memoryId))
+      store.l2DmaeStates = store.l2DmaeStates?.filter(item => !removed.has(item.l2Id))
+      for (const record of store.forgetting.profileRecords ?? []) {
+        const source = store.profileSources?.[record.key]
+        if (!source?.sources.some(item => record.sourceKeys.includes(memorySourceKey(item)))) continue
+        const [layer, field] = record.key.split(".")
+        const profile = layer === "L0" ? store.l0 : layer === "L1" ? store.l1 : null
+        if (profile && Object.hasOwn(profile, field) && typeof profile[field as keyof typeof profile] === "string") Object.assign(profile, { [field]: "" })
+        delete store.profileSources![record.key]
+      }
+    }
     const filePath = resolveMemoryPath()
     if (!filePath) {
       this.cache = store
@@ -103,10 +134,14 @@ class MemoryStoreManager {
     return store.l0
   }
 
-  async upsertL0Field(field: L0WritableField, value: L0Profile[L0WritableField], assertSourceCurrent?: () => Promise<void>): Promise<void> {
-    const store = await this.load()
+  async upsertL0Field(field: L0WritableField, value: L0Profile[L0WritableField], assertSourceCurrent?: () => Promise<void>, sources?: MemorySourceLocator[]): Promise<void> {
     if (assertSourceCurrent) await assertSourceCurrent()
+    const store = await this.load()
+    if (sources?.some(source => isForgottenSource(store, source))) throw new Error("MEMORY_SOURCE_FORGOTTEN")
     store.l0 = { ...store.l0, [field]: value, updatedAt: Date.now() }
+    store.profileSources ??= {}
+    if (sources?.length && typeof value === "string") store.profileSources[`L0.${field}`] = { content: value, sources }
+    else delete store.profileSources[`L0.${field}`]
     await this.save(store)
     appendMemoryTrace({
       op: "l0.update",
@@ -128,10 +163,14 @@ class MemoryStoreManager {
     return store.l1
   }
 
-  async replaceL1Field(field: L1WritableField, value: L1Profile[L1WritableField], assertSourceCurrent?: () => Promise<void>): Promise<void> {
-    const store = await this.load()
+  async replaceL1Field(field: L1WritableField, value: L1Profile[L1WritableField], assertSourceCurrent?: () => Promise<void>, sources?: MemorySourceLocator[]): Promise<void> {
     if (assertSourceCurrent) await assertSourceCurrent()
+    const store = await this.load()
+    if (sources?.some(source => isForgottenSource(store, source))) throw new Error("MEMORY_SOURCE_FORGOTTEN")
     store.l1 = { ...store.l1, [field]: value }
+    store.profileSources ??= {}
+    if (sources?.length && typeof value === "string") store.profileSources[`L1.${field}`] = { content: value, sources }
+    else delete store.profileSources[`L1.${field}`]
     await this.save(store)
     appendMemoryTrace({
       op: "l1.update",
@@ -148,8 +187,10 @@ class MemoryStoreManager {
   }
 
   async addL2Memory(input: L2Input, assertSourceCurrent?: () => Promise<void>): Promise<L2Memory> {
-    const store = await this.load()
     if (assertSourceCurrent) await assertSourceCurrent()
+    const store = await this.load()
+    if (candidateSources(input).some(source => isForgottenSource(store, source))) throw new Error("MEMORY_SOURCE_FORGOTTEN")
+    if (input.subEntryIds?.some(id => store.forgetting?.memoryIds.includes(id))) throw new Error("MEMORY_SOURCE_FORGOTTEN")
     const memory: L2Memory = {
       ...input,
       id: `l2_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -660,6 +701,7 @@ class MemoryStoreManager {
     const results: L2Memory[] = []
     if (!store.l2DmaeStates) store.l2DmaeStates = []
     for (const input of inputs) {
+      if (candidateSources(input).some(source => isForgottenSource(store, source)) || input.subEntryIds?.some(id => store.forgetting?.memoryIds.includes(id))) continue
       const memory: L2Memory = {
         ...input,
         id: `l2_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,

@@ -249,7 +249,7 @@ export class ConversationTranscriptCompactor {
           sourceThroughSeq,
           sourceDigest,
           replacement,
-          recoveryState: { ...(recovery.todoItems !== undefined ? { todoItems: recovery.todoItems } : {}), uncertainEffects: recovery.uncertainEffects },
+          recoveryState: { ...(recovery.todoItems !== undefined ? { todoItems: recovery.todoItems } : {}), ...(recovery.continuity ? { continuity: recovery.continuity } : {}), uncertainEffects: recovery.uncertainEffects },
           recoveryThroughSeq: afterSummary.throughSeq,
           ...(recentUserImages ? { recentUserImages } : {}),
           trigger: request.trigger,

@@ -28,10 +28,11 @@ export interface ProactiveCommitInput {
   intentAt?: number;
   /** Frozen delivery route selected at evaluation start. */
   deliveryTarget?: ProactiveDeliveryTarget;
+  deliveryContext?: import("./proactive-types").ProactiveDeliveryContext;
 }
 
 export type ProactiveCommitResult =
-  | { kind: "committed" }
+  | { kind: "committed"; deliveryStatus?: "failed" | "unknown" | "cancelled"; reason?: string }
   | { kind: "cancelled"; reason: string };
 
 export interface ProactiveChatServiceDeps {
@@ -46,6 +47,7 @@ export interface ProactiveChatServiceDeps {
   requiresDurableIntent?: () => boolean;
   /** Read once per evaluation so a settings change cannot reroute its commit. */
   getDeliveryTarget?: () => ProactiveDeliveryTarget;
+  getDeliveryContext?: () => import("./proactive-types").ProactiveDeliveryContext | undefined;
   canStartDelivery?: () => boolean;
   log?: (event: string, detail?: unknown) => void;
 }
@@ -144,7 +146,10 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       latestState.globalDesire = 0;
     }
     deps.saveState(latestState);
-    deps.log?.("message_committed", { scene: candidate.sceneId, source, ...(intentId ? { intentId } : {}) });
+    deps.log?.(result.deliveryStatus ? "message_delivery_incomplete" : "message_committed", {
+      scene: candidate.sceneId, source, ...(intentId ? { intentId } : {}),
+      ...(result.reason ? { reason: result.reason } : {}),
+    });
     return result;
   };
 
@@ -158,6 +163,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       generationEpoch: intent.generationEpoch,
       intentAt: intent.intentAt,
       deliveryTarget,
+      ...(intent.deliveryContext ? { deliveryContext: intent.deliveryContext } : {}),
     });
     return finalizeDelivery(result, intent.candidate, intent.source, intent.generationEpoch, intent.intentAt, intent.intentId);
   };
@@ -169,9 +175,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       const initialSnapshot = { ...rawInitialSnapshot, generationBusy: rawInitialSnapshot.generationBusy || generating };
 
       const frozenDeliveryTarget = deps.getDeliveryTarget?.();
-      const requiresDurableIntent = frozenDeliveryTarget
-        ? frozenDeliveryTarget === "local"
-        : (deps.requiresDurableIntent?.() ?? true);
+      const requiresDurableIntent = deps.requiresDurableIntent?.() ?? (!frozenDeliveryTarget || frozenDeliveryTarget === "local");
       const pendingIntent = requiresDurableIntent ? initialState.pendingCommitIntent : undefined;
       if (pendingIntent) {
         const pendingDecision = pendingCommitDecision(initialSnapshot, initialState, pendingIntent);
@@ -190,7 +194,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         }
         generating = true;
         try {
-          await deliverIntent(pendingIntent, "local");
+          await deliverIntent(pendingIntent, pendingIntent.deliveryTarget ?? "local");
         } finally {
           generating = false;
         }
@@ -275,6 +279,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
 
         const commitStateBeforeIntent = cloneState(deps.loadState());
         const sequence = (commitStateBeforeIntent.proactiveCommitSequence ?? 0) + 1;
+        const deliveryContext = deps.getDeliveryContext?.();
         const intent: ProactiveCommitIntent = {
           intentId: `proactive-intent-${sequence}`,
           sequence,
@@ -284,12 +289,14 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           text,
           source,
           ...(fallbackPayload !== undefined ? { fallbackPayload } : {}),
+          ...(frozenDeliveryTarget ? { deliveryTarget: frozenDeliveryTarget } : {}),
+          ...(deliveryContext ? { deliveryContext } : {}),
         };
         commitStateBeforeIntent.proactiveCommitSequence = sequence;
         commitStateBeforeIntent.pendingCommitIntent = intent;
         // Persist the exact business intent before crossing into any delivery adapter.
         persistPendingIntent(commitStateBeforeIntent, intent);
-        await deliverIntent(intent, "local");
+        await deliverIntent(intent, frozenDeliveryTarget ?? "local");
       } catch (error) {
         deps.log?.("evaluation_failed", { scene: candidate.sceneId, reason: "generation_error" });
         throw error;

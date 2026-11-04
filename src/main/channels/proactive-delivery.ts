@@ -1,5 +1,5 @@
 import { normalizeMobileMessageSegmentationMode, type MobileMessageSegmentationMode } from "../../shared/preferences";
-import { splitTextBySentenceBreaks } from "../../shared/message-segmentation";
+import { buildCapabilityTextParts } from "./capability-text";
 import type { ChannelManager } from "./manager";
 import {
   createChannelDeliveryService,
@@ -7,8 +7,9 @@ import {
 } from "./delivery-service";
 import { appendHistory as appendChannelHistory } from "./history-log";
 import { appendLog as appendChannelLog, type LogEntry } from "./message-log";
-import type { ChannelId, IncomingMessage, OutgoingMessage } from "./types";
+import type { ChannelId, IncomingMessage, OutgoingMessage, OutgoingPart } from "./types";
 import { getChannelConversationBindingStore, type ChannelConversationBindingSnapshot } from "./conversation-binding-store";
+import { getChannelRecoveryStore } from "./recovery-store";
 
 export type ProactiveMobileChannel = Extract<ChannelId, "wechat" | "feishu">;
 
@@ -90,10 +91,13 @@ export function canStartProactiveChannelDelivery(
 }
 
 export type ProactiveChannelDeliveryResult =
-  | { kind: "committed"; deliveredParts: number; totalParts: number }
-  | { kind: "cancelled"; reason: string };
+  | { kind: "committed"; deliveredParts: number; totalParts: number; deliveryStatus?: "failed" | "unknown" | "cancelled"; error?: string }
+  | { kind: "cancelled"; reason: string; deliveryStatus?: "failed" | "unknown" | "cancelled" };
 
 interface ProactiveChannelDeliveryInput {
+  operationId?: string;
+  assistantTurnId?: string;
+  runId?: string;
   channel: ProactiveMobileChannel;
   text: string;
   mobileMessageSegmentation: MobileMessageSegmentationMode;
@@ -121,12 +125,29 @@ export async function sendProactiveChannelMessage(
   const delivery = input.delivery ?? createChannelDeliveryService(input.manager);
 
   const mode = normalizeMobileMessageSegmentationMode(input.mobileMessageSegmentation);
-  const texts = mode === "on" ? splitTextBySentenceBreaks(input.text) : [input.text.trim()].filter(Boolean);
+  const texts = buildCapabilityTextParts(input.text, adapter.capability.maxTextLength, mode)
+    .filter((part): part is Extract<OutgoingPart, { kind: "text" }> => part.kind === "text")
+    .map(part => part.text);
   if (texts.length === 0) return { kind: "cancelled", reason: "empty_text" };
 
   const deliveredTexts: string[] = [];
   let failureReason = "send_failed";
-  for (const text of texts) {
+  let deliveryStatus: "failed" | "unknown" | "cancelled" | undefined;
+  if (getChannelRecoveryStore()) {
+    // Persist the complete plan before sending the first segment. A partial send
+    // can then be inspected and resumed without regenerating the conversation.
+    const result = await delivery.send({
+      channel: input.channel, targetId: recipient.targetId,
+      ...(recipient.threadId ? { threadId: recipient.threadId } : {}),
+      parts: texts.map(text => ({ kind: "text" as const, text })),
+    }, {
+      operationId: input.operationId, conversationId: recipient.conversationId ?? recipient.sessionId,
+      assistantTurnId: input.assistantTurnId, runId: input.runId,
+      canContinue: () => (!input.canContinue || input.canContinue()) && adapter.getStatus().phase === "running",
+    });
+    deliveredTexts.push(...texts.slice(0, result.deliveredParts ?? (result.ok ? texts.length : 0)));
+    if (!result.ok) { failureReason = result.error; deliveryStatus = result.status; }
+  } else for (const text of texts) {
     if (input.canContinue && !input.canContinue()) break;
     if (adapter.getStatus().phase !== "running") break;
     const message: OutgoingMessage = {
@@ -136,11 +157,11 @@ export async function sendProactiveChannelMessage(
       parts: [{ kind: "text", text }],
     };
     const result = await delivery.send(message);
-    if (!result.ok) { failureReason = result.error; break; }
+    if (!result.ok) { failureReason = result.error; deliveryStatus = result.status; break; }
     deliveredTexts.push(text);
   }
 
-  if (deliveredTexts.length === 0) return { kind: "cancelled", reason: failureReason };
+  if (deliveredTexts.length === 0) return { kind: "cancelled", reason: failureReason, ...(deliveryStatus ? { deliveryStatus } : {}) };
 
   const deliveredText = deliveredTexts.join("");
   // Delivery already happened: a derived history/log failure must not trigger a resend.
@@ -163,5 +184,6 @@ export async function sendProactiveChannelMessage(
     kind: "committed",
     deliveredParts: deliveredTexts.length,
     totalParts: texts.length,
+    ...(deliveryStatus ? { deliveryStatus, error: failureReason } : {}),
   };
 }

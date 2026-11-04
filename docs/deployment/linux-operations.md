@@ -284,7 +284,9 @@ sudo systemd-analyze verify /etc/systemd/system/cyrene-web.service
 
 ### 5.3.1 已有 Clone 目录的原地更新
 
-如果服务器已经完成 `git clone`、依赖安装和首次构建，进入原来的 Clone 目录后，先执行下面的资源差异检查，再执行更新代码。更新代码会自动检查当前目录、读取 systemd 的数据目录和浏览器目录、备份数据、拉取本仓库 `master`、重新构建并重启服务。代码假定当前分支是 `master`，不会删除本地修改或强制 reset。
+如果服务器已经完成 `git clone`、依赖安装和首次构建，进入原来的 Clone 目录后，按下面两段代码执行。使用原部署账号，Node 24.x；账号需要能够读写源码、数据目录和同级目录，并能执行 `sudo systemctl`。默认服务名为 `cyrene-web`、分支为 `master`，路径从当前目录和 systemd 读取，不需要填写部署地址。
+
+更新器先在同级私有目录的临时 Git worktree 中安装依赖、检查、构建、准备浏览器，期间旧服务继续运行。全部成功后才短暂停服务，复制完整数据目录（包含 SQLite/WAL），切换源码和已构建的 `dist`/`node_modules`，启动并检查 `/readyz` 与进程持续存活。备份不会在服务运行时进行；新版本启动失败时，会用记录中的**确定旧提交、旧产物和旧数据**自动回退，无需重新下载或编译。
 
 更新前的保护检查会拦截已跟踪源码/配置的修改，也会拦截普通位置的未跟踪文件。项目根目录的 `models/` 专门用于本地模型缓存，其中的未跟踪模型文件会被放行；`models/` 之外的模型建议放在 `CYRENE_DATA_DIR` 或 Clone 目录之外。`dist/renderer/models/` 属于随程序发布的产品资源，修改它仍会阻止更新。若仍然看到“存在未提交修改”，先查看 `git status --short --untracked-files=all` 输出的具体路径。
 
@@ -305,67 +307,42 @@ git status --short
 随后粘贴更新代码：
 
 ```bash
-set -Eeuo pipefail
-SERVICE=cyrene-web
-APP_DIR="$(pwd -P)"
-test -f "$APP_DIR/package.json" && test -f "$APP_DIR/pnpm-lock.yaml" || { echo "请在源码/运行包根目录执行" >&2; exit 1; }
-test "$(git branch --show-current)" = master || { echo "当前分支不是 master，已停止" >&2; exit 1; }
-TRACKED_CHANGES="$(git diff --name-only; git diff --cached --name-only)"
-test -z "$TRACKED_CHANGES" || { echo "存在已跟踪源码/配置修改，请先保存后再更新" >&2; git status --short; exit 1; }
-UNTRACKED_BLOCKING="$(git status --porcelain=v1 --untracked-files=all | sed -n 's/^?? //p' | grep -vE '^models(/|$)' || true)"
-test -z "$UNTRACKED_BLOCKING" || { echo "存在未跟踪文件（models/ 之外），请先保存或移出后再更新" >&2; printf '%s\n' "$UNTRACKED_BLOCKING"; exit 1; }
-SERVICE_DIR="$(sudo systemctl show "$SERVICE" -p WorkingDirectory --value)"
-test "$SERVICE_DIR" = "$APP_DIR" || { echo "当前目录与 systemd WorkingDirectory 不一致" >&2; echo "当前: $APP_DIR"; echo "服务: $SERVICE_DIR"; exit 1; }
-SERVICE_ENV="$(sudo systemctl show "$SERVICE" -p Environment --value)"
-DATA_DIR="$(printf '%s\n' "$SERVICE_ENV" | grep -o 'CYRENE_DATA_DIR=[^ ]*' | head -n1 | cut -d= -f2- || true)"
-BROWSER_DIR="$(printf '%s\n' "$SERVICE_ENV" | grep -o 'PLAYWRIGHT_BROWSERS_PATH=[^ ]*' | head -n1 | cut -d= -f2- || true)"
-test -n "$DATA_DIR" && test -d "$DATA_DIR" || { echo "无法从 systemd 读取有效 CYRENE_DATA_DIR" >&2; exit 1; }
-DATA_DIR="$(cd "$DATA_DIR" && pwd -P)"
-BROWSER_DIR="${BROWSER_DIR:-$APP_DIR/.browsers}"
-OLD_COMMIT="$(git rev-parse HEAD)"
-BACKUP_DIR="${DATA_DIR}.backup-$(date +%Y%m%d-%H%M%S)"
-sudo cp -a -- "$DATA_DIR" "$BACKUP_DIR"
-echo "数据已备份到: $BACKUP_DIR"
-
-sudo systemctl stop "$SERVICE"
-git fetch origin --prune
-git pull --ff-only origin master
-ELECTRON_SKIP_BINARY_DOWNLOAD=1 corepack pnpm@10.33.0 install --frozen-lockfile
-corepack pnpm@10.33.0 run check:server
-corepack pnpm@10.33.0 run check:renderer
-corepack pnpm@10.33.0 run build:web
-export PLAYWRIGHT_BROWSERS_PATH="$BROWSER_DIR"
-# 每次按锁定版本检查/安装；已有旧 chromium-* 不代表新版本可用。
-node node_modules/playwright/cli.js install chromium
-node "$(node -e 'const p=require("node:path");const r=require("node:module").createRequire(require.resolve("@playwright/mcp/package.json"));console.log(p.join(p.dirname(r.resolve("playwright/package.json")),"cli.js"))')" install chromium
-sudo systemctl daemon-reload
-sudo systemctl restart "$SERVICE"
-sudo systemctl status "$SERVICE" --no-pager -l
-curl --fail --show-error --max-time 10 http://localhost:4317/healthz
-echo "更新完成；旧版本提交: $OLD_COMMIT；数据备份: $BACKUP_DIR"
+(
+  set -Eeuo pipefail
+  test -f package.json && test -f pnpm-lock.yaml
+  git fetch origin master
+  CYRENE_UPDATE_SCRIPT="$(mktemp --suffix=.mjs)"
+  trap 'rm -f -- "$CYRENE_UPDATE_SCRIPT"' EXIT
+  # 取出目标分支的更新器，不先改写正在运行的 Clone。
+  git show origin/master:scripts/deployment/update-linux.mjs > "$CYRENE_UPDATE_SCRIPT"
+  node "$CYRENE_UPDATE_SCRIPT" update --repo "$(pwd -P)"
+)
 ```
 
-如果 systemd 配置中的 `WorkingDirectory`、Node 路径或浏览器路径已经变化，不要手改旧文件，回到第 4.1 节在当前目录重新生成服务配置，再执行 `daemon-reload` 和 `restart`。如果使用 HTTPS，健康检查仍在服务器上访问 `localhost`；浏览器继续使用原来的 HTTPS 反向代理地址。重启后应强制刷新浏览器，以加载新的带 hash 的 Web 资源。
+更新器固定使用 `corepack pnpm@10.33.0`，不会因终端的 pnpm 12 发生版本错配。Playwright 顶层与 MCP 自带版本都会检查安装；保留旧浏览器版本，构建不会清除正在使用的浏览器。第 2 节设置的 `PLAYWRIGHT_DOWNLOAD_HOST`、`PLAYWRIGHT_CHROMIUM_DOWNLOAD_HOST` 和下载超时环境变量会继续生效。下载或构建失败时旧服务保持运行；可以排查网络后重新执行。需要安装新系统库时，按第 2 节安装，不会在更新中自动改动系统包。
 
-如果整段代码在构建或检查阶段中止，服务会保持停止状态，终端会保留更新前提交号。确认需要回退时，再粘贴下面这一段；它只切换 Git 提交，不会自动删除数据：
+源码同级的 `.cyrene-updates-<Clone目录名>/` 保存每次 `record.json`、旧产物、停机数据快照和独立恢复工具。记录包含 old/new commit、构建入口 SHA256、SQLite `user_version`（诊断信息，不代表所有业务迁移版本）、执行阶段和失败恢复状态。数据快照包含私有会话、凭据和上传，不要提交 Git、放到 Web 可访问目录或分享；升级前应留出临时构建、旧运行文件和整份数据备份的空间。默认保留历史备份，人工确认不再需要后再清理。
+
+更新器不会覆盖源码/配置修改，也不会改变 systemd 路径。要求 `CYRENE_DATA_DIR` 是独立的真实目录，`dist` 和 `node_modules` 不是符号链接；仅适用于本教程生成的直接 Node `ExecStart`。自定义包装脚本、软链接发布目录或 `EnvironmentFile` 配置需先核对部署方式。配置中的目录或 Node 路径变化时，按第 4.1 节重新生成服务配置。HTTPS 反向代理地址保持不变，更新成功后刷新浏览器。
+
+若新版本已经启动成功，但需要主动回退，在同一 Clone 根目录粘贴下段。**这会恢复升级前整份数据**；新版本产生的数据另存于原数据目录同级的 `.cyrene-failed-data-<记录编号>/`，不会混入旧版数据库。外部工作区文件、已发送的微信消息等副作用不属于数据快照，不能通过程序回退撤销。
 
 ```bash
-set -Eeuo pipefail
-CYRENE_OLD_COMMIT="$(git reflog --format=%H -n 2 | tail -n1)"
-test -n "$CYRENE_OLD_COMMIT" || { echo "找不到更新前提交" >&2; exit 1; }
-git switch --detach "$CYRENE_OLD_COMMIT"
-ELECTRON_SKIP_BINARY_DOWNLOAD=1 corepack pnpm@10.33.0 install --frozen-lockfile
-corepack pnpm@10.33.0 run build:web
-sudo systemctl restart cyrene-web
-curl --fail --show-error --max-time 10 http://localhost:4317/healthz
-echo "已回退到: $CYRENE_OLD_COMMIT"
+node "../.cyrene-updates-$(basename "$(pwd -P)")/updater.mjs" rollback --restore-data --repo "$(pwd -P)"
 ```
 
-回退后保留刚才的数据备份；如果新版本执行过数据库迁移，必须按照 SQLite 回退说明恢复**完整数据目录**，不能只切换 Git 提交。
+`Ctrl+C` 会结束构建，或在已经停机后回退；请等待它完成。断电、`kill -9` 或自动恢复未完成时，不要猜 `reflog`、单独回退源码或手动覆盖 SQLite，先执行恢复命令。它根据持久化记录处理未完成的切换，恢复确定旧版本；如果发现其他进程修改了 Git HEAD、路径或恢复材料，则保留材料并停止自动覆盖：
+
+```bash
+node "../.cyrene-updates-$(basename "$(pwd -P)")/updater.mjs" recover --repo "$(pwd -P)"
+sudo systemctl status cyrene-web --no-pager -l
+```
+
+新版本验收要求 `/readyz` 证明共享核心已经就绪。旧版回退时若没有 `/readyz`（404），才兼容 `/healthz` 加进程存活检查。它们不会调用收费模型或真实发送渠道消息；升级完成后仍需登录验证你实际使用的模型、渠道、工作区任务。运行包更新使用下一节，不适用 Clone 更新器。
 
 ### 5.3.2 新目录切换更新
 
-需要降低停机时间时，在当前 Clone 目录之外创建新目录，按第 2 节完成构建和第 4.1 节生成配置，确认新目录的服务可启动后再停止旧服务、备份数据并切换 systemd 的 `WorkingDirectory`/`ExecStart`。不要让两个版本同时写同一 `CYRENE_DATA_DIR`；切换完成后只保留一个启用的 `cyrene-web` 服务。
+手动切换目录或更新运行包时，在当前目录之外准备新版本，按第 2 节或第 6 节完成构建/依赖安装。需要提前试启动时必须使用独立临时数据目录和端口。确认准备完成后停止旧服务、备份完整数据目录和原服务配置，再按第 4.1 节生成新目录的 `WorkingDirectory`/`ExecStart` 并启动。不要让两个版本同时写同一 `CYRENE_DATA_DIR`；切换完成后只保留一个启用的 `cyrene-web` 服务。
 
 更新前备份独立数据目录和旧程序，短暂停止服务以取得一致的数据副本。在新的版本目录完成安装、构建与检查后切换服务路径，或停止后更新既有程序目录；不要把账号、API Key、微信凭据、记忆、会话、用户上传打进升级包。避免新 HTML 引用的 hash 资源没有同步或更新时删除旧资源。
 

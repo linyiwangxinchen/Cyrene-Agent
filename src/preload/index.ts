@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import type { ContextCompactionPhaseEvent } from "../shared/context-usage";
+import type { ChannelRecoveryApi } from "../shared/channel-recovery";
 import type { QqListenAuthRequirement } from "../shared/qq-listen";
 import type { ApprovalRequest, ApprovalSettledPayload } from "../shared/permission-approval";
 import type { StartTtsRequest, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
@@ -433,6 +434,10 @@ const settingsApi = {
   // 消息日志
   channelsLogGet: (limit?: number) => ipcRenderer.invoke(IPC.CHANNELS_LOG_GET, limit ?? 100),
   channelsLogClear: () => ipcRenderer.invoke(IPC.CHANNELS_LOG_CLEAR),
+  channelsRecoveryList: (): ReturnType<ChannelRecoveryApi["list"]> => ipcRenderer.invoke(IPC.CHANNELS_RECOVERY_LIST),
+  channelsRecoveryRetry: (input: Parameters<ChannelRecoveryApi["retry"]>[0]): ReturnType<ChannelRecoveryApi["retry"]> => ipcRenderer.invoke(IPC.CHANNELS_RECOVERY_RETRY, input),
+  channelsRecoveryResolve: (input: Parameters<ChannelRecoveryApi["resolve"]>[0]): ReturnType<ChannelRecoveryApi["resolve"]> => ipcRenderer.invoke(IPC.CHANNELS_RECOVERY_RESOLVE, input),
+  channelsRecoveryCancel: (input: Parameters<ChannelRecoveryApi["cancel"]>[0]): ReturnType<ChannelRecoveryApi["cancel"]> => ipcRenderer.invoke(IPC.CHANNELS_RECOVERY_CANCEL, input),
   channelsContextBindingsGet: () => ipcRenderer.invoke(IPC.CHANNELS_CONTEXT_BINDINGS_GET),
   channelsContextBind: (payload: { sessionId: string; conversationId: string }) =>
     ipcRenderer.invoke(IPC.CHANNELS_CONTEXT_BIND, payload),

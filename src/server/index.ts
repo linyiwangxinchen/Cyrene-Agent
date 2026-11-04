@@ -23,6 +23,7 @@ import { normalizeReasoningPreference } from "../shared/reasoning";
 import { resolveVendorRuntimeSettings } from "../main/orchestrator/vendors/runtime-settings";
 import { WebPersonaRuntime } from "./web-persona-runtime";
 import { SharedCoreClient } from "./shared-core-client";
+import { createReadinessProbe } from "./readiness";
 import { inlinePluginPanelAssets } from "./plugin-panel-document";
 import { createReadStream } from "node:fs";
 import { Readable } from "node:stream";
@@ -364,6 +365,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
   let nextClientId = 1;
   const socketClients = new Map<WebSocket, { id: number; token: string; sessionToken: string }>();
   const core = options.sharedCore === false ? null : new SharedCoreClient(dataDir, process.env.CYRENE_APP_ROOT || path.resolve(__dirname, "..", "..", ".."), logger);
+  const probeReadiness = createReadinessProbe(() => core?.isReady() ?? Promise.resolve(false));
   const running = new Map<string, { cancelled: boolean; sessionId: string; assistantId: string; controller: AbortController }>();
   const browserStates = new Map<string, BrowserPanelState>();
   const loginAttempts = new Map<string, LoginAttemptState>();
@@ -427,6 +429,12 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
 
       if (method === "GET" && url.pathname === "/healthz") {
         writeJson(response, 200, { ok: true, service: "cyrene-web", initialized: await auth.isInitialized() });
+        return;
+      }
+      if (method === "GET" && url.pathname === "/readyz") {
+        const ready = await probeReadiness();
+        response.setHeader("Cache-Control", "no-store");
+        writeJson(response, ready ? 200 : 503, { ready });
         return;
       }
 

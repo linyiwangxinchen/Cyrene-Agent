@@ -5,6 +5,7 @@ import { findPossibleConflictCandidate } from "./memory-conflict"
 import { scoreMemoryConflict, type ConflictEvidenceLevel } from "./memory-conflict-score"
 import { wasRecentlyInjectedMemory } from "./recent-injected-memory"
 import { addL2MemoryVector, searchMemoryEntries } from "../rag/index"
+import { candidateSources, isForgottenSource } from "./memory-source-policy"
 
 type L1Field = "recentGoals" | "recentPreferences" | "currentProject"
 
@@ -56,6 +57,9 @@ export class MemoryManager {
   async writeMemory(candidates: MemoryCandidate[], assertSourceCurrent?: () => Promise<void>): Promise<void> {
     for (const candidate of candidates) {
       if (assertSourceCurrent) await assertSourceCurrent()
+      const sources = candidateSources(candidate)
+      const awaitedStore = await memoryStore.load()
+      if (sources.some(source => isForgottenSource(awaitedStore, source))) continue
       if (shouldSkipCandidate(candidate)) {
         console.log("[PMRS/Manager] 候选标记为不写入或存在过度概括，跳过")
         continue
@@ -90,11 +94,11 @@ export class MemoryManager {
         }
 
         // 情况三：合法字段，直接写入
-        await memoryStore.upsertL0Field(candidate.field as L0WritableField, candidate.content, assertSourceCurrent)
+        await memoryStore.upsertL0Field(candidate.field as L0WritableField, candidate.content, assertSourceCurrent, sources)
         console.log(`[PMRS/Manager] L0 更新字段: ${candidate.field} = "${candidate.content.slice(0, 20)}"`)
       } else if (candidate.layer === "L1") {
         const field = resolveL1Field(candidate.field, candidate.content)
-        await memoryStore.replaceL1Field(field, candidate.content, assertSourceCurrent)
+        await memoryStore.replaceL1Field(field, candidate.content, assertSourceCurrent, sources)
         console.log(`[PMRS/Manager] L1 更新字段: ${field}`)
       } else if (candidate.layer === "L2") {
         await this.writeL2(candidate, assertSourceCurrent)
@@ -107,6 +111,7 @@ export class MemoryManager {
       content: candidate.content,
       triggerText: candidate.triggerText,
       sourceConversationId: candidate.sourceConversationId ?? "",
+      sourceMessageIds: candidate.sourceMessageIds,
       embedding: [],
       isPinned: false,
       syncStatus: "pending_sync",

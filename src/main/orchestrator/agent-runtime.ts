@@ -379,7 +379,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         buildEnvironmentContext(profile),
         buildSkillCatalog(scheduledSkills),
         await buildAlwaysOnContext(task.prompt, messages),
-        await buildRelationshipContext(task.delivery?.sessionId, task.delivery?.chatType !== "group"),
+        await buildRelationshipContext(task.delivery?.conversationId ?? task.delivery?.sessionId, task.delivery?.chatType !== "group"),
         await rawDeps.buildPluginPromptContext({
           source: "scheduler",
           mode,

@@ -41,6 +41,15 @@ vi.mock("./init", () => ({
   initializeChannels: vi.fn(),
   startChannels: vi.fn(async () => undefined),
   shutdownChannels: vi.fn(async () => undefined),
+  runChannelConversationWork: (task: () => Promise<unknown>) => task(),
+}));
+vi.mock("./durable-inbox", () => ({
+  setDurableChannelInbox: vi.fn(),
+  DurableChannelInbox: class {
+    constructor(private readonly deps: Record<string, any>) {}
+    handleIncoming = (message: Record<string, unknown>) => this.deps.process(message, { sessionId: "test", boundConversationId: null }, () => undefined);
+    accept = vi.fn(async () => undefined);
+  },
 }));
 
 // 捕获每个调度器实例的构造依赖，以验证真实渠道完成路径和实例隔离。

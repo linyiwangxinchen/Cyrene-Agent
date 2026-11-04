@@ -36,6 +36,7 @@ import type { ChannelAdapter } from "../base";
 import type {
   ChannelCapability,
   ChannelStatus,
+  ChannelSendOptions,
   IncomingMessage,
   MessageHandler,
   OutgoingMessage,
@@ -257,6 +258,7 @@ export class FeishuAdapter implements ChannelAdapter {
   readonly displayName = "飞书";
   readonly capability = FEISHU_CAPABILITY;
   onMessage: MessageHandler | null = null;
+  onMessageAccepted: ((msg: IncomingMessage) => Promise<void>) | null = null;
 
   private channel: LarkChannel | null = null;
   private status: ChannelStatus = { enabled: false, phase: "config_missing" };
@@ -304,9 +306,8 @@ export class FeishuAdapter implements ChannelAdapter {
       }
       try {
         const inMsg = await normalizeLarkMessage(ch, msg);
-        if (this.onMessage) {
-          await this.onMessage(inMsg);
-        }
+        if (this.onMessageAccepted) await this.onMessageAccepted(inMsg);
+        else if (this.onMessage) await this.onMessage(inMsg);
       } catch (err) {
         console.error(LOG, "处理入站消息失败:", err);
       }
@@ -391,7 +392,7 @@ export class FeishuAdapter implements ChannelAdapter {
     return this.status;
   }
 
-  async send(msg: OutgoingMessage): Promise<{ ok: boolean; error?: string }> {
+  async send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string }> {
     if (!this.channel) {
       console.warn(LOG, "send 失败: 长连接未建立");
       return { ok: false, error: "飞书长连接未建立" };
@@ -403,6 +404,7 @@ export class FeishuAdapter implements ChannelAdapter {
     let lastErr: string | undefined;
     let anyOk = false;
     for (const part of msg.parts) {
+      if (!this.status.enabled || options?.signal?.aborted || (options?.canContinue && !options.canContinue())) return { ok: false, error: "channel_delivery_cancelled" };
       try {
         const r = await sendLark(this.channel, msg.targetId, part);
         console.log(LOG, `send ok: messageId=${r?.messageId ?? "?"}`);
@@ -412,7 +414,7 @@ export class FeishuAdapter implements ChannelAdapter {
         console.error(LOG, `send part failed: targetId=${msg.targetId} part=${part.kind} err=`, lastErr, err);
       }
     }
-    if (!anyOk) return { ok: false, error: lastErr ?? "send failed" };
+    if (!anyOk || lastErr) return { ok: false, error: lastErr ?? "send failed" };
     return { ok: true };
   }
 

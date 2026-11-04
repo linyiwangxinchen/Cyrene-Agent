@@ -10,13 +10,15 @@ import type { MemoryJudgeResult } from "./memory-schemas"
 import type { L1Profile, MemoryCandidate, MemoryJudgeTurn } from "./memory-types"
 import { isMemoryEnabled } from "./memory-mode"
 import { memoryPendingTurns } from "./memory-pending-turns"
-import type { MemoryPendingStore, MemoryTurnSource } from "./memory-pending-types"
+import type { MemoryPendingStore, MemoryTurnSource, PendingMemoryTurn } from "./memory-pending-types"
+import { attachCandidateSources, isForgottenSource } from "./memory-source-policy"
 
 export interface MemorySchedulerDeps {
   enqueueTask: <T>(label: string, task: () => Promise<T>) => Promise<T>
   judgeMemory: (turns: MemoryJudgeTurn[], conversationId: string) => Promise<MemoryJudgeResult>
   writeMemory: (candidates: MemoryCandidate[], assertSourceCurrent: () => Promise<void>) => Promise<void>
   pending: MemoryPendingStore
+  filterSources?: (turns: PendingMemoryTurn[]) => Promise<PendingMemoryTurn[]>
   /** 把 judge 顺手抽取的命名实体入库（零额外 LLM 调用） */
   ingestEntities: (entities: ExtractedEntity[]) => void
   getL1: () => Promise<L1Profile>
@@ -56,16 +58,19 @@ export class MemoryScheduler {
     while (recorded.seq !== undefined && isMemoryEnabled()) {
       const batch = await this.deps.pending.batch(conversationId, recorded.seq)
       if (!batch) break
+      const usable = await this.deps.filterSources?.(batch.turns) ?? batch.turns
       const assertSourceCurrent = async () => {
         if (!isMemoryEnabled() || !await this.deps.pending.current(batch.turns)) throw new Error("MEMORY_SOURCE_CHANGED")
+        if (this.deps.filterSources && (await this.deps.filterSources(usable)).length !== usable.length) throw new Error("MEMORY_SOURCE_CHANGED")
       }
       try {
         await assertSourceCurrent()
-        const turns = batch.turns.map(({ userInput, assistantReply }) => ({ userInput, assistantReply }))
+        if (!usable.length) { if (!await this.deps.pending.consume(batch)) break; continue }
+        const turns = usable.map(({ userInput, assistantReply }) => ({ userInput, assistantReply }))
         const { candidates, entities } = await this.deps.judgeMemory(turns, conversationId)
         await assertSourceCurrent()
         if (candidates.length > 0) {
-          await this.deps.writeMemory(candidates, assertSourceCurrent)
+          await this.deps.writeMemory(candidates.map(candidate => attachCandidateSources(candidate, conversationId, usable)), assertSourceCurrent)
         }
         await assertSourceCurrent()
         if (entities.length > 0) {
@@ -113,6 +118,10 @@ export const memoryScheduler = new MemoryScheduler({
   judgeMemory: (turns, conversationId) => memoryJudge.judgeRecentTurns(turns, conversationId),
   writeMemory: (candidates, assertSourceCurrent) => memoryManager.writeMemory(candidates, assertSourceCurrent),
   pending: memoryPendingTurns,
+  filterSources: async turns => {
+    const store = await memoryStore.load()
+    return turns.filter(turn => !isForgottenSource(store, { conversationId: turn.conversationId, messageId: turn.userEntryId }))
+  },
   ingestEntities: (entities) => entityGraph.ingestEntities(entities),
   getL1: () => memoryStore.getL1(),
   replaceL1Field: (field, value) => memoryStore.replaceL1Field(field, value),

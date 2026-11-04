@@ -9,4 +9,5 @@
 .cy-companion__record p { white-space: pre-wrap; }
 .cy-companion__record time, .cy-companion__record small { color: var(--rb-text-secondary); }
 .cy-companion .ant-select { width: 100%; }
+.cy-companion__mobile-tabs { display: flex; flex-direction: column; gap: 8px; margin-bottom: 18px; min-width: 0; }
 @media (max-width: 680px) { .cy-companion__form { grid-template-columns: minmax(0, 1fr); } }

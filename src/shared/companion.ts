@@ -45,12 +45,25 @@ export interface CompanionPermissions {
 }
 export interface CompanionRecord {
   id: string;
-  kind: "turn" | "repair" | "diary" | "preferences" | "permissions";
+  kind: "turn" | "repair" | "diary" | "preferences" | "permissions" | "followup";
   at: number;
   text: string;
   conversationId?: string;
   runId?: string;
   sourceEventId?: string;
+}
+export type CompanionFollowupStatus = "active" | "awaiting_reply" | "completed" | "paused" | "cancelled";
+export interface CompanionFollowup {
+  id: string;
+  topic: string;
+  conversationId: string;
+  nextEligibleAt: number;
+  status: CompanionFollowupStatus;
+  createdAt: number;
+  updatedAt: number;
+  lastAskedAt?: number;
+  lastIntentId?: string;
+  resolutionReason?: string;
 }
 export interface CompanionSnapshot {
   revision: number;
@@ -58,6 +71,7 @@ export interface CompanionSnapshot {
   affect: AffectState;
   permissions: CompanionPermissions;
   records: CompanionRecord[];
+  followups?: CompanionFollowup[];
 }
 export type RelationshipPreferences = Pick<RelationshipState,
   "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "closeness" | "paused" | "recordHistory" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled">;
@@ -68,6 +82,8 @@ export type CompanionCommand = { expectedRevision: number } & (
   | { type: "delete_record"; id: string }
   | { type: "clear_history" }
   | { type: "reset_relationship" }
+  | { type: "followup_save"; id?: string; topic: string; conversationId: string; nextEligibleAt: number }
+  | { type: "followup_status"; id: string; conversationId: string; status: Exclude<CompanionFollowupStatus, "awaiting_reply">; nextEligibleAt?: number }
 );
 export interface CompanionApi {
   get(): Promise<CompanionSnapshot>;

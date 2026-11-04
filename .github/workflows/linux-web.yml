@@ -31,6 +31,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Verify upstream preview preserves Git state
         run: node --test scripts/verify/upstream-sync.test.mjs
+      - name: Verify isolated updates and consistent rollback under failures
+        run: node --test scripts/verify/linux-update.test.mjs
       - name: Check shared core and Web contracts
         run: |
           pnpm run check:main
@@ -44,13 +46,16 @@ jobs:
           src/main/agui-bridge.test.ts
           src/main/browser/address-input.test.ts
           src/main/browser/browser-panel-ipc.test.ts
-          src/main/channels/adapters/qq/onebot-reverse-ws.test.ts
-          src/main/channels/bootstrap.test.ts
-          src/main/channels/dispatcher.test.ts
-          src/main/channels/channel-context.test.ts
-          src/main/channels/wechat-compaction.integration.test.ts
-          src/main/channels/outgoing-composer.test.ts
+          src/main/channels
+          src/main/application
+          src/main/storage
+          src/main/chats/chats-pending-queue.test.ts
+          src/main/react-chat-session-dispatcher.test.ts
           src/main/memory/memory-background-schedulers.test.ts
+          src/main/memory/memory-forgetting.integration.test.ts
+          src/main/memory/memory-governance.test.ts
+          src/main/memory/memory-pipeline.test.ts
+          src/main/memory/memory-scheduler.test.ts
           src/main/memory/memory-llm-client.test.ts
           src/main/memory/memory-llm-client.responses.test.ts
           src/main/network/node-request-proxy.test.ts
@@ -68,13 +73,23 @@ jobs:
           src/renderer/react/components/ui/FullAccessConfirmation.test.tsx
           src/renderer/react/features/onboarding/StandaloneOnboarding.test.tsx
           src/renderer/react/features/settings/ToolSettingsPanel.permission.test.tsx
+          src/renderer/react/features/settings/CompanionSettingsPanel.followups.test.tsx
+          src/renderer/react/features/settings/ChannelRecoveryPanel.test.tsx
           src/main/orchestrator/structured-output/runner.test.ts
           src/main/services/llm/llm-client.test.ts
           src/main/proactive/proactive-lifecycle.test.ts
           src/main/proactive/proactive-lifecycle.headless.test.ts
           src/main/proactive/proactive-service.test.ts
           src/main/proactive/proactive-wechat.integration.test.ts
+          src/main/proactive/proactive-durable-followups.test.ts
+          src/main/proactive/proactive-delivery-routing.test.ts
+          src/main/proactive-delivery-shared.test.ts
+          src/main/persona
+          src/main/relationship
+          src/main/proactive/relationship-opportunities.test.ts
+          src/main/permission-background.test.ts
           src/main/orchestrator/build-options.test.ts
+          src/main/orchestrator/task-continuity.test.ts
           src/main/orchestrator/context-manager.test.ts
           src/main/orchestrator/context-manager.summarize.test.ts
           src/main/orchestrator/context-manager.responses.test.ts
@@ -92,8 +107,7 @@ jobs:
           src/main/orchestrator/shell-completion-dispatcher.test.ts
           src/main/orchestrator/tools/builtin-tools/shell-job-persistence.test.ts
           src/main/learn/progress/learn-post-turn.test.ts
-          src/main/scheduler/scheduler-store.test.ts
-          src/main/scheduler/scheduler-runner.test.ts
+          src/main/scheduler
           src/renderer/react/features/settings/McpSettingsPanel.args.test.ts
           src/renderer/react/features/settings/McpSettingsPanel.config.test.ts
           src/renderer/react/features/chat/components/katex-rendering-contract.test.ts
@@ -134,3 +148,7 @@ jobs:
           node scripts/verify/shared-core-compaction.mjs
           node scripts/verify/shared-core-memory.mjs
           node scripts/verify/shared-core-shell.mjs
+      - name: Verify authenticated companion preferences and memory workflows
+        run: node scripts/verify/companion-flow.mjs --ui
+      - name: Verify durable delivery, followups and readiness across core restart
+        run: node scripts/verify/continuity-flow.mjs

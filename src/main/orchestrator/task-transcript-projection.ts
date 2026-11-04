@@ -13,6 +13,7 @@
 import type { TranscriptEntry } from "./conversation-transcript-types";
 import type { TodoItem } from "./harness/types";
 import type { TaskTranscriptMessage } from "../../shared/task-session";
+import { buildFullModelContext } from "./conversation-transcript-projection";
 
 /** canonical content 是 string | 分块数组 的联合，检查器与 harness 都只吃文本。 */
 export function transcriptContentText(content: unknown): string {
@@ -60,4 +61,9 @@ export function projectTaskTodoItems(entries: TranscriptEntry[]): TodoItem[] {
     if (entry.kind === "task_state") return entry.payload.items;
   }
   return [];
+}
+
+/** 子代理复用 CTA 活动分支规则，不能从已撤销的执行分支继承接续笔记。 */
+export function projectTaskContinuity(entries: TranscriptEntry[]) {
+  return buildFullModelContext(entries, { get: () => null }).continuity;
 }

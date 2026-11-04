@@ -27,12 +27,16 @@ export type EditorValues = {
   maxRuns: number;
   limitTools: boolean;
   allowedToolIds: string[];
+  missedPolicy?: "skip" | "run-within-grace";
+  missedGraceMinutes?: number;
+  permissionMode?: "normal" | "allow_all";
 };
 
 const DEFAULT_VALUES: EditorValues = {
   title: "", prompt: "", mode: "work", enabled: true, kind: "daily", runAt: "", timeOfDay: "08:00",
   dayOfWeek: 1, dayOfMonth: 1, month: 1, every: 1, unit: "hours", endMode: "never", endDate: "", maxRuns: 10,
   limitTools: false, allowedToolIds: [],
+  missedPolicy: "skip", missedGraceMinutes: 15, permissionMode: "normal",
 };
 
 function localDateTime(value?: string): string {
@@ -69,6 +73,7 @@ function editorFromTask(task?: ScheduledTask): EditorValues {
   if (!task) return { ...DEFAULT_VALUES };
   const base = { ...DEFAULT_VALUES, title: task.title, prompt: task.prompt, mode: task.mode === "code" ? "code" as const : "work" as const,
     enabled: task.enabled, limitTools: task.toolMode === "allow-list", allowedToolIds: task.allowedToolIds ?? [],
+    missedPolicy: task.missedPolicy ?? "skip", missedGraceMinutes: task.missedGraceMinutes ?? 15, permissionMode: task.permissionMode ?? "normal",
     endMode: task.maxRuns ? "runs" as const : task.endAt ? "date" as const : "never" as const,
     maxRuns: task.maxRuns ?? 10, endDate: task.endAt ? task.endAt.slice(0, 10) : "" };
   switch (task.schedule.kind) {
@@ -194,19 +199,21 @@ export function ScheduledTasksPanel({
       const prompt = values.prompt.trim();
       if (!title) throw new Error(t("scheduler.titleRequired"));
       if (!prompt) throw new Error(t("scheduler.promptRequired"));
-      if (!binding) throw new Error(t("scheduler.workspaceRequired"));
+      if (!binding && !editing?.delivery && !editing?.ownerPluginId) throw new Error(t("scheduler.workspaceRequired"));
       const payload = {
-        title, prompt, mode: values.mode, enabled: values.enabled, schedule: scheduleFromEditor(values),
+        title, prompt, mode: editing?.kind === "reminder" ? "chat" : values.mode, enabled: values.enabled, schedule: scheduleFromEditor(values),
         workspaceBinding: binding,
-        toolMode: values.limitTools ? "allow-list" : "all-enabled",
+        toolMode: editing?.delivery || values.limitTools ? "allow-list" : "all-enabled",
         allowedToolIds: values.limitTools ? values.allowedToolIds : [],
+        missedPolicy: values.missedPolicy, missedGraceMinutes: values.missedGraceMinutes,
+        permissionMode: values.permissionMode,
         maxRuns: values.endMode === "runs" ? values.maxRuns : null,
         endAt: values.endMode === "date" && values.endDate ? new Date(`${values.endDate}T23:59:59.999`).toISOString() : null,
       };
       const result = editing
         ? await window.cyreneScheduler?.update(editing.id, payload)
         : await window.cyreneScheduler?.add(payload);
-      if (!result?.ok) throw resultError(result?.error);
+      if (!result?.ok) throw resultError(result?.error ?? result?.reason);
       message.success(t("scheduler.saved"));
       setEditorOpen(false);
       await refresh();
@@ -243,7 +250,7 @@ export function ScheduledTasksPanel({
         : action === "run"
           ? await window.cyreneScheduler?.fireNow(task.id)
           : await window.cyreneScheduler?.delete(task.id);
-      if (!result?.ok) throw resultError(result?.error);
+      if (!result?.ok) throw resultError(result?.error ?? result?.reason);
       if (action === "run") message.success(t("scheduler.runQueued"));
       if (action === "delete") message.success(t("scheduler.deleted"));
       await refresh();
@@ -284,7 +291,7 @@ export function ScheduledTasksPanel({
     { value: "monthly", label: t("scheduler.monthly") }, { value: "yearly", label: t("scheduler.yearly") },
     { value: "interval", label: t("scheduler.interval") },
   ];
-  const statusLabel = (status: ScheduledTaskHistoryEntry["status"]) => t(`scheduler.status.${status}`);
+  const statusLabel = (status: ScheduledTaskHistoryEntry["status"]) => status === "unknown" ? "结果未知，请核对" : t(`scheduler.status.${status}`);
   const isFinished = (task: ScheduledTask) => (task.schedule.kind === "once" && Boolean(task.lastFiredAt))
     || (task.maxRuns !== undefined && (task.runCount ?? 0) >= task.maxRuns)
     || Boolean(task.endAt && Date.parse(task.endAt) <= Date.now());
@@ -368,6 +375,7 @@ export function ScheduledTasksPanel({
 
       <Modal open={editorOpen} title={editing ? t("scheduler.editTask") : t("scheduler.newTask")} onCancel={() => setEditorOpen(false)} onOk={() => void saveTask()} okText={t("scheduler.save")} cancelText={t("scheduler.cancel")} width={680} destroyOnClose>
         <div className="cy-scheduled-form">
+          {editing?.delivery && <p>任务执行后回复 {editing.delivery.channel} 私聊，并记入原绑定会话。重新绑定渠道不会改变此任务的收件人。{editing.kind === "reminder" ? "此为旧版纯提醒，不调用工具。" : "可用工具以任务白名单与当前权限的交集为准。"}</p>}
           <label>{t("scheduler.taskName")}<Input maxLength={80} value={values.title} onChange={(event) => updateValues({ title: event.target.value })} placeholder={t("scheduler.taskNamePlaceholder")} /></label>
           <label>{t("scheduler.instruction")}<Input.TextArea value={values.prompt} onChange={(event) => updateValues({ prompt: event.target.value })} autoSize={{ minRows: 3, maxRows: 8 }} placeholder={t("scheduler.instructionPlaceholder")} /></label>
           <div className="cy-scheduled-form-grid">
@@ -394,7 +402,13 @@ export function ScheduledTasksPanel({
             <Button onClick={() => void chooseWorkspace()}>{binding ? t("scheduler.changeWorkspace") : t("scheduler.chooseWorkspace")}</Button>
           </div>
           <div className="cy-scheduled-form-inline"><span>{t("scheduler.startEnabled")}</span><Switch checked={values.enabled} onChange={(enabled) => updateValues({ enabled })} /></div>
-          <div className="cy-scheduled-form-inline cy-scheduled-tool-heading"><div><strong>{t("scheduler.toolScope")}</strong><small>{t("scheduler.toolScopeDescription")}</small></div><Checkbox checked={values.limitTools} onChange={(event) => updateValues({ limitTools: event.target.checked })}>{t("scheduler.limitTools")}</Checkbox></div>
+          {!editing?.ownerPluginId && <>
+            <label>服务停机错过执行时<Select value={values.missedPolicy} onChange={(missedPolicy) => updateValues({ missedPolicy })} options={[{ value: "skip", label: "跳过（默认）" }, { value: "run-within-grace", label: "仅在指定宽限内补执行一次" }]} /></label>
+            {values.missedPolicy === "run-within-grace" && <label>补执行宽限（分钟）<Input type="number" min={1} max={1440} value={values.missedGraceMinutes} onChange={(event) => updateValues({ missedGraceMinutes: Number(event.target.value) })} /></label>}
+            <label>无人值守工具权限<Select value={values.permissionMode} onChange={(permissionMode) => updateValues({ permissionMode })} options={[{ value: "normal", label: "遵循当前权限；需要审批的操作停止并报错" }, { value: "allow_all", label: "允许所选工具免基础审批（仍遵守昔涟权限设置）" }]} /></label>
+            <small>补执行仅适用于未开始的任务。失败或结果未知的操作不会自动重做，请先检查运行历史。</small>
+          </>}
+          <div className="cy-scheduled-form-inline cy-scheduled-tool-heading"><div><strong>{t("scheduler.toolScope")}</strong><small>{t("scheduler.toolScopeDescription")}</small></div><Checkbox disabled={Boolean(editing?.delivery)} checked={values.limitTools} onChange={(event) => updateValues({ limitTools: event.target.checked })}>{t("scheduler.limitTools")}</Checkbox></div>
           {values.limitTools && <Checkbox.Group className="cy-scheduled-tool-list" value={values.allowedToolIds} onChange={(checked) => updateValues({ allowedToolIds: checked as string[] })}>
             {tools.filter((tool) => tool.enabled).map((tool) => <Checkbox key={tool.id} value={tool.id}>{tool.name}</Checkbox>)}
             {tools.filter((tool) => tool.enabled).length === 0 && <span>{t("scheduler.noTools")}</span>}
@@ -408,7 +422,8 @@ export function ScheduledTasksPanel({
             {history.map((entry) => (
               <div className="cy-scheduled-history-item" key={entry.id}>
                 <div className="cy-scheduled-history-top"><strong>{formatDate(entry.firedAt)}</strong><Tag color={entry.status === "success" ? "green" : entry.status === "failed" ? "red" : "default"}>{statusLabel(entry.status)}</Tag></div>
-                <p>{entry.outputPreview || entry.errorMessage || entry.reason || t("scheduler.noRunDetail")}</p>
+                <p>{entry.errorMessage || entry.reason || entry.outputPreview || t("scheduler.noRunDetail")}</p>
+                {entry.errorMessage && entry.outputPreview && <p>{entry.outputPreview}</p>}
                 <div className="cy-scheduled-history-footer">
                   <span>{entry.durationMs ? t("scheduler.durationSeconds", { seconds: (entry.durationMs / 1000).toFixed(1) }) : ""}</span>
                   {entry.sessionId && <Button type="link" icon={<ChevronRight size={15} />} onClick={() => { onOpenSession(entry.sessionId!); setHistoryTask(undefined); }}>{t("scheduler.openSession")}</Button>}

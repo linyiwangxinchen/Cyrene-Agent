@@ -18,6 +18,7 @@ void (async () => {
     try {
       const value = await invocation.run(sender, async () => {
         if (message.type === "capabilities") return core.capabilities();
+        if (message.type === "readiness") return core.readiness();
         if (message.type === "resource") {
           const url = new URL(message.url);
           const handler = protocol.handlers.get(url.protocol.slice(0, -1));

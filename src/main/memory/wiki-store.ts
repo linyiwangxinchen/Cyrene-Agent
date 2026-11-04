@@ -14,6 +14,9 @@ import type {
   WikiClaim, WikiClaimCandidate, WikiConflict, WikiPage, WikiPageSummary,
   WikiScope, WikiSearchResult, WikiTag, WikiVisibility,
 } from "./wiki-types";
+import type { MemorySourceLocator } from "../../shared/memory-governance";
+import type { MemoryStore } from "./memory-types";
+import { memorySourceKey, wikiClaimKey } from "./memory-source-policy";
 
 interface PageRow {
   id: string;
@@ -97,8 +100,51 @@ export class WikiStore {
   private tombstones = new Set<string>();
   private recoveryAttempted = false;
 
-  constructor(userDataRoot: string) {
+  constructor(userDataRoot: string, private readonly governance: { readForgetting?: () => Promise<MemoryStore["forgetting"]> } = {}) {
     this.root = wikiRootForUserData(userDataRoot);
+  }
+
+  private async filterForgottenClaims(page: WikiPage): Promise<WikiPage> {
+    const forgotten = new Set((await this.governance.readForgetting?.())?.wikiClaimKeys ?? []);
+    if (!forgotten.size) return page;
+    const copy = structuredClone(page);
+    copy.claims = copy.claims.filter(claim => !forgotten.has(wikiClaimKey(copy.id, claim.id)));
+    copy.body = renderWikiPageBody(copy);
+    return copy;
+  }
+
+  async findClaimsBySources(sources: MemorySourceLocator[]): Promise<Array<{ pageId: string; claimId: string; title: string; content: string }>> {
+    await this.initialize();
+    const keys = new Set(sources.map(memorySourceKey));
+    const pages = new Set<string>();
+    for (const conversationId of new Set(sources.map(source => source.conversationId))) {
+      const rows = this.database().prepare("SELECT DISTINCT page_id AS id FROM page_sources WHERE conversation_id=?").all(conversationId) as unknown as Array<{ id: string }>;
+      for (const row of rows) pages.add(row.id);
+    }
+    const result = [];
+    for (const pageId of pages) {
+      const page = await this.readPage(pageId);
+      for (const claim of page?.claims ?? []) {
+        if (claim.status !== "revoked" && claim.sources.some(source => source.kind === "chat" && keys.has(memorySourceKey(source)))) result.push({ pageId, claimId: claim.id, title: page!.title, content: `${claim.predicate}：${claim.value}` });
+      }
+    }
+    return result;
+  }
+
+  /** The durable global marker is written first by governance; a failed cleanup cannot resurface it. */
+  async eraseGovernedClaim(input: { pageId: string; claimId: string }): Promise<void> {
+    await this.initialize();
+    await this.enqueue(() => this.eraseGovernedClaimInternal(input));
+  }
+
+  private async eraseGovernedClaimInternal(input: { pageId: string; claimId: string }): Promise<void> {
+    const page = await this.readPageRaw(input.pageId);
+    const claim = page?.claims.find(item => item.id === input.claimId);
+    if (!page || !claim) return;
+    this.suppressReplay(page, claim);
+    page.claims = page.claims.filter(item => item.id !== input.claimId);
+    page.body = renderWikiPageBody(page); page.updatedAt = Date.now();
+    await this.persist(page);
   }
 
   private enqueue<T>(run: () => Promise<T>): Promise<T> {
@@ -142,6 +188,13 @@ export class WikiStore {
       const dirty = await readWikiFile(this.root, DIRTY_FILE);
       const count = this.db.prepare("SELECT COUNT(*) AS count FROM pages").get() as { count: number };
       if (dirty || count.count === 0) await this.rebuildIndexInternal();
+      // A prior cross-store deletion may have saved the deny marker but failed
+      // to clean Markdown. Retry exact claim IDs before exposing the index.
+      for (const key of (await this.governance.readForgetting?.())?.wikiClaimKeys ?? []) {
+        const locator: unknown = JSON.parse(key);
+        if (!Array.isArray(locator) || locator.length !== 2 || !locator.every(value => typeof value === "string")) throw new Error("WIKI_INVALID_GOVERNANCE_MARKER");
+        await this.eraseGovernedClaimInternal({ pageId: locator[0], claimId: locator[1] });
+      }
     } catch (error) {
       this.db.close();
       this.db = null;
@@ -298,6 +351,7 @@ export class WikiStore {
     await this.initialize();
     return this.enqueue(async () => {
       const changed = new Map<string, WikiPage>();
+      const acceptedSourceKeys = new Set<string>();
       const known = this.database().prepare("SELECT id,title,aliases,scope_kind,workspace_id FROM pages")
         .all() as unknown as Array<Pick<PageRow, "id" | "title" | "aliases" | "scope_kind" | "workspace_id">>;
       const references = [
@@ -313,6 +367,8 @@ export class WikiStore {
       for (const candidate of candidates) {
         if (options.shouldCommit && !(await options.shouldCommit())) break;
         if (this.tombstones.has(candidate.source.conversationId)) continue;
+        if ((await this.governance.readForgetting?.())?.sourceKeys.includes(memorySourceKey(candidate.source))) continue;
+        acceptedSourceKeys.add(memorySourceKey(candidate.source));
         const candidateNames = new Set([candidate.subject, ...(candidate.aliases ?? [])].map(normalized));
         const exactMatches = [
           ...known.filter((row) => sameScope(
@@ -340,7 +396,12 @@ export class WikiStore {
       }
       for (const page of changed.values()) {
         if (options.shouldCommit && !(await options.shouldCommit())) break;
-        await this.persist(page, options.shouldCommit);
+        const shouldCommit = async () => {
+          if (options.shouldCommit && !(await options.shouldCommit())) return false;
+          const forgotten = new Set((await this.governance.readForgetting?.())?.sourceKeys ?? []);
+          return ![...acceptedSourceKeys].some(key => forgotten.has(key));
+        };
+        await this.persist(await this.filterForgottenClaims(page), shouldCommit);
       }
       return [...changed.values()];
     });
@@ -353,7 +414,7 @@ export class WikiStore {
   async readPage(pageId: string, visibility?: WikiVisibility): Promise<WikiPage | null> {
     await this.initialize();
     const page = await this.readPageRaw(pageId);
-    return page && visible(page.scope, visibility) ? cloneWithTombstones(page, this.tombstones) : null;
+    return page && visible(page.scope, visibility) ? this.filterForgottenClaims(cloneWithTombstones(page, this.tombstones)) : null;
   }
 
   async listPages(options: { tag?: WikiTag; offset?: number; limit?: number; visibility?: WikiVisibility } = {}): Promise<WikiPageSummary[]> {
@@ -363,7 +424,10 @@ export class WikiStore {
     const { where, params } = this.pageFilter(options);
     const rows = this.database().prepare(`SELECT * FROM pages ${where} ORDER BY updated_at DESC, id LIMIT ? OFFSET ?`)
       .all(...params, limit, offset) as unknown as PageRow[];
-    return rows.map(rowToSummary);
+    return (await Promise.all(rows.map(async row => {
+      const page = await this.readPage(row.id, options.visibility);
+      return page ? summary(page) : null;
+    }))).filter((page): page is WikiPageSummary => page !== null);
   }
 
   async countPages(options: { tag?: WikiTag; visibility?: WikiVisibility } = {}): Promise<number> {
@@ -422,7 +486,7 @@ export class WikiStore {
       try { original = await this.readPageRaw(row.id); }
       catch { continue; }
       if (!original) continue;
-      const page = cloneWithTombstones(original, this.tombstones);
+      const page = await this.filterForgottenClaims(cloneWithTombstones(original, this.tombstones));
       const shown = summary(page);
       if (shown.claimCount === 0) continue;
       scored.push({ ...shown, score: titleHit ? 100 + (title === needle ? 50 : 0) : 10 });

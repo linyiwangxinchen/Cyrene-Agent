@@ -17,6 +17,7 @@ describe("FeishuAdapter outgoing media", () => {
     const send = vi.fn(async () => ({ messageId: "om_1" }));
     const adapter = new FeishuAdapter();
     (adapter as any).channel = { send };
+    (adapter as any).status = { enabled: true, phase: "running" };
 
     const result = await adapter.send({
       channel: "feishu",
@@ -91,6 +92,7 @@ describe("FeishuAdapter outgoing media", () => {
     const send = vi.fn(async () => ({ messageId: "om_audio" }));
     const adapter = new FeishuAdapter();
     (adapter as any).channel = { send };
+    (adapter as any).status = { enabled: true, phase: "running" };
 
     const result = await adapter.send({
       channel: "feishu",
@@ -102,5 +104,11 @@ describe("FeishuAdapter outgoing media", () => {
     expect(send).toHaveBeenCalledWith("oc_chat", {
       audio: { source: opusPath },
     });
+  });
+  it("does not report full delivery after a later part fails", async () => {
+    const send = vi.fn().mockResolvedValueOnce({ messageId: "text" }).mockRejectedValueOnce(new Error("upload rejected"));
+    const adapter = new FeishuAdapter();
+    (adapter as any).channel = { send }; (adapter as any).status = { enabled: true, phase: "running" };
+    expect(await adapter.send({ channel: "feishu", targetId: "chat", parts: [{ kind: "text", text: "正文" }, { kind: "image", filePath: "image.png" }] })).toEqual({ ok: false, error: "upload rejected" });
   });
 });

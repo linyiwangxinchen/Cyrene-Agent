@@ -31,5 +31,9 @@ export function readMemoryFile(filePath: string): Partial<MemoryStore> {
 export function writeMemoryFile(filePath: string, store: MemoryStore): void {
   const dir = path.dirname(filePath)
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-  fs.writeFileSync(filePath, JSON.stringify(store, null, 2), "utf8")
+  const temporary = `${filePath}.${process.pid}.tmp`
+  const descriptor = fs.openSync(temporary, "w", 0o600)
+  try { fs.writeFileSync(descriptor, JSON.stringify(store, null, 2), "utf8"); fs.fsyncSync(descriptor) }
+  finally { fs.closeSync(descriptor) }
+  fs.renameSync(temporary, filePath)
 }

@@ -182,7 +182,7 @@ describe("channels/dispatcher", () => {
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
       channel: "wechat",
       parts: [{ kind: "text", text: "已生成" }, { kind: "image", filePath: "/data/generated/portrait.png" }],
-    }));
+    }), expect.objectContaining({ operationId: expect.any(String), assistantTurnId: expect.any(String), conversationId: expect.any(String) }));
     if (ok) expect(result?.parts).toHaveLength(2);
     else expect(result).toBeNull();
     expect(appendDeliveryReceipt).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({

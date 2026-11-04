@@ -15,6 +15,7 @@ import type {
   OutgoingMessage,
 } from "./types";
 import { randomUUID } from "node:crypto";
+import { withConversationRun } from "../orchestrator/conversation-run-guard";
 import type { MaterializedTranscript } from "../orchestrator/conversation-transcript-projection";
 import type { TranscriptSink } from "../orchestrator/transcript-sink";
 import type { ChannelsSettings } from "./settings-store";
@@ -22,6 +23,7 @@ import { appendLog } from "./message-log";
 import type { MobileMessageSegmentationMode } from "../../shared/preferences";
 import type { GeneratedImageAttachment } from "../../shared/generated-image";
 import { rememberProactiveChannelRecipient } from "./proactive-delivery";
+import { getChannelRecoveryStore } from "./recovery-store";
 import type { ChannelRateLimiter } from "./rate-limiter";
 import type { KeyedQueue } from "./keyed-queue";
 import type { ChannelDeliveryService } from "./delivery-service";
@@ -159,17 +161,22 @@ export class ChannelDispatcher {
    * 组装并发送出站消息 → 确认成功后提交助手状态。
    * 返回的出站消息仅供调用方观测和测试，不要求适配器再次发送。
    */
-  async handleIncoming(msg: IncomingMessage): Promise<OutgoingMessage | null> {
+  captureDispatchContext(msg: IncomingMessage): Promise<DispatchContext> {
+    return Promise.resolve(this.deps.context.resolveDispatchContext(makeSessionId(msg.channel, msg.chatId)));
+  }
+
+  async handleIncoming(msg: IncomingMessage, options: { context?: DispatchContext; onFailure?: (error: string) => void; canContinue?: () => boolean } = {}): Promise<OutgoingMessage | null> {
     const sessionId = makeSessionId(msg.channel, msg.chatId);
     // 读取设置会同步刷新限速器，必须发生在本轮额度消费之前。
     void this.settings;
     // Freeze the target on arrival, not after an earlier turn's compaction/model wait.
     // Both outcomes are handled immediately, even when the queue rejects this task.
-    const pendingContext = Promise.resolve(this.deps.context.resolveDispatchContext(sessionId))
+    const pendingContext = Promise.resolve(options.context ?? this.deps.context.resolveDispatchContext(sessionId))
       .then(value => ({ value: { ...value } }), error => ({ error }));
     return this.deps.queue.run(`external:${sessionId}`, async () => {
       if (!this.deps.limiter.tryConsume(msg.channel, msg.senderId)) {
         console.warn(LOG, `限速: ${msg.channel}:${msg.senderId}`);
+        options.onFailure?.("channel_rate_limited");
         return null;
       }
 
@@ -183,20 +190,21 @@ export class ChannelDispatcher {
       if ("error" in resolved) throw resolved.error;
       const context = resolved.value;
       const execute = async () => {
+        if (options.canContinue && !options.canContinue()) return null;
         await this.deps.context.validateDispatchContext?.(context);
-        return this.processIncoming(msg, context);
+        return this.processIncoming(msg, context, options.onFailure, options.canContinue);
       };
-      return context.boundConversationId
-        ? this.deps.queue.run(`conversation:${context.boundConversationId}`, execute)
-        : execute();
+      return withConversationRun(resolveChannelConversationTarget(context).conversationId, execute);
     });
   }
 
   private async processIncoming(
     msg: IncomingMessage,
     context: DispatchContext,
+    onFailure?: (error: string) => void,
+    canContinue?: () => boolean,
   ): Promise<OutgoingMessage | null> {
-    return this.processIncomingCanonical(msg, context);
+    return this.processIncomingCanonical(msg, context, onFailure, canContinue);
   }
 
   /**
@@ -206,6 +214,8 @@ export class ChannelDispatcher {
   private async processIncomingCanonical(
     msg: IncomingMessage,
     context: DispatchContext,
+    onFailure?: (error: string) => void,
+    canContinue?: () => boolean,
   ): Promise<OutgoingMessage | null> {
     const journal = this.deps.journal!;
     const target = resolveChannelConversationTarget(context);
@@ -244,6 +254,10 @@ export class ChannelDispatcher {
           console.warn(LOG, "重放补写渠道未确认回执失败，保持 fail-safe:", error);
         }
       }
+      const receiptStatus = (existingTurn.latestReceipt as { payload?: { status?: string } } | undefined)?.payload?.status;
+      if (receiptStatus !== "delivered" && !getChannelRecoveryStore()?.get(`channel:${assistantTurnId}:delivery`)) {
+        onFailure?.("已有助手记录，但缺少可恢复的发送计划。请检查原会话和工具执行结果后，在会话中继续任务；不会自动重新执行旧指令。");
+      }
       return null;
     }
     this.broadcastIncoming(msg);
@@ -280,6 +294,7 @@ export class ChannelDispatcher {
       });
     } catch (err) {
       this.logAgentFailure(msg, err);
+      onFailure?.(err instanceof Error ? err.message : String(err));
       return null;
     }
 
@@ -308,12 +323,19 @@ export class ChannelDispatcher {
         });
       } catch (error) {
         console.warn(LOG, "写入渠道送达预回执失败，已禁止发送:", error);
+        onFailure?.("delivery_receipt_write_failed");
         return null;
       }
 
       let deliveryResult: Awaited<ReturnType<ChannelDeliveryService["send"]>>;
       try {
-        deliveryResult = await this.deps.delivery.send(prepared.message);
+        deliveryResult = await this.deps.delivery.send(prepared.message, {
+          operationId: `channel:${assistantTurnId}:delivery`,
+          conversationId: target.conversationId,
+          assistantTurnId,
+          runId,
+          canContinue,
+        });
       } catch (error) {
         deliveryResult = {
           ok: false,

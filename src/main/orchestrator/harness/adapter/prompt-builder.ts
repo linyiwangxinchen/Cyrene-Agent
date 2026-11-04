@@ -8,6 +8,7 @@ import type { AgentState } from "../types";
 import type { PromptLayers } from "../../prompt-layers";
 import type { CyreneRunOptions } from "../../cyrene-agent";
 import { loadPromptFile } from "../../../prompts/prompt-loader";
+import { buildTaskContinuityContext } from "../task-continuity";
 
 /**
  * 组装 Harness 的提示词层。
@@ -24,6 +25,7 @@ export function materializeHarnessStartTranscript(input: {
   // 动态上下文在 run_start/recovery 时物化为内部消息，确保 Harness 与恢复流程看到同一份事实。
   const parts = [
     input.runtimeContext,
+    buildTaskContinuityContext(input.initialState?.continuity),
     input.initialState?.todoItems.length
       ? buildCurrentTodoNotebookContext(input.initialState.todoItems)
       : undefined,

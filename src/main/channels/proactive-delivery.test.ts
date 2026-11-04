@@ -6,6 +6,10 @@ import {
   getProactiveChannelAvailability,
 } from "./proactive-delivery";
 import type { ChannelCapability, IncomingMessage } from "./types";
+import { mkdtempSync, rmSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { ChannelRecoveryStore, setChannelRecoveryStore, type ChannelOutboxRecord } from "./recovery-store";
 
 const capability: ChannelCapability = {
   text: true,
@@ -41,6 +45,23 @@ describe("proactive channel delivery", () => {
 
   beforeEach(() => {
     registry = createProactiveChannelRecipientRegistry();
+  });
+
+  it("preserves unknown delivery state when the first part was delivered and the second timed out", async () => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "proactive-partial-"));
+    const store = new ChannelRecoveryStore(directory); setChannelRecoveryStore(store);
+    try {
+      const adapter = fakeAdapter();
+      vi.mocked(adapter.send).mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({ ok: false, error: "network timeout" });
+      const recordDelivery = vi.fn(async () => undefined);
+      const result = await sendProactiveChannelMessage({ channel: "wechat", text: "第一句。第二句？", mobileMessageSegmentation: "on",
+        manager: { getAdapter: () => adapter }, operationId: "partial-intent", assistantTurnId: "assistant", runId: "run",
+        recipient: { targetId: "fixture", sessionId: "external", conversationId: "bound", updatedAt: 1 }, recordDelivery, appendLog: vi.fn() });
+      expect(result).toEqual({ kind: "committed", deliveredParts: 1, totalParts: 2, deliveryStatus: "unknown", error: "network timeout" });
+      expect(recordDelivery).toHaveBeenCalledWith(expect.any(Object), "第一句。");
+      expect((store.get("partial-intent") as ChannelOutboxRecord).parts.map(part => part.status)).toEqual(["sent", "unknown"]);
+      expect(adapter.send).toHaveBeenCalledTimes(2);
+    } finally { setChannelRecoveryStore(undefined); rmSync(directory, { recursive: true, force: true }); }
   });
 
   it("keeps the latest recipient independently for each channel", () => {

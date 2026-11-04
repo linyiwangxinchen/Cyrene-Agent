@@ -40,9 +40,12 @@ describe("proactive state durable intent compatibility", () => {
         intentAt: 123,
         text: "固定文本",
         source: "model",
+        deliveryTarget: "wechat",
+        deliveryContext: { relationshipRevision: 8, conversationId: "bound-chat", sessionId: "external-chat", targetId: "recipient", followupId: "followup-1" },
       },
     }), "utf8");
     expect(loadProactiveState().pendingCommitIntent).toMatchObject({ intentId: "proactive-intent-3", text: "固定文本" });
+    expect(loadProactiveState().pendingCommitIntent).toMatchObject({ deliveryTarget: "wechat", deliveryContext: { conversationId: "bound-chat", targetId: "recipient", followupId: "followup-1", relationshipRevision: 8 } });
 
     fs.writeFileSync(path.join(mocks.userDataDir, "proactive-state.json"), JSON.stringify({
       pendingCommitIntent: { intentId: "bad", sequence: 0, text: "" },

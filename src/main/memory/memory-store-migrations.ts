@@ -30,6 +30,13 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
       resolverAttemptCount: typeof log.resolverAttemptCount === "number" ? log.resolverAttemptCount : 0,
     })) : [],
     l2DmaeStates: Array.isArray(store.l2DmaeStates) ? store.l2DmaeStates : [],
+    profileSources: store.profileSources && typeof store.profileSources === "object" ? store.profileSources : {},
+    forgetting: {
+      memoryIds: Array.isArray(store.forgetting?.memoryIds) ? store.forgetting.memoryIds.filter(id => typeof id === "string") : [],
+      sourceKeys: Array.isArray(store.forgetting?.sourceKeys) ? store.forgetting.sourceKeys.filter(id => typeof id === "string") : [],
+      wikiClaimKeys: Array.isArray(store.forgetting?.wikiClaimKeys) ? store.forgetting.wikiClaimKeys.filter(id => typeof id === "string") : [],
+      profileRecords: Array.isArray(store.forgetting?.profileRecords) ? store.forgetting.profileRecords.filter(record => typeof record?.key === "string" && Array.isArray(record.sourceKeys) && record.sourceKeys.every(key => typeof key === "string")) : [],
+    },
     version: typeof store.version === "number" ? store.version : 1,
   }
 

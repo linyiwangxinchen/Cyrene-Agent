@@ -4,6 +4,7 @@
 // 到 src/shared/ 需要 ../../../shared/，到 settings/ 下其他模块用 ../
 
 import type { ApiTransport } from "../../../shared/api-endpoint";
+import type { ChannelRecoveryApi } from "../../../shared/channel-recovery";
 import type { ReasoningPreference } from "../../../shared/reasoning";
 import type { UiThemeChoice } from "../../../shared/ui-theme";
 import type { UiIcon } from "../../../shared/ui-icon";
@@ -362,6 +363,10 @@ export interface SettingsApi {
   channelsQqBotTestConnection: () => Promise<{ ok: boolean; error?: string; detail?: Record<string, unknown> }>;
   channelsLogGet: (limit?: number) => Promise<unknown[]>;
   channelsLogClear: () => Promise<{ ok: boolean }>;
+  channelsRecoveryList: ChannelRecoveryApi["list"];
+  channelsRecoveryRetry: ChannelRecoveryApi["retry"];
+  channelsRecoveryResolve: ChannelRecoveryApi["resolve"];
+  channelsRecoveryCancel: ChannelRecoveryApi["cancel"];
   channelsContextBindingsGet: () => Promise<{
     externalChats: Array<{
       sessionId: string;

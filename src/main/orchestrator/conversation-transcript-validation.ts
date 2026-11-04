@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isTaskContinuity } from "./harness/task-continuity";
 import { assertValidPresentationPatch, userRevisionKey, type TranscriptEntry, type TranscriptSnapshotV2 } from "./conversation-transcript-types";
 import type { ChatMessage as CanonicalChatMessage } from "./vendors/types";
 export function validateLoadedTranscriptEntry(entry: unknown): asserts entry is TranscriptEntry {
@@ -73,7 +74,8 @@ function isValidTranscriptPayload(entry: Partial<TranscriptEntry>): boolean {
     case "task_state":
       return typeof entry.payload.assistantEntryId === "string" && entry.payload.assistantEntryId.length > 0 &&
         typeof entry.payload.toolCallId === "string" && entry.payload.toolCallId.length > 0 &&
-        Array.isArray(entry.payload.items) && entry.payload.items.every(isValidTranscriptTodoItem);
+        Array.isArray(entry.payload.items) && entry.payload.items.every(isValidTranscriptTodoItem) &&
+        (entry.payload.continuity === undefined || isTaskContinuity(entry.payload.continuity));
     case "effect_resolution":
       return typeof entry.payload.assistantEntryId === "string" && entry.payload.assistantEntryId.length > 0 &&
         typeof entry.payload.effectId === "string" && entry.payload.effectId.length > 0 &&
@@ -124,6 +126,7 @@ function isValidTranscriptPayload(entry: Partial<TranscriptEntry>): boolean {
 function isValidCompactionRecoveryState(value: unknown): boolean {
   if (!isRecord(value)) return false;
   return (value.todoItems === undefined || (Array.isArray(value.todoItems) && value.todoItems.every(isValidTranscriptTodoItem)))
+    && (value.continuity === undefined || isTaskContinuity(value.continuity))
     && Array.isArray(value.uncertainEffects) && value.uncertainEffects.every(effect => isRecord(effect)
       && ["id", "toolCallId", "fingerprint", "toolName", "message"].every(key => typeof effect[key] === "string" && effect[key].length > 0)
       && (effect.repeatAuthorization === undefined || (isRecord(effect.repeatAuthorization)

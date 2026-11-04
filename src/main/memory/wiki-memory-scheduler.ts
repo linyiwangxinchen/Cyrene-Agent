@@ -3,6 +3,8 @@ import { extractWikiClaims } from "./wiki-memory-llm";
 import type { WikiChatSourceReader, WikiChatSourceTurn } from "./wiki-source";
 import { WikiStore } from "./wiki-store";
 import { markWikiSourcesFresh, markWikiSourcesStale } from "./wiki-memory-health";
+import { memoryStore } from "./memory-store";
+import { isForgottenSource } from "./memory-source-policy";
 
 export interface WikiMemorySchedulerOptions {
   userDataRoot: string;
@@ -22,7 +24,7 @@ export class WikiMemoryScheduler {
   private readonly cancelled = new Set<string>();
 
   constructor(private readonly options: WikiMemorySchedulerOptions) {
-    this.store = new WikiStore(options.userDataRoot);
+    this.store = new WikiStore(options.userDataRoot, { readForgetting: async () => (await memoryStore.load()).forgetting });
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
@@ -163,12 +165,13 @@ export class WikiMemoryScheduler {
     for (let start = 0; start < pending.length; start += 10) {
       if (!(await this.isCurrent(conversationId, generation))) return;
       const batch = pending.slice(start, start + 10);
-      const turns: WikiChatSourceTurn[] = batch.map((item) => item.turn);
+      const memoryState = await memoryStore.load();
+      const turns: WikiChatSourceTurn[] = batch.map((item) => item.turn).filter(turn => !isForgottenSource(memoryState, { conversationId, messageId: turn.user.entryId }));
       const controller = new AbortController();
       this.controllers.set(conversationId, controller);
       let candidates;
       try {
-        candidates = await extractWikiClaims({ conversation, turns, signal: controller.signal });
+        candidates = turns.length ? await extractWikiClaims({ conversation: { ...conversation, turns, messages: conversation.messages.filter(message => !isForgottenSource(memoryState, { conversationId, messageId: message.entryId })) }, turns, signal: controller.signal }) : [];
       } finally {
         if (this.controllers.get(conversationId) === controller) this.controllers.delete(conversationId);
       }

@@ -55,6 +55,7 @@ import type { ChannelAdapter } from "../base";
 import { logger, LogTag } from "../../../logger";
 import { loadChannelsSettings } from "../../settings-store";
 import { WechatReplyContextStore } from "./reply-context-store";
+import { getChannelRecoveryStore } from "../../recovery-store";
 
 const LOG_PREFIX = "[WechatBot]";
 const USER_PROFILE_FILE = "user-profile.json";
@@ -93,6 +94,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
   /** 由 ChannelManager.setDispatcher 注入 */
   onMessage: MessageHandler | null = null;
+  onMessageAccepted: ((msg: IncomingMessage) => Promise<void>) | null = null;
 
   private client: ILinkClient | null = null;
   private pollAbort: AbortController | null = null;
@@ -378,7 +380,9 @@ export class ILinkBotAdapter implements ChannelAdapter {
     // 捕获本轮轮询的信号：stop() 会把它置空，循环体只认这一个信号。
     const signal = this.pollAbort.signal;
     const client = this.client;
-    let buf = "";
+    const recovery = getChannelRecoveryStore();
+    const cursorAccount = `wechat:${this.currentCredentials?.ilinkBotId ?? "unknown"}`;
+    let buf = recovery?.getCursor(cursorAccount) ?? "";
     let sessionExpired = false;
     let failures = 0;
     let timeoutCount = 0;
@@ -400,12 +404,13 @@ export class ILinkBotAdapter implements ChannelAdapter {
         receivedMessages += messages.length;
         this.status = { enabled: true, phase: "running", message: "微信已连接", detail: { lastPollAt, receivedMessages, consecutiveFailures: 0 } };
         this.onStatusChanged?.();
-        buf = newBuf;
         for (const msg of messages) {
           if (signal.aborted) break;
-          try { await this.dispatchInbound(msg); }
-          catch (error) { console.warn(LOG_PREFIX, "Inbound processing failed:", error instanceof Error ? error.message : String(error)); }
+          await this.dispatchInbound(msg);
         }
+        // Acknowledged means accepted to the durable inbox, not "LLM finished".
+        // A crash or persistence failure before this line replays the old cursor safely.
+        if (!signal.aborted) { recovery?.setCursor(cursorAccount, newBuf); buf = newBuf; }
       } catch (err) {
         if (err instanceof SessionExpiredError) {
           console.warn(LOG_PREFIX, "Session expired — please re-login");
@@ -435,10 +440,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   private async dispatchInbound(msg: WeixinMessage): Promise<void> {
     if (!this.status.enabled) return;
     const client = this.client;
-    if (!this.onMessage) {
-      console.warn(LOG_PREFIX, "onMessage 未注入，跳过消息");
-      return;
-    }
+    if (!this.onMessage && !this.onMessageAccepted) throw new Error("wechat_inbox_handler_missing");
     console.log(LOG_PREFIX, `inbound received: items=${msg.items.length}, textLength=${msg.content?.length ?? 0}`);
     if (msg.contextToken) {
       this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
@@ -472,8 +474,11 @@ export class ILinkBotAdapter implements ChannelAdapter {
     };
 
     if (!this.status.enabled || this.client !== client) return;
-    void this.onMessage(incoming).catch((err) => {
-      console.error(LOG_PREFIX, "dispatcher error:", err);
+    if (this.onMessageAccepted) await this.onMessageAccepted(incoming);
+    else await this.onMessage!(incoming).catch(error => {
+      // Legacy/plugin handlers do not expose durable acknowledgement. Their
+      // model failure must not stop later messages in the same batch.
+      console.error(LOG_PREFIX, "dispatcher error:", error);
     });
   }
 

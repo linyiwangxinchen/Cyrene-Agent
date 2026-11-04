@@ -173,7 +173,7 @@ export interface ToolDispatchContext {
     fingerprint: string;
     grantedAt: number;
   }) => Promise<void>;
-  onTaskState?: (input: { toolCallId: string; items: TodoItem[] }) => Promise<void>;
+  onTaskState?: (input: { toolCallId: string; items: TodoItem[]; continuity?: AgentState["continuity"] }) => Promise<void>;
 }
 
 export interface ToolDispatchResult extends ToolObservation {
@@ -474,8 +474,8 @@ async function executeHarnessBuiltin(
 ): Promise<ToolDispatchResult> {
   switch (call.name) {
     case "update_todo":
-      return executeUpdateTodo(call, ctx.state, ctx.onEvent, (items) =>
-        ctx.onTaskState?.({ toolCallId: call.id, items }) ?? Promise.resolve(),
+      return executeUpdateTodo(call, ctx.state, ctx.onEvent, (items, continuity) =>
+        ctx.onTaskState?.({ toolCallId: call.id, items, ...(continuity ? { continuity } : {}) }) ?? Promise.resolve(),
       );
 
     case "ask_user":

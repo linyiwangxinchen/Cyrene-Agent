@@ -54,7 +54,7 @@ describe("companion lifecycle and transport", () => {
     expect(beforeRetry.relationship.closeness).toBe(initial.relationship.closeness);
     expect(beforeRetry.relationship.trust).toBe(initial.relationship.trust);
     expect(beforeRetry.revision).toBe(initial.revision);
-  });
+  }, 20_000); // 100 real SQLite checkpoints can exceed 5 seconds on Windows disks.
   it("isolates conversations and refuses group writes/injection", async () => {
     await store.recordTurn(turn);
     expect(await store.buildContext("bound-chat")).toContain("焦虑");

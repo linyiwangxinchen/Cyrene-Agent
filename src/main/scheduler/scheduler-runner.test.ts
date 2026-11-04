@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { applyScheduledExecutionPolicy, createSchedulerRunner } from "./scheduler-runner";
+import { applyScheduledExecutionPolicy, buildScheduledDeliveryMessage, createSchedulerRunner } from "./scheduler-runner";
 import { createSchedulerStore } from "./scheduler-store";
 import type { ScheduledTask } from "./types";
+import type { ToolDefinition } from "../orchestrator/tools/registry/tool-registry";
 import { ConversationTranscriptStore } from "../orchestrator/conversation-transcript-store";
 import { ConversationJournalService } from "../orchestrator/conversation-journal-service";
 
@@ -16,7 +17,15 @@ const runnerMocks = vi.hoisted(() => ({
   },
   agentError: undefined as Error | undefined,
   agentOptions: undefined as Record<string, unknown> | undefined,
+  tools: [] as ToolDefinition[],
+  send: vi.fn(async (..._args: unknown[]): Promise<{ ok: boolean; error?: string; status?: "unknown" }> => ({ ok: true })),
+  channelEnabled: true,
 }));
+vi.mock("../channels/manager", () => ({ channelManager: { getAdapter: () => ({ getStatus: () => ({ enabled: runnerMocks.channelEnabled, phase: "running" }) }) } }));
+vi.mock("../channels/settings-store", () => ({ loadChannelsSettings: () => ({ toolSandbox: "all" }) }));
+vi.mock("../channels/delivery-service", () => ({ createChannelDeliveryService: () => ({ send: runnerMocks.send }) }));
+vi.mock("../channels/history-log", () => ({ appendHistory: vi.fn() }));
+vi.mock("../channels/message-log", () => ({ appendLog: vi.fn() }));
 
 vi.mock("../orchestrator/cyrene-agent", () => ({
   CyreneAgent: class {
@@ -61,7 +70,7 @@ vi.mock("../orchestrator/cyrene-agent", () => ({
 }));
 
 vi.mock("../orchestrator/tools/registry/tool-registry", () => ({
-  toolRegistry: { getAllTools: () => [] },
+  toolRegistry: { getAllTools: () => runnerMocks.tools },
 }));
 
 function makeTask(overrides: Partial<ScheduledTask> = {}): ScheduledTask {
@@ -111,9 +120,18 @@ beforeEach(() => {
   runnerMocks.agentResult = { reply: "调度回复", terminal: undefined };
   runnerMocks.agentError = undefined;
   runnerMocks.agentOptions = undefined;
+  runnerMocks.tools = [];
+  runnerMocks.channelEnabled = true;
+  runnerMocks.send.mockReset().mockResolvedValue({ ok: true });
 });
 
 describe("scheduled Cyrene execution policy", () => {
+  it("splits scheduled channel replies at the adapter boundary without truncating Unicode", () => {
+    const message = buildScheduledDeliveryMessage("wechat", "recipient", "第一句。" + "🌸".repeat(5), { maxTextLength: 4 } as never, "thread");
+    expect(message).toMatchObject({ channel: "wechat", targetId: "recipient", threadId: "thread" });
+    expect(message.parts.map(part => part.kind === "text" ? part.text : "")).toEqual(["第一句。", "🌸🌸🌸🌸", "🌸"]);
+  });
+
   it("runs unattended Work Harness with no interactive tools or approval", () => {
     const options = applyScheduledExecutionPolicy({
       settings: {
@@ -527,5 +545,53 @@ describe("createSchedulerRunner lifecycle events", () => {
     const runner = createSchedulerRunner(deps as never);
     const result = await runner.runScheduledTask(makeTask(), new Date(), false);
     expect(result.ok).toBe(true);
+  });
+});
+
+
+describe("channel task execution against canonical conversation", () => {
+  it.each(["agent", "reminder"] as const)("executes %s and records tools/reply before channel delivery", async (kind) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cta-channel-scheduler-"));
+    try {
+      const journal = new ConversationJournalService(new ConversationTranscriptStore(root));
+      await journal.appendUser("frozen-conversation", { turnId: "prior", text: "请查询之前的资料" });
+      runnerMocks.tools = ["disk_usage", "unapproved_tool"].map(id => ({ id, name: id, description: "disk usage", enabled: true, inputSchema: { type: "object", properties: {} }, execute: async () => "ok" }));
+      const deps = makeRunnerDeps({ conversationJournal: journal, getActiveConversation: () => ({ sessionId: "different-conversation", mode: "work" }) });
+      runnerMocks.send.mockImplementation(async (_message, metadata) => {
+        const projection = await journal.readProjection("frozen-conversation");
+        expect(projection.messages).toEqual(expect.arrayContaining([expect.objectContaining({ id: "scheduler-reply-hist-1", content: "调度回复" })]));
+        expect(metadata).toMatchObject({ operationId: "scheduler:hist-1:delivery", conversationId: "frozen-conversation" });
+        return { ok: true };
+      });
+      const result = await createSchedulerRunner(deps as never).runScheduledTask(makeTask({ kind, mode: kind === "reminder" ? "chat" : "work", allowedToolIds: ["disk_usage"], permissionMode: "normal",
+        delivery: { channel: "wechat", targetId: "recipient", sessionId: "external", conversationId: "frozen-conversation" } }), new Date(), false);
+      expect(result.ok).toBe(true);
+      expect(result.effectiveToolIds).toEqual(kind === "agent" ? ["disk_usage"] : []);
+      expect(runnerMocks.agentOptions).toMatchObject({ conversationId: "frozen-conversation", permissionMode: "normal", allowPermissionPrompt: false, harnessInteractiveTools: false });
+      expect(runnerMocks.agentOptions!.messages).toEqual(expect.arrayContaining([expect.objectContaining({ content: "请查询之前的资料" })]));
+      expect(runnerMocks.send).toHaveBeenCalledTimes(1);
+    } finally { await closeConversationDatabases(); fs.rmSync(root, { recursive: true, force: true }); }
+  });
+
+  it("does not execute or send to a disabled channel", async () => {
+    runnerMocks.channelEnabled = false;
+    const deps = makeRunnerDeps({ conversationJournal: {} });
+    const result = await createSchedulerRunner(deps as never).runScheduledTask(makeTask({ kind: "agent", delivery: { channel: "wechat", targetId: "recipient", sessionId: "external" } }), new Date(), false);
+    expect(result.ok).toBe(false);
+    expect(runnerMocks.agentOptions).toBeUndefined();
+    expect(runnerMocks.send).not.toHaveBeenCalled();
+  });
+
+  it("persists an unknown delivery outcome without automatic resend", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cta-scheduler-unknown-"));
+    try {
+      const journal = new ConversationJournalService(new ConversationTranscriptStore(root));
+      runnerMocks.send.mockResolvedValue({ ok: false, error: "connection lost", status: "unknown" });
+      const deps = makeRunnerDeps({ conversationJournal: journal });
+      const result = await createSchedulerRunner(deps as never).runScheduledTask(makeTask({ kind: "agent", delivery: { channel: "wechat", targetId: "recipient", sessionId: "external" } }), new Date(), false);
+      expect(result.ok).toBe(false);
+      expect(runnerMocks.send).toHaveBeenCalledTimes(1);
+      expect(deps.recordHistory).toHaveBeenLastCalledWith(expect.objectContaining({ status: "unknown", sessionId: "external" }));
+    } finally { await closeConversationDatabases(); fs.rmSync(root, { recursive: true, force: true }); }
   });
 });

@@ -2,6 +2,7 @@ import type { ChannelAdapter } from "../base";
 import type {
   ChannelCapability,
   ChannelStatus,
+  ChannelSendOptions,
   IncomingMessage,
   MessageHandler,
   OutgoingMessage,
@@ -83,6 +84,7 @@ export class NapCatAdapter implements ChannelAdapter {
   readonly displayName = "QQ（NapCat）";
   readonly capability = CAPABILITY;
   onMessage: MessageHandler | null = null;
+  onMessageAccepted: ((msg: IncomingMessage) => Promise<void>) | null = null;
 
   private server: OneBotReverseWsServer | null = null;
   private client: OneBotActionClient | null = null;
@@ -190,7 +192,7 @@ export class NapCatAdapter implements ChannelAdapter {
     }
   }
 
-  async send(msg: OutgoingMessage): Promise<{ ok: boolean; error?: string }> {
+  async send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string }> {
     const client = this.client;
     if (!client || !this.selfId) return { ok: false, error: "NapCat 未连接" };
     const payloads: OneBotSegment[][] = [];
@@ -207,6 +209,9 @@ export class NapCatAdapter implements ChannelAdapter {
 
     let sent = 0;
     for (let index = 0; index < payloads.length; index++) {
+      if (this.client !== client || !this.getStatus().enabled || options?.signal?.aborted || (options?.canContinue && !options.canContinue())) {
+        lastError = "channel_delivery_cancelled"; break;
+      }
       const segments = [...payloads[index]];
       if (index === 0 && msg.chatType === "group" && msg.replyContext) {
         const prefix: OneBotSegment[] = [{ type: "reply", data: { id: msg.replyContext.messageId } }];
@@ -233,7 +238,7 @@ export class NapCatAdapter implements ChannelAdapter {
     if (sent > 0 && lastError) {
       console.warn("[NapCatAdapter] QQ 消息部分发送失败:", lastError);
     }
-    return sent > 0 ? { ok: true } : { ok: false, error: lastError || "QQ 发送失败" };
+    return sent > 0 && !lastError ? { ok: true } : { ok: false, error: lastError || "QQ 发送失败" };
   }
 
   private async handleConnected(client: OneBotActionClient, headerSelfId?: string): Promise<void> {
@@ -278,8 +283,10 @@ export class NapCatAdapter implements ChannelAdapter {
         media: this.media,
         supportsStream: this.supportsStream,
       });
-      await this.onMessage?.(incoming);
+      if (this.onMessageAccepted) await this.onMessageAccepted(incoming);
+      else await this.onMessage?.(incoming);
     } catch (error) {
+      this.dedupe.delete(dedupeKey); // Failed durable acceptance may be retried by the transport.
       console.warn("[NapCatAdapter] QQ 消息处理失败:", error instanceof Error ? error.message : String(error));
     }
   }

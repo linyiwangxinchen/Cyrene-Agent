@@ -33,6 +33,8 @@ import { migrateHistory } from "./history-log";
 import { createKeyedQueue } from "./keyed-queue";
 import { createChannelRateLimiter } from "./rate-limiter";
 import { createChannelDeliveryService } from "./delivery-service";
+import { DurableChannelInbox, setDurableChannelInbox } from "./durable-inbox";
+import { setChannelRecoveryReceiptWriter } from "./recovery-ipc";
 import {
   createOutgoingComposer,
   type OutgoingComposer,
@@ -43,6 +45,7 @@ import {
   initializeChannels,
   startChannels,
   shutdownChannels,
+  runChannelConversationWork,
 } from "./init";
 
 export interface ChannelsLifecycleAdapter {
@@ -184,6 +187,7 @@ export function createChannelsSubsystem(
       ...(msg.chatType ? { chatType: msg.chatType } : {}),
       ...(msg.threadId ? { threadId: msg.threadId } : {}),
       sessionId: channelInput.sessionId,
+      conversationId: channelInput.target.conversationId,
     };
     // 运行标识贯通：sink 写入、runStore 会话与生命周期事件使用同一 runId，
     // 崩溃孤儿工具才能按 assistant 条目上的 runId 查回运行状态。
@@ -192,6 +196,7 @@ export function createChannelsSubsystem(
       ? [...(options.capabilities?.tools ?? exposedTools)]
       : [];
     enforceChannelAgentPolicy(options, policy);
+    options.channelContext.allowedToolIds = (options.tools ?? []).map(tool => tool.id);
 
     const threadId = `thread-${channelInput.target.conversationId}-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: `bot:${msg.channel}:${msg.senderId}` });
@@ -340,12 +345,29 @@ export function createChannelsSubsystem(
     observeExternalChat,
     broadcastChat,
   });
+  const durableInbox = new DurableChannelInbox({
+    captureContext: msg => dispatcher.captureDispatchContext(msg),
+    process: (msg, context, onFailure, canContinue) => runChannelConversationWork(() => dispatcher.handleIncoming(msg, { context, onFailure, canContinue })),
+    isEnabled: channel => loadChannelsSettings()[channel]?.enabled === true,
+  });
+  setDurableChannelInbox(durableInbox);
+  setChannelRecoveryReceiptWriter(async record => {
+    if (!record.conversationId || !record.assistantTurnId) return;
+    const delivered = record.parts.every(part => part.status === "sent");
+    await conversationJournal.appendDeliveryReceipt(record.conversationId, {
+      assistantTurnId: record.assistantTurnId, channel: record.channel,
+      status: delivered ? "delivered" : "failed",
+      ...(delivered ? {} : { errorCode: record.parts.some(part => part.status === "unknown") ? "DELIVERY_UNCONFIRMED" : "DELIVERY_PARTIAL" }),
+      runId: record.runId, revision: Math.max(3, record.updatedAt),
+    });
+  });
 
   // 默认生命周期：委托到 init.ts 的显式操作（幂等）
   const defaultLifecycle: ChannelsLifecycleAdapter = {
     initialize: () => initializeChannels({
       ipc: deps.ipc,
-      handleIncoming: (msg) => dispatcher.handleIncoming(msg),
+      handleIncoming: (msg) => durableInbox.handleIncoming(msg),
+      acceptIncoming: (msg) => durableInbox.accept(msg),
       reloadDispatcherSettings: () => dispatcher.reloadSettings(),
     }),
     start: (signal?: AbortSignal) => startChannels(signal),

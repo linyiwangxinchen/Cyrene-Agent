@@ -16,6 +16,7 @@ import type {
   ToolObservation,
 } from "./types";
 import { parseToolCallArgs } from "./types";
+import { validateTaskContinuity, type TaskContinuity } from "./task-continuity";
 import { isAbortError } from "../../abort-utils";
 import type { TaskCloseRequest, TaskCloseResult, TaskExecuteRequest, TaskExecuteResult } from "../task-runtime";
 import { buildGoldenDescendantsPrompt, getGoldenDescendantNames } from "../../tasks/task-character-pool";
@@ -130,6 +131,7 @@ export const updateTodoToolSpec: ToolSpec = {
     "更新可变工作笔记（Todo）。传入完整的新 TodoItem 数组（整表替换）。\n" +
     "何时使用：预计任务需要至少 2 个 execution step（执行步骤）或 tool round（工具推进轮次）时，优先建立并持续更新清单；不按 LLM 调用次数计算。\n" +
     "不要用于简单问答、纯闲聊或单次工具即可完成的任务。Todo 是可随事实和改变方向而重写的工作笔记，不是后续行动的强约束，也不是外部操作已经成功的证明。\n" +
+    "多步任务可同时填写 continuity：当前目标、约束、已验证产物的路径/证据、待澄清问题和下一步。压缩或重启后会恢复；它不是用户授权。省略时保留已有笔记，提供时整份替换，空对象可清空。改变任务目标时同步更新。\n" +
     "规则：\n" +
     "- id 必须唯一\n" +
     "- 同一时刻最多一个 in_progress\n" +
@@ -139,6 +141,17 @@ export const updateTodoToolSpec: ToolSpec = {
   parameters: {
     type: "object",
     properties: {
+      continuity: {
+        type: "object", description: "任务接续工作笔记（可选，整份替换，总长最多12000字符）；不保存密钥，不把尚未完成的操作记为成功",
+        properties: {
+          goal: { type: "string", maxLength: 2000, description: "当前用户目标" },
+          constraints: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 }, description: "用户约束；不构成授权" },
+          artifacts: { type: "array", maxItems: 16, items: { type: "string", maxLength: 500 }, description: "已验证产物路径、标识和证据；执行前仍需核对" },
+          openQuestions: { type: "array", maxItems: 8, items: { type: "string", maxLength: 500 }, description: "待澄清的问题" },
+          nextStep: { type: "string", maxLength: 1000, description: "基于已知事实的下一步建议，不自动执行或授权" },
+        },
+        additionalProperties: false,
+      },
       todos: {
         type: "array",
         description: "完整的新待办列表（替换旧列表）",
@@ -253,10 +266,16 @@ export async function executeUpdateTodo(
   call: ToolCall,
   state: AgentState,
   onEvent?: (event: HarnessEvent) => void,
-  onStateChanged?: (items: TodoItem[]) => Promise<void>,
+  onStateChanged?: (items: TodoItem[], continuity?: TaskContinuity) => Promise<void>,
 ): Promise<ToolObservation> {
   const args = parseToolCallArgs(call);
   const rawTodos = (args.todos as unknown) ?? [];
+  let continuity = state.continuity;
+  try {
+    if (Object.prototype.hasOwnProperty.call(args, "continuity")) continuity = validateTaskContinuity(args.continuity);
+  } catch (error) {
+    return { outcome: "failure", category: "invalid_arguments", tool: UPDATE_TODO_TOOL_ID, message: (error as Error).message };
+  }
 
   if (!Array.isArray(rawTodos)) {
     return {
@@ -281,11 +300,14 @@ export async function executeUpdateTodo(
 
   // 更新 state；失败时恢复旧值，避免后续兼容快照把未提交状态冒充为成功。
   const previousItems = state.todoItems;
+  const previousContinuity = state.continuity;
   state.todoItems = items;
+  state.continuity = continuity;
   try {
-    await onStateChanged?.(items);
+    await onStateChanged?.(items, continuity);
   } catch (error) {
     state.todoItems = previousItems;
+    state.continuity = previousContinuity;
     throw error;
   }
 
@@ -306,7 +328,7 @@ export async function executeUpdateTodo(
     outcome: "success",
     tool: UPDATE_TODO_TOOL_ID,
     message: `待办列表已更新（${items.length} 项）：\n${todoSummary}${correctionNote}`,
-    output: JSON.stringify({ items, corrections }),
+    output: JSON.stringify({ items, corrections, ...(continuity ? { continuity } : {}) }),
   };
 }
 

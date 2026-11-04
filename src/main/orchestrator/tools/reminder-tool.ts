@@ -60,7 +60,8 @@ export function registerReminderTool(registry: ToolRegistry): void {
     name: "设置延时任务",
     description:
       "创建一次性或重复的延时任务，到时间通过当前私聊渠道再次调用昔涟生成自然回复。" +
-      "用于提醒、稍后回复、每日/每周主动播报等明确的延时触发请求；当前仅支持微信或飞书私聊，不能用于群聊。",
+      "支持到点查询、处理文件、生成内容并回复当前私聊，冻结当前会话、工具与权限；不会因任务延期而增加权限。" +
+      "用于用户明确要求的提醒、稍后执行、每日/每周播报；当前仅支持微信或飞书私聊，不能用于群聊。任务失败不会自动重做。",
     catalogHint: "创建延时或重复任务，到点通过当前私聊渠道生成回复",
     enabled: true,
     risk: "safe",
@@ -90,6 +91,10 @@ export function registerReminderTool(registry: ToolRegistry): void {
         message: { type: "string", description: "到点时希望昔涟完成或提醒的事情" },
         title: { type: "string", description: "提醒标题，可选" },
         maxRuns: { type: "number", description: "最多执行次数，可选；once 默认 1" },
+        taskType: { type: "string", enum: ["agent", "reminder"], description: "agent（默认）到点可使用当前已授权工具执行任务；reminder 仅生成提醒、不调用工具" },
+        allowedToolIds: { type: "array", items: { type: "string" }, description: "可选：进一步限制到点可用工具 ID，不能超出当前轮权限" },
+        missedPolicy: { type: "string", enum: ["skip", "run-within-grace"], description: "默认 skip 跳过停机错过的任务；仅当用户明确要求补执行时使用 run-within-grace" },
+        missedGraceMinutes: { type: "number", description: "允许补执行的宽限分钟，1-1440；默认15。不得用于重试已开始或结果未知的任务" },
       },
       required: ["message"],
     },
@@ -124,9 +129,20 @@ export function registerReminderTool(registry: ToolRegistry): void {
         enabled: true,
         schedule,
         ...(maxRunsValue !== undefined ? { maxRuns: maxRunsValue } : {}),
-        mode: "chat",
-        kind: "reminder",
-        delivery: target,
+        mode: args.taskType === "reminder" ? "chat" : "work",
+        kind: args.taskType === "reminder" ? "reminder" : "agent",
+        delivery: { channel: target.channel, targetId: target.targetId, sessionId: target.sessionId,
+          conversationId: target.conversationId ?? ctx?.conversationId ?? target.sessionId,
+          ...(target.chatType ? { chatType: target.chatType } : {}), ...(target.threadId ? { threadId: target.threadId } : {}) },
+        toolMode: "allow-list",
+        allowedToolIds: args.taskType === "reminder" ? [] : (target.allowedToolIds ?? []).filter(id =>
+          !["schedule_reminder", "cancel_channel_scheduled_task"].includes(id)
+          && (!Array.isArray(args.allowedToolIds) || args.allowedToolIds.includes(id))),
+        permissionMode: ctx?.permissionMode === "allow_all" ? "allow_all" : "normal",
+        ...(ctx?.resolvedWorkspaceRoot ? { workspaceBinding: { workspaceRoot: ctx.resolvedWorkspaceRoot,
+          displayName: ctx.resolvedWorkspaceRoot, boundAt: Date.now() } } : {}),
+        missedPolicy: args.missedPolicy === "run-within-grace" ? "run-within-grace" : "skip",
+        ...(args.missedGraceMinutes !== undefined ? { missedGraceMinutes: Number(args.missedGraceMinutes) } : {}),
       });
       const scheduleText = schedule.kind === "once"
         ? `于 ${new Date(schedule.runAt).toLocaleString("zh-CN", { hour12: false })}`

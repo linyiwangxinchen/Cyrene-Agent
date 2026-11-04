@@ -29,9 +29,11 @@ export interface ChannelAdapter {
 
   /** 管理器在启动前注入；适配器通过此回调把入站消息交给调度器。 */
   onMessage: MessageHandler | null;
+  /** Durable acceptance acknowledgement, separate from slow model execution. */
+  onMessageAccepted?: ((msg: IncomingMessage) => Promise<void>) | null;
 
   /** 出站：把统一 OutgoingMessage 翻译成平台协议发出去 */
-  send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string }>;
+  send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string; deliveryState?: "failed" | "unknown" }>;
 
   /** UI 展示用状态。轮询调用，adapter 内部缓存即可。 */
   getStatus(): ChannelStatus;

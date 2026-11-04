@@ -32,6 +32,14 @@ export interface ProactiveEvaluationStatus {
 }
 
 /** Durable intent captured before delivery; retries must replay this exact payload. */
+export interface ProactiveDeliveryContext {
+  relationshipRevision: number;
+  conversationId?: string;
+  sessionId?: string;
+  targetId?: string;
+  threadId?: string;
+  followupId?: string;
+}
 export interface ProactiveCommitIntent {
   intentId: string;
   sequence: number;
@@ -41,6 +49,8 @@ export interface ProactiveCommitIntent {
   text: string;
   source: "model" | "fallback";
   fallbackPayload?: unknown;
+  deliveryTarget?: "local" | "wechat" | "feishu";
+  deliveryContext?: ProactiveDeliveryContext;
 }
 
 export interface ProactiveState {

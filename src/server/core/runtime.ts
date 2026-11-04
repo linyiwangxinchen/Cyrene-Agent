@@ -324,6 +324,12 @@ export async function startHeadlessCore() {
   })().catch(error => console.error("[MCP] Restore failed:", error));
   let closing: Promise<void> | undefined;
   return {
+    async readiness() {
+      if (closing) return { ready: false };
+      // Exercise the conversation worker and SQLite, not an external model or connector.
+      await chatsStore.getSessionRecord("__cyrene_readiness_probe__");
+      return { ready: !closing };
+    },
     capabilities: () => ({ handlers: [...ipcMain.handlers.keys()], listeners: ipcMain.eventNames(), engine: "shared-windows-core", desktop: false, version: app.getVersion() }),
     close() {
       return closing ??= (async () => {

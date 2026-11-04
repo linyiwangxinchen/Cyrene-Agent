@@ -183,6 +183,28 @@ describe("proactive chat service", () => {
     expect(ctx.state.proactiveCommitSequence).toBeUndefined();
   });
 
+  it("replays a channel intent with its original recipient after a failed commit and restart", async () => {
+    const deliveryContext = { relationshipRevision: 4, targetId: "original-recipient", sessionId: "external", conversationId: "bound", followupId: "followup-1" };
+    const ctx = setup({ requiresDurableIntent: () => true, getDeliveryTarget: () => "wechat", getDeliveryContext: () => deliveryContext,
+      commitMessage: vi.fn(async () => { throw new Error("journal refresh failed"); }),
+    });
+    await expect(ctx.service.evaluateCandidate(candidate)).rejects.toThrow("journal refresh failed");
+    const intent = structuredClone(ctx.state.pendingCommitIntent!);
+    expect(intent).toMatchObject({ deliveryTarget: "wechat", deliveryContext, intentId: "proactive-intent-1" });
+    const commit = vi.fn(async () => ({ kind: "committed" as const }));
+    const runModel = vi.fn(async () => ({ kind: "send" as const, text: "should not generate again" }));
+    const restarted = createProactiveChatService({
+      loadState: () => ctx.state, saveState: ctx.saveState,
+      getSnapshot: () => ({ now: NOW, localHour: 14, idleSec: 600, enabled: true, conversationBusy: false, generationBusy: false, screenLocked: false }),
+      buildMessages: async () => [], runModel, getFallback: async () => null, commitMessage: commit,
+      requiresDurableIntent: () => true, getDeliveryTarget: () => "wechat", getDeliveryContext: () => ({ ...deliveryContext, targetId: "different-recipient" }),
+    });
+    await restarted.evaluateCandidate(candidate);
+    expect(runModel).not.toHaveBeenCalled();
+    expect(commit).toHaveBeenCalledWith(expect.objectContaining({ intentId: intent.intentId, deliveryTarget: "wechat", deliveryContext }));
+    expect(ctx.state.pendingCommitIntent).toBeUndefined();
+  });
+
   it("passes the frozen delivery route to model generation after message building", async () => {
     let target: "local" | "wechat" = "local";
     const runModel = vi.fn(async () => ({ kind: "send" as const, text: "固定本地消息" }));

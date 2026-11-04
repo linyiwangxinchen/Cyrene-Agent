@@ -240,6 +240,7 @@ export type TranscriptCompactionCheckpointPayload = {
 
 export interface TranscriptCompactionRecoveryState {
   todoItems?: TodoItem[];
+  continuity?: import("./harness/task-continuity").TaskContinuity;
   uncertainEffects: UncertainEffect[];
 }
 
@@ -256,6 +257,7 @@ export type TranscriptTaskStatePayload = {
   assistantEntryId: string;
   toolCallId: string;
   items: TodoItem[];
+  continuity?: import("./harness/task-continuity").TaskContinuity;
 };
 
 export type TranscriptEffectResolutionPayload = {

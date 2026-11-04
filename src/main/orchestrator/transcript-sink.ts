@@ -60,6 +60,7 @@ export interface TranscriptSink {
     assistantEntryId: string;
     toolCallId: string;
     items: TodoItem[];
+    continuity?: import("./harness/task-continuity").TaskContinuity;
   }): Promise<void>;
   /** Durable one-shot authorization to repeat an unresolved external effect. */
   appendEffectResolution?(input: {
@@ -164,14 +165,14 @@ export function createTranscriptSink(input: {
       startedToolCallIds.add(toolCallId);
     },
 
-    async appendTaskState({ assistantEntryId, toolCallId, items }) {
+    async appendTaskState({ assistantEntryId, toolCallId, items, continuity }) {
       await store.append(conversationId, {
         kind: "task_state",
         id: `${runId}:task-state:${toolCallId}`,
         at: Date.now(),
         runId,
         ...(assistantTurnId ? { turnId: assistantTurnId } : {}),
-        payload: { assistantEntryId, toolCallId, items },
+        payload: { assistantEntryId, toolCallId, items, ...(continuity ? { continuity } : {}) },
       });
     },
 

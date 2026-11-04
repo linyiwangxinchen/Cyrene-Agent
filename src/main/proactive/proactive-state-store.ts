@@ -3,7 +3,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
-import type { ProactiveCandidate, ProactiveCommitIntent, ProactiveState } from "./proactive-types";
+import type { ProactiveCandidate, ProactiveCommitIntent, ProactiveState, ProactiveDeliveryContext } from "./proactive-types";
 
 export function defaultProactiveState(): ProactiveState {
   return {
@@ -42,6 +42,12 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
     score: value.candidate.score,
     sceneCooldownMs: value.candidate.sceneCooldownMs,
   };
+  const context = value.deliveryContext;
+  const deliveryContext: ProactiveDeliveryContext | undefined = isRecord(context) && Number.isSafeInteger(context.relationshipRevision)
+    && ["conversationId", "sessionId", "targetId", "threadId", "followupId"].every(key => context[key] === undefined || (typeof context[key] === "string" && context[key].length <= 300))
+    ? { relationshipRevision: context.relationshipRevision as number,
+      ...Object.fromEntries(["conversationId", "sessionId", "targetId", "threadId", "followupId"].filter(key => typeof context[key] === "string").map(key => [key, context[key]])) } : undefined;
+  if (value.deliveryContext !== undefined && !deliveryContext) return undefined;
   return {
     intentId: value.intentId,
     sequence: value.sequence as number,
@@ -50,6 +56,8 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
     intentAt: value.intentAt,
     text: value.text,
     source: value.source,
+    ...(value.deliveryTarget === "local" || value.deliveryTarget === "wechat" || value.deliveryTarget === "feishu" ? { deliveryTarget: value.deliveryTarget } : {}),
+    ...(deliveryContext ? { deliveryContext } : {}),
     ...(Object.prototype.hasOwnProperty.call(value, "fallbackPayload") ? { fallbackPayload: value.fallbackPayload } : {}),
   };
 }

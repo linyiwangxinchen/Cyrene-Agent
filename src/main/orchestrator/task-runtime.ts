@@ -7,7 +7,7 @@ import type { HarnessInput, HarnessResult } from "./harness/types";
 import { getHarnessRunStore } from "./harness/run-store";
 import { getConversationTranscriptStore } from "./conversation-transcript-store";
 import { createTranscriptSink } from "./transcript-sink";
-import { projectTaskTodoItems, projectTaskTranscriptMessages } from "./task-transcript-projection";
+import { projectTaskTodoItems, projectTaskTranscriptMessages, projectTaskContinuity } from "./task-transcript-projection";
 import { resolveEffectKind, type ToolDefinition } from "./tools/registry/tool-registry";
 import type { VendorConfig, ChatMessage } from "./vendors/types";
 import type { ToolContext } from "./tools/registry/tool-context";
@@ -198,6 +198,7 @@ export function createTaskExecutor(input: {
     : undefined;
   let transcriptHistory: ReturnType<typeof projectTaskTranscriptMessages> | undefined;
   let transcriptTodoItems: ReturnType<typeof projectTaskTodoItems> | undefined;
+  let transcriptContinuity: ReturnType<typeof projectTaskContinuity>;
   return async (request) => {
     const profile = getTaskAgentProfile(request.subagentType);
     const lease = characterPool.acquire(input.parent.parentConversationId, request.companionId);
@@ -243,6 +244,7 @@ export function createTaskExecutor(input: {
         const snapshot = await transcript.store.read(session.id);
         transcriptHistory = projectTaskTranscriptMessages(snapshot.entries);
         transcriptTodoItems = projectTaskTodoItems(snapshot.entries);
+        transcriptContinuity = projectTaskContinuity(snapshot.entries);
       }
     } catch (error) {
       lease.release();
@@ -334,6 +336,7 @@ export function createTaskExecutor(input: {
         },
         initialState: {
           todoItems: transcriptTodoItems ?? session.todoItems,
+          ...(transcriptContinuity ? { continuity: transcriptContinuity } : {}),
           uncertainEffects: [],
         },
         ...(transcriptSink ? { transcriptSink } : {}),

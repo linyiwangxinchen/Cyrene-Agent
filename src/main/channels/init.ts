@@ -10,6 +10,7 @@
 //
 // 注意：startChannels 必须晚于 initRAG / initMcpManager / loadModelSettings。
 import { app, BrowserWindow } from "electron";
+import path from "node:path";
 import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import {
@@ -34,6 +35,9 @@ import { resolveQqListenAuthRequirement } from "./adapters/qq/onebot-reverse-ws"
 import { QqBotAdapter } from "./adapters/qqbot/qqbot-adapter";
 import { getRecentLog, clearLog, reloadLogFromDisk } from "./message-log";
 import { logger, LogTag } from "../logger";
+import { ChannelRecoveryStore, getChannelRecoveryStore, setChannelRecoveryStore } from "./recovery-store";
+import { getDurableChannelInbox } from "./durable-inbox";
+import { registerChannelRecoveryIpc } from "./recovery-ipc";
 
 const LOG = "[ChannelsInit]";
 
@@ -48,6 +52,11 @@ let conversationLifecycle: {
 export function setChannelsConversationLifecycle(lifecycle: typeof conversationLifecycle): void {
   conversationLifecycle = lifecycle;
 }
+export async function runChannelConversationWork<T>(task: () => Promise<T>): Promise<T> {
+  conversationLifecycle?.onUserMessage();
+  conversationLifecycle?.onConversationStarted();
+  try { return await task(); } finally { conversationLifecycle?.onConversationEnded(); }
+}
 /** 微信 adapter 全局引用（UI 登录按钮需要） */
 let wxAdapter: ILinkBotAdapter | null = null;
 let wxLoginAbort: AbortController | null = null;
@@ -57,6 +66,7 @@ let qqBotAdapter: QqBotAdapter | null = null;
 export interface InitializeChannelsOptions {
   ipc?: IpcScope;
   handleIncoming: MessageHandler;
+  acceptIncoming?: (msg: Parameters<MessageHandler>[0]) => Promise<void>;
   reloadDispatcherSettings: () => void;
 }
 
@@ -80,19 +90,18 @@ function getPublicChannelsSettings(): Record<string, unknown> {
 /** 应用启动编排在核心阶段调用一次。只做装配，无网络副作用，并且可重复调用。 */
 export function initializeChannels(options: InitializeChannelsOptions): void {
   if (initialized) return;
+  if (!getChannelRecoveryStore()) {
+    const store = new ChannelRecoveryStore(path.join(app.getPath("userData"), "channel-recovery"));
+    store.recoverInterrupted();
+    setChannelRecoveryStore(store);
+  }
   initialized = true;
   reloadLogFromDisk();
 
   // 将当前子系统的消息入口注入渠道管理器。
-  channelManager.setDispatcher(async (msg) => {
-    conversationLifecycle?.onUserMessage();
-    conversationLifecycle?.onConversationStarted();
-    try {
-      return await options.handleIncoming(msg);
-    } finally {
-      conversationLifecycle?.onConversationEnded();
-    }
-  });
+  channelManager.setDispatcher(msg => options.acceptIncoming
+    ? options.handleIncoming(msg)
+    : runChannelConversationWork(() => options.handleIncoming(msg)), options.acceptIncoming);
 
   // 注册 adapter（不启动，startChannels 时统一 startAll）
   registerAdapters();
@@ -141,6 +150,7 @@ export async function startChannels(signal?: AbortSignal): Promise<void> {
 
   // 启动所有已注册 adapter
   await channelManager.startAll();
+  await getDurableChannelInbox()?.recoverQueued();
 
   logger.info(LogTag.Channels, "channels module started");
   broadcastChannelsStatus();
@@ -161,12 +171,19 @@ function registerChannelsIpc(
   reloadDispatcherSettings: () => void,
 ): void {
   const ipc = ipcOption ?? createIpcScope();
+  registerChannelRecoveryIpc(ipc);
   ipc.handle(IPC.CHANNELS_GET_CONFIG, () => getPublicChannelsSettings());
 
   const configLifecycle = createChannelConfigLifecycle({
     load: loadChannelsSettings,
     save: saveChannelsSettings,
-    reload: reloadDispatcherSettings,
+    reload: () => {
+      reloadDispatcherSettings();
+      const settings = loadChannelsSettings();
+      for (const id of ["wechat", "feishu", "qq", "qqbot"] as const) {
+        if (!settings[id].enabled) getChannelRecoveryStore()?.cancelQueuedChannel(id);
+      }
+    },
     restartOne: (id) => channelManager.restartOne(id),
     restartAll: async () => { await channelManager.stopAll(); await channelManager.startAll(); },
     cancelWechatLogin: () => { wxLoginAbort?.abort(); wxLoginAbort = null; },

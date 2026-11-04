@@ -3,6 +3,7 @@ import { IPC } from "../../shared/ipc-channels";
 import type { PluginPromptMode, PluginTurnStatus } from "../../plugins/api";
 import type { ChatMessage } from "../../shared/chat-types";
 import { AgentRuntimeError } from "../orchestrator/agent-runtime-error";
+import { withConversationRun } from "../orchestrator/conversation-run-guard";
 import { CyreneAgent, type CyreneRunOptions } from "../orchestrator/cyrene-agent";
 import type { LifecyclePublisher } from "../plugin-host/lifecycle-publisher";
 import type { ConversationJournalService } from "../orchestrator/conversation-journal-service";
@@ -10,22 +11,18 @@ import type { ActiveConversationSelection } from "../chats/active-conversation-r
 import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import { toastEvents } from "../toast/toast-events";
 import { channelManager } from "../channels/manager";
+import { loadChannelsSettings } from "../channels/settings-store";
 import { createChannelDeliveryService } from "../channels/delivery-service";
 import { appendHistory as appendChannelHistory } from "../channels/history-log";
 import { appendLog as appendChannelLog } from "../channels/message-log";
-import type { OutgoingMessage } from "../channels/types";
+import type { ChannelCapability, OutgoingMessage } from "../channels/types";
+import { buildCapabilityTextParts } from "../channels/capability-text";
+import { buildToolSystemPrompt } from "../orchestrator/system-prompt-builder";
 import { buildChannelSystem } from "../orchestrator/expression-context-core";
 import { filterToolsForTask } from "./tool-filter";
 import type { ScheduledRunResult, ScheduledTask, ScheduledTaskHistoryEntry } from "./types";
 
-/**
- * 第一期：scheduler 的 buildOptions 返回"传统"形式（包含 system 消息）。
- * CyreneAgent 暂时通过 fallback 兼容：检测 options.messages[0].role === "system" 时，
- * 用它作为 soulSystemBaseContent（重复一次），toolSystemContent 用同一个串（暂时不拆分）。
- *
- * 第二期：scheduler 同步迁移到 tool_system / soul_system 分阶段，buildOptions 改为返回
- * 带 toolSystemContent / soulSystemBaseContent 的 CyreneRunOptions。
- */
+/** 兼容 buildOptions 的 system 消息；运行时分离人格与授权工具提示词。 */
 type LegacyRunOptions = Omit<CyreneRunOptions, "toolSystemContent" | "soulSystemBaseContent">;
 
 interface RunnerDeps {
@@ -59,7 +56,24 @@ function resolveSchedulerDisplayReply(reply: string, tools: readonly SchedulerDi
 }
 
 /**
- * 定时任务是无人值守的 Work Harness：不询问、不审批，直接执行已分配工具。
+ * Scheduled delivery does not have an IncomingMessage to pass through the
+ * normal dispatcher composer. Apply the same channel text boundary here so a
+ * long unattended reply cannot be rejected by iLink/Feishu after the CTA has
+ * already been committed.
+ */
+export function buildScheduledDeliveryMessage(
+  channel: OutgoingMessage["channel"],
+  targetId: string,
+  text: string,
+  capability?: ChannelCapability,
+  threadId?: string,
+): OutgoingMessage {
+  const parts = buildCapabilityTextParts(text, capability?.maxTextLength, "on");
+  return { channel, targetId, ...(threadId ? { threadId } : {}), parts };
+}
+
+/**
+ * 定时任务无人值守：只能使用冻结的工具和权限；需要交互审批时明确失败。
  * 会话模式来自任务冻结的 mode 字段（旧任务默认 work）；执行循环沿用现有
  * 映射：chat 走 chat loop，其余模式走 work harness。
  */
@@ -69,127 +83,27 @@ export function applyScheduledExecutionPolicy(options: CyreneRunOptions, mode: P
     executionMode: mode === "chat" ? "chat" : "work",
     conversationMode: mode,
     harnessInteractiveTools: false,
-    permissionMode: "allow_all",
+    permissionMode: options.permissionMode ?? "allow_all",
+    allowPermissionPrompt: false,
   };
 }
 
 export function createSchedulerRunner(deps: RunnerDeps) {
-  async function runScheduledTask(task: ScheduledTask, _scheduledFireAt: Date, manual: boolean): Promise<ScheduledRunResult> {
-    const historyId = deps.id();
-    const startedAt = deps.now();
+  async function runScheduledTask(task: ScheduledTask, _scheduledFireAt: Date, manual: boolean, historyId: string, startedAt: Date, selectedConversationId?: string | null, signal?: AbortSignal): Promise<ScheduledRunResult> {
 
-    // 渠道提醒不创建本地工作区会话，但到点仍启动一次昔涟 Chat 生成；
-    // 用户的提醒内容只是意图，最终发送内容由模型结合渠道人格自然生成。
-    if (task.delivery) {
-      const effectiveToolIds: string[] = [];
-      deps.recordHistory({
-        id: historyId,
-        taskId: task.id,
-        taskTitle: task.title,
-        firedAt: startedAt.toISOString(),
-        status: "running",
-        reason: manual ? "manual fireNow" : undefined,
-        effectiveToolIds,
-      });
-      let reply = "";
-      try {
-        const legacyOptions = await deps.buildOptions(task);
-        const sysIdx = legacyOptions.messages.findIndex((m) => m.role === "system");
-        const baseSoul = sysIdx >= 0 && typeof legacyOptions.messages[sysIdx].content === "string"
-          ? legacyOptions.messages[sysIdx].content
-          : "";
-        const messages = legacyOptions.messages.filter((_, index) => index !== sysIdx);
-        const options = applyScheduledExecutionPolicy({
-          ...legacyOptions,
-          messages,
-          executionMode: "chat",
-          conversationMode: "chat",
-          tools: [],
-          toolSystemContent: "",
-          soulSystemBaseContent: `${baseSoul}\n\n${buildChannelSystem(task.delivery.channel)}`,
-          permissionMode: "normal",
-          runId: historyId,
-          channelContext: task.delivery,
-        }, "chat");
-        const agent = new CyreneAgent({ threadId: `channel-reminder-${task.id}`, description: `Channel reminder: ${task.title}` });
-        await new Promise<void>((resolve, reject) => {
-          const sub = agent.runWithEvents(options).subscribe({
-            error: (error) => { sub.unsubscribe(); reject(error instanceof Error ? error : new Error(String(error))); },
-            complete: () => { sub.unsubscribe(); resolve(); },
-          });
-        });
-        reply = (agent.lastResult?.reply ?? "").trim();
-        if (!reply) throw new Error("模型未生成可发送的提醒内容");
-      } catch (error) {
-        const finishedAt = deps.now();
-        const message = error instanceof Error ? error.message : String(error);
-        deps.recordHistory({
-          id: historyId,
-          taskId: task.id,
-          taskTitle: task.title,
-          firedAt: startedAt.toISOString(),
-          finishedAt: finishedAt.toISOString(),
-          durationMs: finishedAt.getTime() - startedAt.getTime(),
-          status: "failed",
-          errorMessage: message,
-          effectiveToolIds,
-        });
-        return { ok: false, historyId, error: message, effectiveToolIds };
-      }
-      const delivery = createChannelDeliveryService(channelManager);
-      const message: OutgoingMessage = {
-        channel: task.delivery.channel,
-        targetId: task.delivery.targetId,
-        ...(task.delivery.threadId ? { threadId: task.delivery.threadId } : {}),
-        parts: [{ kind: "text", text: reply }],
-      };
-      const result = await delivery.send(message);
-      const finishedAt = deps.now();
-      if (!result.ok) {
-        deps.recordHistory({
-          id: historyId,
-          taskId: task.id,
-          taskTitle: task.title,
-          firedAt: startedAt.toISOString(),
-          finishedAt: finishedAt.toISOString(),
-          durationMs: finishedAt.getTime() - startedAt.getTime(),
-          status: "failed",
-          errorMessage: result.error ?? "渠道提醒发送失败",
-          effectiveToolIds,
-        });
-        return { ok: false, historyId, error: result.error ?? "渠道提醒发送失败", effectiveToolIds };
-      }
-      appendChannelHistory(task.delivery.sessionId, "assistant", reply);
-      appendChannelLog({
-        dir: "outgoing",
-        channel: task.delivery.channel,
-        senderId: task.delivery.targetId,
-        chatId: task.delivery.targetId,
-        text: reply,
-        hasAttachments: false,
-      });
-      deps.recordHistory({
-        id: historyId,
-        taskId: task.id,
-        taskTitle: task.title,
-        firedAt: startedAt.toISOString(),
-        finishedAt: finishedAt.toISOString(),
-        durationMs: finishedAt.getTime() - startedAt.getTime(),
-        status: "success",
-        outputPreview: reply.slice(0, 160),
-        effectiveToolIds,
-      });
-      return { ok: true, historyId, reply, effectiveToolIds };
-    }
-
+    // 旧任务仍是纯提醒；新 agent 任务保留创建时的工具白名单。
+    const reminderOnly = Boolean(task.delivery && task.kind !== "agent");
     const allTools = toolRegistry.getAllTools();
-    const effectiveTools = filterToolsForTask(task, allTools);
+    const effectiveTools = reminderOnly ? [] : filterToolsForTask(task, allTools);
     const effectiveToolIds = effectiveTools.map(t => t.id);
     // Freeze the UI target before any async build work; a later window switch
     // must not redirect this run's canonical facts or presentation events.
     let conversationId: string | null = null;
     let sessionCreationError: Error | undefined;
-    if (task.workspaceBinding) {
+    if (task.delivery) {
+      conversationId = task.delivery.conversationId ?? task.delivery.sessionId;
+      if (!deps.conversationJournal) sessionCreationError = new Error("渠道定时任务缺少会话日志服务，未执行或发送");
+    } else if (task.workspaceBinding) {
       try {
         conversationId = (await deps.createRunSession?.(task)) ?? null;
         if (!conversationId) sessionCreationError = new Error("无法为定时任务创建独立会话");
@@ -197,9 +111,9 @@ export function createSchedulerRunner(deps: RunnerDeps) {
         sessionCreationError = error instanceof Error ? error : new Error(String(error));
       }
     } else {
-      conversationId = deps.getActiveConversation?.()?.sessionId ?? null;
+      conversationId = selectedConversationId ?? null;
     }
-    const runMode = task.mode ?? "work";
+    const runMode = reminderOnly ? "chat" : (task.mode ?? "work");
     const noticeId = `scheduler-notice-${historyId}`;
     const replyId = `scheduler-reply-${historyId}`;
     const noticeText = `定时任务「${task.title}」已触发`;
@@ -213,17 +127,6 @@ export function createSchedulerRunner(deps: RunnerDeps) {
     let deferredRunFinished: Record<string, unknown> | undefined;
     let startedEventSent = false;
     let failureEventSent = false;
-
-    deps.recordHistory({
-      id: historyId,
-      taskId: task.id,
-      taskTitle: task.title,
-      firedAt: startedAt.toISOString(),
-      status: "running",
-      reason: manual ? "manual fireNow" : undefined,
-      effectiveToolIds,
-      ...(conversationId ? { sessionId: conversationId } : {}),
-    });
 
     const send = (event: unknown): void => {
       const wc = deps.getChatWebContents();
@@ -319,12 +222,22 @@ export function createSchedulerRunner(deps: RunnerDeps) {
 
     let transcriptSink: ReturnType<ConversationJournalService["createRunSink"]> | undefined;
     try {
+      signal?.throwIfAborted();
       if (sessionCreationError) throw sessionCreationError;
+      if (task.workspaceBinding && !task.delivery && conversationId) deps.recordHistory({
+        id: historyId, taskId: task.id, taskTitle: task.title, firedAt: startedAt.toISOString(),
+        status: "running", reason: manual ? "manual fireNow" : undefined, effectiveToolIds, sessionId: conversationId,
+      });
+      if (task.delivery) {
+        const status = channelManager.getAdapter(task.delivery.channel)?.getStatus();
+        if (!status?.enabled || status.phase !== "running") throw new Error("渠道当前不可用，任务未执行；请检查连接后手动运行");
+        if (effectiveTools.length && loadChannelsSettings().toolSandbox === "off") throw new Error("当前渠道已关闭工具权限，定时任务未执行");
+      }
       const legacyOptions = await deps.buildOptions(task);
+      signal?.throwIfAborted();
       legacyOptions.tools = effectiveTools;
 
-      // 第一期兼容：把传统 messages 里的 system 消息拆出来作为 soulSystemBaseContent。
-      // toolSystemContent 暂用同一份（scheduler 第二期再迁）。
+      // 从传统 system 消息拆出人格，工具提示只列出本轮授权的工具。
       const sysIdx = legacyOptions.messages.findIndex((m) => m.role === "system");
       let soulSystemBaseContent: string;
       let messages = legacyOptions.messages;
@@ -335,13 +248,24 @@ export function createSchedulerRunner(deps: RunnerDeps) {
       } else {
         soulSystemBaseContent = "";
       }
-      const toolSystemContent = soulSystemBaseContent; // 第一期暂用同一份
+      const toolSystemContent = buildToolSystemPrompt(runMode, effectiveTools);
+      if (task.delivery) {
+        soulSystemBaseContent += `\n\n${buildChannelSystem(task.delivery.channel)}`;
+        const context = await deps.conversationJournal!.buildModelContext(conversationId!);
+        legacyOptions.initialHarnessState = { todoItems: context.todoItems ?? [], uncertainEffects: context.uncertainEffects,
+          ...(context.continuity ? { continuity: context.continuity } : {}) };
+        // 保留同一 CTA 中压缩后的上下文；当前任务始终是最后一条明确指令。
+        messages = [...context.messages.filter(message => message.role !== "system"), ...messages];
+      }
 
       const options = applyScheduledExecutionPolicy({
         ...legacyOptions,
+        ...(signal ? { signal } : {}),
         messages,
         toolSystemContent,
         soulSystemBaseContent,
+        permissionMode: task.permissionMode ?? (task.delivery ? "normal" : "allow_all"),
+        ...(task.delivery ? { channelContext: task.delivery } : {}),
         ...(conversationId ? { conversationId, runId: historyId } : { runId: historyId }),
         ...(task.workspaceBinding ? { resolvedWorkspaceRoot: task.workspaceBinding.workspaceRoot } : {}),
         ...(conversationId && deps.conversationJournal ? {
@@ -380,6 +304,7 @@ export function createSchedulerRunner(deps: RunnerDeps) {
       });
 
       const agent = new CyreneAgent({ threadId: `scheduler-${task.id}`, description: `Scheduled task: ${task.title}` });
+      signal?.throwIfAborted();
 
       await new Promise<void>((resolve, reject) => {
         const sub = agent.runWithEvents(options).subscribe({
@@ -453,6 +378,37 @@ export function createSchedulerRunner(deps: RunnerDeps) {
         publishFailure(finishedAt, status, `定时任务${status}终止`);
         return { ok: false, historyId, error: status, effectiveToolIds };
       }
+      if (task.delivery) {
+        if (!transcriptSink?.getLastAssistantEntryId?.()) throw new Error("任务回复尚未写入权威会话，取消外发");
+        const result = await createChannelDeliveryService(channelManager).send(
+          buildScheduledDeliveryMessage(
+            task.delivery.channel,
+            task.delivery.targetId,
+            displayReply,
+            channelManager.getAdapter(task.delivery.channel)?.capability,
+            task.delivery.threadId,
+          ),
+          { operationId: `scheduler:${historyId}:delivery`, conversationId: conversationId!, assistantTurnId: replyId, runId: historyId, signal },
+        );
+        await deps.conversationJournal!.appendDeliveryReceipt(conversationId!, {
+          assistantTurnId: replyId, channel: task.delivery.channel, runId: historyId,
+          status: result.ok ? "delivered" : "failed", revision: 1,
+          ...(!result.ok ? { errorCode: result.status === "unknown" ? "DELIVERY_UNCONFIRMED" : result.error } : {}),
+        });
+        if (!result.ok) {
+          publishFailure(deps.now(), "runtime_error", result.error);
+          if (result.status === "unknown") deps.recordHistory({
+            id: historyId, taskId: task.id, taskTitle: task.title, firedAt: startedAt.toISOString(),
+            finishedAt: deps.now().toISOString(), status: "unknown", effectiveToolIds,
+            sessionId: conversationId!, outputPreview: displayReply.slice(0, 160),
+            errorMessage: "渠道投递结果未知，请核对后再操作；不会自动重发。",
+          });
+          return { ok: false, historyId, error: result.error, effectiveToolIds };
+        }
+        appendChannelHistory(task.delivery.sessionId, "assistant", displayReply);
+        appendChannelLog({ dir: "outgoing", channel: task.delivery.channel, senderId: task.delivery.targetId,
+          chatId: task.delivery.targetId, text: displayReply, hasAttachments: false });
+      }
       deps.recordHistory({
         id: historyId,
         taskId: task.id,
@@ -460,7 +416,7 @@ export function createSchedulerRunner(deps: RunnerDeps) {
         firedAt: startedAt.toISOString(),
         finishedAt: finishedAt.toISOString(),
         durationMs,
-        status: status === "success" ? "success" : "failed",
+        status: "success",
         outputPreview: displayReply.slice(0, 160),
         effectiveToolIds,
         ...(conversationId ? { sessionId: conversationId } : {}),
@@ -509,5 +465,34 @@ export function createSchedulerRunner(deps: RunnerDeps) {
     }
   }
 
-  return { runScheduledTask };
+  const prepareScheduledTask = (task: ScheduledTask, scheduledFireAt: Date, manual: boolean) => {
+    const frozenTask = structuredClone(task);
+    const target = task.delivery?.conversationId ?? task.delivery?.sessionId
+      ?? (!task.workspaceBinding ? deps.getActiveConversation?.()?.sessionId : null);
+    const historyId = deps.id(), startedAt = deps.now();
+    const effectiveToolIds = task.delivery && task.kind !== "agent" ? [] : filterToolsForTask(task, toolRegistry.getAllTools()).map(tool => tool.id);
+    // Persist BEFORE waiting for another conversation run. The engine consumes
+    // the scheduled occurrence immediately; a crash in this queue must be visible.
+    deps.recordHistory({ id: historyId, taskId: task.id, taskTitle: task.title, firedAt: startedAt.toISOString(),
+      status: "running", reason: target ? "waiting_for_conversation" : manual ? "manual fireNow" : undefined,
+      effectiveToolIds, ...(target ? { sessionId: target } : {}) });
+    return async (signal?: AbortSignal): Promise<ScheduledRunResult> => {
+      let began = false;
+      const execute = () => { began = true; return runScheduledTask(frozenTask, scheduledFireAt, manual, historyId, startedAt, target, signal); };
+      try {
+        signal?.throwIfAborted();
+        return target ? await withConversationRun(target, execute, signal) : await execute();
+      } catch (error) {
+        const cancelled = signal?.aborted && !began;
+        const reason = cancelled ? "等待会话期间已取消，未执行模型、工具或发送" : error instanceof Error ? error.message : String(error);
+        deps.recordHistory({ id: historyId, taskId: task.id, taskTitle: task.title, firedAt: startedAt.toISOString(), finishedAt: deps.now().toISOString(),
+          status: cancelled ? "skipped" : "unknown", reason, effectiveToolIds, ...(target ? { sessionId: target } : {}) });
+        return { ok: false, historyId, error: reason, effectiveToolIds };
+      }
+    };
+  };
+  return {
+    prepareScheduledTask,
+    runScheduledTask: async (task: ScheduledTask, scheduledFireAt: Date, manual: boolean, signal?: AbortSignal) => prepareScheduledTask(task, scheduledFireAt, manual)(signal),
+  };
 }

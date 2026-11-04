@@ -22,7 +22,7 @@ export async function recoverLegacyCompactionState(
       // text-summary boundary. Recover state as of the checkpoint, not the last message.
       const prefix = audit.filter(entry => entry.seq < checkpoint.seq);
       const recovered = buildFullModelContext(prefix, runReader);
-      return { ...(recovered.todoItems !== undefined ? { todoItems: recovered.todoItems } : {}), uncertainEffects: recovered.uncertainEffects };
+      return { ...(recovered.todoItems !== undefined ? { todoItems: recovered.todoItems } : {}), ...(recovered.continuity ? { continuity: recovered.continuity } : {}), uncertainEffects: recovered.uncertainEffects };
     })();
     cache.set(key, pending);
     while (cache.size > 64) cache.delete(cache.keys().next().value!);

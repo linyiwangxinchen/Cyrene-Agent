@@ -252,6 +252,14 @@ describe("QqBotAdapter", () => {
     expect(apiState.sent).toHaveLength(4);
   });
 
+  it("does not report full delivery when a long text exceeds the passive reply count", async () => {
+    const adapter = new QqBotAdapter(); adapters.push(adapter); await adapter.start();
+    wsState.options.onDispatch("C2C_MESSAGE_CREATE", c2cEvent());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const result = await adapter.send({ channel: "qqbot", chatType: "private", targetId: "OPENUSER0000000000000000000001", parts: [{ kind: "text", text: "字".repeat(7500) }] });
+    expect(result.ok).toBe(false); expect(result.error).toContain("上限"); expect(apiState.sent).toHaveLength(4);
+  });
+
   it("deduplicates repeated event pushes", async () => {
     const adapter = new QqBotAdapter();
     adapters.push(adapter);

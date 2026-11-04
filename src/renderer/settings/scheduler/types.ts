@@ -33,6 +33,11 @@ export interface ScheduledTask {
   ownerPluginId?: string;
   /** 插件任务冻结的会话模式；缺失按 work 执行。 */
   mode?: string;
+  kind?: "agent" | "reminder";
+  delivery?: { channel: string; targetId: string; sessionId: string; conversationId?: string };
+  permissionMode?: "normal" | "allow_all";
+  missedPolicy?: "skip" | "run-within-grace";
+  missedGraceMinutes?: number;
 }
 
 export interface ScheduledTaskHistoryEntry {
@@ -42,7 +47,7 @@ export interface ScheduledTaskHistoryEntry {
   firedAt: string;
   finishedAt?: string;
   durationMs?: number;
-  status: "running" | "success" | "failed" | "skipped";
+  status: "running" | "success" | "failed" | "skipped" | "unknown";
   reason?: string;
   outputPreview?: string;
   errorMessage?: string;

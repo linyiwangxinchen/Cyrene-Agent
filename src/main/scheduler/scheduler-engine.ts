@@ -8,12 +8,14 @@ interface SchedulerStoreLike {
   getTasks(): ScheduledTask[];
   updateTask(id: string, patch: Partial<ScheduledTask>): ScheduledTask;
   recordHistory(entry: ScheduledTaskHistoryEntry): void;
-  onChange(listener: (tasks: ScheduledTask[]) => void): () => void;
+  onChange(listener: (tasks: ScheduledTask[], changedTaskIds?: readonly string[]) => void): () => void;
 }
 
 export interface SchedulerEngineDeps {
   store: SchedulerStoreLike;
-  runTask: (task: ScheduledTask, scheduledFireAt: Date, manual: boolean) => Promise<ScheduledRunResult>;
+  runTask: (task: ScheduledTask, scheduledFireAt: Date, manual: boolean, signal?: AbortSignal) => Promise<ScheduledRunResult>;
+  /** Synchronously persist admission before consuming the due schedule. */
+  prepareTask?: (task: ScheduledTask, scheduledFireAt: Date, manual: boolean) => (signal?: AbortSignal) => Promise<ScheduledRunResult>;
   /**
    * 运行条件检查（在有效启用状态之上）：宿主注入"插件是否正在运行"，
    * 插件停用时定时触发和手动触发都被跳过。缺省视为无条件可运行。
@@ -26,6 +28,9 @@ export interface SchedulerEngineDeps {
 export class SchedulerEngine {
   private timer: NodeJS.Timeout | null = null;
   private runningTaskIds = new Set<string>();
+  private activeRuns = new Map<string, { controller: AbortController; task: ScheduledTask }>();
+  private internalUpdates = new Set<string>();
+  private admissionRetryAfter = 0;
   private readonly now: () => Date;
   private readonly id: () => string;
   private unsubscribeStore?: () => void;
@@ -38,7 +43,10 @@ export class SchedulerEngine {
   start(): void {
     this.normalizeOverdueTasks();
     this.unsubscribeStore?.();
-    this.unsubscribeStore = this.deps.store.onChange(() => this.scheduleNextTimer());
+    this.unsubscribeStore = this.deps.store.onChange((tasks, changedTaskIds) => {
+      this.cancelChangedRuns(tasks, changedTaskIds);
+      this.scheduleNextTimer();
+    });
     this.scheduleNextTimer();
   }
 
@@ -47,6 +55,7 @@ export class SchedulerEngine {
     this.timer = null;
     this.unsubscribeStore?.();
     this.unsubscribeStore = undefined;
+    for (const run of this.activeRuns.values()) run.controller.abort();
   }
 
   /**
@@ -54,6 +63,7 @@ export class SchedulerEngine {
    * 只推进下一次触发时间，不补跑停用期间错过的任务。
    */
   refreshPluginTasks(): void {
+    this.cancelChangedRuns(this.deps.store.getTasks());
     this.normalizeOverdueTasks();
     this.scheduleNextTimer();
   }
@@ -64,12 +74,31 @@ export class SchedulerEngine {
     if (!isTaskEnabled(task)) return { ok: false, reason: "task is disabled" };
     if (!this.canRun(task)) return { ok: false, reason: "plugin not running" };
     if (this.runningTaskIds.has(task.id)) return { ok: false, reason: "task already running" };
-    await this.runOne(task, this.now(), true);
-    return { ok: true };
+    return this.runOne(task, this.now(), true);
   }
 
   private canRun(task: ScheduledTask): boolean {
     return this.deps.canRunTask ? this.deps.canRunTask(task) : true;
+  }
+
+  private cancelChangedRuns(tasks: ScheduledTask[], changedTaskIds?: readonly string[]): void {
+    const execution = (task: ScheduledTask) => JSON.stringify([task.prompt, task.schedule, task.mode, task.kind,
+      task.workspaceBinding, task.delivery, task.toolMode, task.allowedToolIds, task.permissionMode,
+      task.ownerPluginId, task.approvalFingerprint]);
+    for (const [id, run] of this.activeRuns) {
+      const current = tasks.find(task => task.id === id);
+      if (this.internalUpdates.has(id)) { if (current) run.task = current; continue; }
+      const changed = changedTaskIds?.includes(id) || (current && (current.enabled !== run.task.enabled || current.pluginUserEnabled !== run.task.pluginUserEnabled));
+      if (!current || !this.canRun(current) || execution(current) !== execution(run.task) || (changed && !isTaskEnabled(current))) run.controller.abort();
+      if (current) run.task = current;
+    }
+  }
+
+  /** Consuming a once/maxRuns schedule is not the same as user cancellation. */
+  private updateSchedule(id: string, patch: Partial<ScheduledTask>): void {
+    this.internalUpdates.add(id);
+    try { this.deps.store.updateTask(id, patch); }
+    finally { this.internalUpdates.delete(id); }
   }
 
   /** 关停任务时写入的 patch：用户任务清 enabled，插件任务清用户授权。 */
@@ -94,6 +123,8 @@ export class SchedulerEngine {
         continue;
       }
       if (next.getTime() > now.getTime()) continue;
+      if (!task.ownerPluginId && task.missedPolicy === "run-within-grace"
+        && now.getTime() - next.getTime() <= (task.missedGraceMinutes ?? 15) * 60_000) continue;
       if (task.schedule.kind === "once") {
         this.deps.store.recordHistory({
           id: this.id(),
@@ -128,7 +159,7 @@ export class SchedulerEngine {
       })
       .sort((a, b) => String(a.nextFireAt).localeCompare(String(b.nextFireAt)))[0];
     if (!nextTask?.nextFireAt) return;
-    const delay = Math.max(0, new Date(nextTask.nextFireAt).getTime() - now.getTime());
+    const delay = Math.max(0, new Date(nextTask.nextFireAt).getTime() - now.getTime(), this.admissionRetryAfter - now.getTime());
     this.timer = setTimeout(() => void this.fireDueTasks(), Math.min(delay, MAX_TIMER_DELAY_MS));
   }
 
@@ -174,7 +205,14 @@ export class SchedulerEngine {
         });
         continue;
       }
-      void this.runOne(task, scheduledFireAt, false);
+      try {
+        void this.runOne(task, scheduledFireAt, false).catch(error => console.error("[Scheduler] 执行收尾失败:", error));
+      } catch (error) {
+        // No durable admission, no occurrence consumption and no model/tool call.
+        console.error("[Scheduler] 无法保存任务运行记录，保留原计划稍后重试:", error);
+        this.admissionRetryAfter = this.now().getTime() + 5_000;
+        continue;
+      }
       const rawNext = computeNextFireAtAfter(task.schedule, scheduledFireAt);
       const next = rawNext && rawNext.getTime() <= now.getTime()
         ? normalizeOverdueNextFireAt(task.schedule, rawNext, now)
@@ -182,7 +220,7 @@ export class SchedulerEngine {
       const finished = task.schedule.kind === "once"
         || (task.maxRuns !== undefined && nextRunCount >= task.maxRuns)
         || Boolean(task.endAt && (!next || next.getTime() > Date.parse(task.endAt)));
-      this.deps.store.updateTask(task.id, {
+      this.updateSchedule(task.id, {
         ...(finished ? this.disablePatch(task) : { nextFireAt: next ? next.toISOString() : null }),
         lastFiredAt: scheduledFireAt.toISOString(),
       });
@@ -190,7 +228,7 @@ export class SchedulerEngine {
     this.scheduleNextTimer();
   }
 
-  private async runOne(task: ScheduledTask, scheduledFireAt: Date, manual: boolean): Promise<void> {
+  private runOne(task: ScheduledTask, scheduledFireAt: Date, manual: boolean): Promise<{ ok: boolean; reason?: string }> {
     if (this.runningTaskIds.has(task.id)) {
       if (!manual) {
         this.deps.store.recordHistory({
@@ -203,13 +241,24 @@ export class SchedulerEngine {
           effectiveToolIds: [],
         });
       }
-      return;
+      return Promise.resolve({ ok: false, reason: "previous run still active" });
     }
+    const prepared = this.deps.prepareTask?.(task, scheduledFireAt, manual);
     this.runningTaskIds.add(task.id);
-    try {
-      await this.deps.runTask(task, scheduledFireAt, manual);
+    const controller = new AbortController();
+    this.activeRuns.set(task.id, { controller, task });
+    return (async () => { try {
+      const result = await (prepared ? prepared(controller.signal) : this.deps.runTask(task, scheduledFireAt, manual, controller.signal));
+      return { ok: result.ok, ...(result.error ? { reason: result.error } : {}) };
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.deps.store.recordHistory({ id: this.id(), taskId: task.id, taskTitle: task.title,
+        firedAt: scheduledFireAt.toISOString(), finishedAt: this.now().toISOString(),
+        status: "unknown", errorMessage: `执行中断，结果未知，不会自动重试：${reason}`, effectiveToolIds: [] });
+      return { ok: false, reason };
     } finally {
       this.runningTaskIds.delete(task.id);
-    }
+      this.activeRuns.delete(task.id);
+    } })();
   }
 }

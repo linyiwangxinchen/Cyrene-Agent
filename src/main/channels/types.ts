@@ -114,7 +114,16 @@ export interface OutgoingMessage {
 }
 
 /** Transient cancellation, never persisted as part of the message. */
-export interface ChannelSendOptions { signal?: AbortSignal }
+export interface ChannelSendOptions {
+  signal?: AbortSignal;
+  /** Stable identity supplied by the originating CTA turn/scheduled run. */
+  operationId?: string;
+  conversationId?: string;
+  assistantTurnId?: string;
+  runId?: string;
+  /** Transient pre-part cancellation; never serialized to the outbox. */
+  canContinue?: () => boolean;
+}
 
 /** 渠道状态（UI 展示用） */
 export interface ChannelStatus {

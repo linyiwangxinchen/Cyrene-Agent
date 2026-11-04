@@ -1,5 +1,8 @@
+import { detectUserMood } from "./mood-cues"
 import { randomUUID } from "node:crypto"
 import { RelationshipRepository } from "./relationship-repository"
+import { normalizeFollowups, resolveExplicitFollowupReply } from "./followup-state"
+import type { CompanionFollowup } from "../../shared/companion"
 import type { CompanionSnapshot, CompanionCommand, CompanionPermissions, CompanionRecord, RelationshipPreferences } from "../../shared/companion"
 import { XILIAN_CHARACTER_PACK } from "../character-packs/xilian-pack"
 import type { ChannelId } from "../channels/types"
@@ -57,6 +60,7 @@ interface RelationshipLogData {
   records: CompanionRecord[]
   seenEventKeys: string[]
   lastDiaryDay: string
+  followups: CompanionFollowup[]
 }
 
 const EMPTY_DATA: RelationshipLogData = {
@@ -67,6 +71,7 @@ const EMPTY_DATA: RelationshipLogData = {
   records: [],
   seenEventKeys: [],
   lastDiaryDay: "",
+  followups: [],
   relationshipState: createDefaultRelationshipState(0),
   affectState: createDefaultAffectState(0),
 }
@@ -85,17 +90,6 @@ function localDate(ts: number): string {
 function compact(text: string, max = 120): string {
   const s = text.replace(/\s+/g, " ").trim()
   return s.length > max ? s.slice(0, max) + "..." : s
-}
-
-function detectUserMood(text: string): string {
-  if (/累|疲惫|困|没精神|撑不住|倦/.test(text)) return "疲惫"
-  // 仅匹配明确指向交互方式的边界表达，避免"别/不想/先不"等常用词误伤
-  // （如"我今天不想xx"、"想吃点别的"不应触发低打扰偏好）
-  if (/影响观感|太影响|不要.{0,4}(确认|弹|问|卡片)|别.{0,4}(问|弹|确认|卡片)|少问|别问了/.test(text)) return "明确边界"
-  if (/焦虑|压力|烦|崩|紧张|担心|慌/.test(text)) return "焦虑"
-  if (/难过|伤心|委屈|失落|想哭/.test(text)) return "低落"
-  if (/开心|高兴|舒服|喜欢|好耶|太好了/.test(text)) return "开心"
-  return "未知"
 }
 
 function deriveSignal(userText: string, userMood: string): {
@@ -182,6 +176,7 @@ function normalizeData(value: unknown): RelationshipLogData {
   return {
     ...EMPTY_DATA, ...raw, relationshipState: relationship, affectState: affect,
     permissions,
+    followups: normalizeFollowups(raw.followups),
     entries: Array.isArray(raw.entries) ? raw.entries.slice(-MAX_ENTRIES) : [],
     dailySummaries: Array.isArray(raw.dailySummaries) ? raw.dailySummaries.slice(-MAX_DAILY_SUMMARIES) : [],
     records: Array.isArray(raw.records) ? raw.records.slice(-500) : [],
@@ -246,12 +241,13 @@ export class RelationshipLogStore {
   }
   async snapshot(): Promise<CompanionSnapshot> {
     const data = this.repository.read();
-    return { revision: data.revision, relationship: data.relationshipState, affect: decayAffectState(data.affectState), permissions: data.permissions, records: data.records.slice(-100).reverse() };
+    return { revision: data.revision, relationship: data.relationshipState, affect: decayAffectState(data.affectState), permissions: data.permissions, records: data.records.slice(-100).reverse(), followups: data.followups };
   }
   async forgetConversation(conversationId: string): Promise<void> {
     const data = this.repository.read();
     data.entries = data.entries.filter(item => item.conversationId !== conversationId);
     data.records = data.records.filter(item => item.conversationId !== conversationId);
+    data.followups = data.followups.filter(item => item.conversationId !== conversationId);
     data.dailySummaries = [];
     data.affectState = createDefaultAffectState();
     this.repository.purgeLegacy();
@@ -259,6 +255,21 @@ export class RelationshipLogStore {
   }
   async exportData(): Promise<string> {
     return JSON.stringify({ format: "cyrene.relationship.v1", exportedAt: Date.now(), ...this.repository.read() }, null, 2);
+  }
+  /** 投递事实到达后更新事项；重复 intent 不重复催问，不越过用户暂停/改绑。 */
+  async settleFollowup(id: string, conversationId: string, intentId: string, at: number, outcome: "asked" | "unknown" | "incomplete"): Promise<void> {
+    const data = this.repository.read();
+    const item = data.followups.find(item => item.id === id && item.conversationId === conversationId);
+    if (!item || item.lastIntentId === intentId || item.status !== "active") return;
+    item.status = outcome === "asked" ? "awaiting_reply" : "paused";
+    item.lastIntentId = intentId; item.updatedAt = at;
+    if (outcome === "asked") item.lastAskedAt = at;
+    item.resolutionReason = outcome === "asked" ? "已发出一次关怀，等待回复；不会自动反复催促"
+      : outcome === "unknown" ? "渠道投递结果未知，已暂停，核对后可重新约时间"
+        : "渠道仅投递部分内容，已暂停，请先到渠道投递记录核对或恢复";
+    data.records.push({ id: randomUUID(), kind: "followup", at, conversationId, sourceEventId: intentId, text: `「${item.topic}」：${item.resolutionReason}` });
+    data.records = data.records.slice(-500); data.revision++;
+    this.repository.write(data);
   }
   async updatePreferences(patch: RelationshipPreferencesPatch): Promise<RelationshipState> {
     // Legacy in-process callers. Public IPC uses a mandatory expectedRevision.
@@ -284,6 +295,25 @@ export class RelationshipLogStore {
         else throw new Error(`无效能力设置：${key}`);
       }
       data.records.push({ id: randomUUID(), kind: "permissions", at: now, text: `能力限制已更新：${data.permissions.preset}${data.permissions.paused ? "，已暂停" : ""}` });
+    } else if (command.type === "followup_save") {
+      const old = command.id ? data.followups.find(item => item.id === command.id) : undefined;
+      if (command.id && !old) throw new Error("跟进事项不存在");
+      if (!Number.isFinite(command.nextEligibleAt) || command.nextEligibleAt < now) throw new Error("请为跟进事项选择未来时间");
+      const item: CompanionFollowup = { id: old?.id ?? randomUUID(), topic: command.topic, conversationId: command.conversationId,
+        nextEligibleAt: command.nextEligibleAt, status: "active", createdAt: old?.createdAt ?? now, updatedAt: now,
+        ...(old?.lastAskedAt ? { lastAskedAt: old.lastAskedAt } : {}) };
+      data.followups = normalizeFollowups([...data.followups.filter(item => item.id !== old?.id), item]);
+      data.records.push({ id: randomUUID(), kind: "followup", at: now, conversationId: item.conversationId, text: `用户设置具体跟进：${item.topic}` });
+    } else if (command.type === "followup_status") {
+      const item = data.followups.find(item => item.id === command.id && item.conversationId === command.conversationId);
+      if (!item) throw new Error("跟进事项不存在");
+      if (!["active", "completed", "paused", "cancelled"].includes(command.status)) throw new Error("跟进状态无效");
+      if (command.status === "active") {
+        if (!Number.isFinite(command.nextEligibleAt) || command.nextEligibleAt! < now) throw new Error("重新跟进需要明确选择未来时间");
+        item.nextEligibleAt = command.nextEligibleAt!;
+      }
+      item.status = command.status; item.updatedAt = now; item.resolutionReason = "用户在设置中更新";
+      data.records.push({ id: randomUUID(), kind: "followup", at: now, conversationId: item.conversationId, text: `用户将「${item.topic}」设为 ${item.status}` });
     } else if (command.type === "repair") {
       if (typeof command.note !== "string" || !command.note.trim() || command.note.length > 500) throw new Error("请填写 1–500 字的修复约定");
       data.relationshipState.repairCount++;
@@ -297,10 +327,10 @@ export class RelationshipLogStore {
       data.affectState = createDefaultAffectState(now);
       this.repository.purgeLegacy();
     } else if (command.type === "clear_history" || command.type === "reset_relationship") {
-      data.entries = []; data.dailySummaries = []; data.records = [];
+      data.entries = []; data.dailySummaries = []; data.records = []; data.followups = [];
       data.affectState = createDefaultAffectState(now);
       data.lastDiaryDay = new Date(now).toISOString().slice(0, 10);
-      if (command.type === "reset_relationship") data.relationshipState = createDefaultRelationshipState(now);
+      if (command.type === "reset_relationship") { data.relationshipState = createDefaultRelationshipState(now); data.followups = []; }
       this.repository.purgeLegacy();
     } else throw new Error("未知关系命令");
     data.records = data.records.slice(-500);
@@ -315,6 +345,17 @@ export class RelationshipLogStore {
     if (!userText && !assistantText) return null
 
     const data = this.repository.read()
+    if (input.privateContext !== false && input.conversationId) {
+      let changed = false;
+      for (const item of data.followups.filter(item => item.conversationId === input.conversationId && ["active", "awaiting_reply", "paused"].includes(item.status))) {
+        const status = resolveExplicitFollowupReply(item.topic, userText);
+        if (!status) continue;
+        item.status = status; item.updatedAt = Date.now(); item.resolutionReason = "用户在绑定会话中明确表示已完成或不要再问";
+        changed = true;
+        if (data.relationshipState.recordHistory) data.records.push({ id: randomUUID(), kind: "followup", at: item.updatedAt, conversationId: item.conversationId, text: `「${item.topic}」已${status === "completed" ? "完成" : "取消"}：用户明确表达` });
+      }
+      if (changed) { data.revision++; this.repository.write(data); }
+    }
     if (input.privateContext === false || data.relationshipState.paused || !data.relationshipState.recordHistory) return null
     if (input.sourceEventId && data.entries.some(e => e.sourceEventId === input.sourceEventId && e.conversationId === input.conversationId)) return null
     if (input.runId && data.entries.some(e => e.runId === input.runId && e.conversationId === input.conversationId)) return null

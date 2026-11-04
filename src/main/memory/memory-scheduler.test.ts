@@ -155,7 +155,7 @@ describe("MemoryScheduler", () => {
     for (let i = 1; i <= 6; i++) {
       scheduler.scheduleMemoryWrite(`user ${i}`, `assistant ${i}`)
     }
-    await vi.waitFor(() => expect(deps.writeMemory).toHaveBeenCalledWith([candidate], expect.any(Function)))
+    await vi.waitFor(() => expect(deps.writeMemory).toHaveBeenCalledWith([{ ...candidate, sourceConversationId: "c1", sourceMessageIds: [] }], expect.any(Function)))
 
     const turns = vi.mocked(deps.judgeMemory).mock.calls[0][0]
     expect(turns.map((turn: MemoryJudgeTurn) => turn.userInput)).toEqual([
@@ -167,6 +167,30 @@ describe("MemoryScheduler", () => {
       "user 6",
     ])
     expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6)
+  })
+
+  it("removes forgotten user entries before the model can paraphrase and relearn them", async () => {
+    const { scheduler, deps } = createScheduler({ filterSources: async turns => turns.filter(turn => turn.userEntryId !== "user-u3") })
+    for (let i = 1; i <= 6; i++) scheduler.scheduleMemoryWrite(`U${i}`, `A${i}`)
+    await vi.waitFor(() => expect(deps.judgeMemory).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(deps.judgeMemory).mock.calls[0][0].map(turn => turn.userInput)).toEqual(["U1", "U2", "U4", "U5", "U6"])
+  })
+
+  it("discards a model result if an included source was forgotten during generation", async () => {
+    let release!: () => void
+    const forgotten = new Set<string>()
+    const { scheduler, deps } = createScheduler({
+      filterSources: async turns => turns.filter(turn => !forgotten.has(turn.userEntryId)),
+      judgeMemory: vi.fn(async () => {
+        await new Promise<void>(resolve => { release = resolve })
+        return { candidates: [{ layer: "L2", content: "paraphrase", triggerText: "not an exact quote", confidence: 0.9 }], entities: [] } as MemoryJudgeResult
+      }),
+    })
+    for (let i = 1; i <= 6; i++) scheduler.scheduleMemoryWrite(`U${i}`, `A${i}`)
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"))
+    forgotten.add("user-u3"); release()
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6))
+    expect(deps.writeMemory).not.toHaveBeenCalled()
   })
 
   it("uses an overlapping 8-turn window on later MemoryJudge runs", async () => {

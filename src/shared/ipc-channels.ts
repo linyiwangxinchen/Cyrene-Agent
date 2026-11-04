@@ -517,6 +517,10 @@ export const IPC = {
   // 消息日志
   CHANNELS_LOG_GET: "channels:log:get",
   CHANNELS_LOG_CLEAR: "channels:log:clear",
+  CHANNELS_RECOVERY_LIST: "channels:recovery:list",
+  CHANNELS_RECOVERY_RETRY: "channels:recovery:retry",
+  CHANNELS_RECOVERY_RESOLVE: "channels:recovery:resolve",
+  CHANNELS_RECOVERY_CANCEL: "channels:recovery:cancel",
   // 渠道上下文绑定：设置页选择外部聊天继续使用某个桌面会话
   CHANNELS_CONTEXT_BINDINGS_GET: "channels:context-bindings:get",
   CHANNELS_CONTEXT_BIND: "channels:context-bindings:bind",

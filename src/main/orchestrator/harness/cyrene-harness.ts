@@ -50,6 +50,7 @@ import { emitContextUsage, emitCacheDiagnostic } from "./harness-observability";
 import { StreamController } from "./stream-controller";
 import { TimeoutClock } from "./timeout-clock";
 import { buildCurrentTodoNotebookContext } from "./todo-working-notebook";
+import { buildTaskContinuityContext } from "./task-continuity";
 import { appendInternalTranscriptMessage, createInternalTranscriptMessage } from "./internal-transcript";
 import { TranscriptWriteError } from "../transcript-sink";
 import { callLLM, summarizeHistory } from "./harness-llm";
@@ -389,8 +390,8 @@ function createRun(input: HarnessInput): HarnessRun {
       throw new TranscriptWriteError("effect_resolution", error);
     }
   };
-  const recordTaskState: NonNullable<ToolDispatchContext["onTaskState"]> = async ({ toolCallId, items }) => {
-    const nextTodoItemsJson = JSON.stringify(items);
+  const recordTaskState: NonNullable<ToolDispatchContext["onTaskState"]> = async ({ toolCallId, items, continuity }) => {
+    const nextTodoItemsJson = JSON.stringify({ items, continuity });
     if (nextTodoItemsJson === run.lastPersistedTodoItemsJson) return;
     const sink = input.transcriptSink;
     if (sink?.appendTaskState) {
@@ -399,7 +400,7 @@ function createRun(input: HarnessInput): HarnessRun {
         throw new TranscriptWriteError("task_state", new Error("TRANSCRIPT_ASSISTANT_ENTRY_MISSING"));
       }
       try {
-        await sink.appendTaskState({ assistantEntryId, toolCallId, items });
+        await sink.appendTaskState({ assistantEntryId, toolCallId, items, ...(continuity ? { continuity } : {}) });
       } catch (error) {
         throw new TranscriptWriteError("task_state", error);
       }
@@ -445,7 +446,7 @@ function createRun(input: HarnessInput): HarnessRun {
     },
     toolCallStartedAt: new Map(),
     startedToolCallIds: new Set(),
-    lastPersistedTodoItemsJson: JSON.stringify(state.todoItems),
+    lastPersistedTodoItemsJson: JSON.stringify({ items: state.todoItems, continuity: state.continuity }),
   };
   return run;
 }
@@ -459,6 +460,7 @@ function materializeInitialContext(run: HarnessRun): void {
   const parts = [
     input.initialInternalContext?.content,
     input.promptLayers?.runtimeContext,
+    buildTaskContinuityContext(run.state.continuity),
     run.state.todoItems.length > 0 ? buildCurrentTodoNotebookContext(run.state.todoItems) : undefined,
   ].filter((part): part is string => Boolean(part?.trim()));
   if (parts.length === 0) return;

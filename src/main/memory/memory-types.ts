@@ -188,6 +188,8 @@ export interface MemoryCandidate {
   forbiddenOverclaims?: string[]
   /** 来源会话 ID，由调度层注入（非 LLM 输出），用于 L2 回溯 */
   sourceConversationId?: string
+  /** Only exact, unambiguous user-entry matches from the scheduler, never model-generated IDs. */
+  sourceMessageIds?: string[]
 }
 
 export interface MemoryJudgeTurn {
@@ -219,6 +221,13 @@ export interface MemoryStore {
   conflictLogs?: ConflictLog[]
   /** L2 热层 DMAE 运行时状态（V5） */
   l2DmaeStates?: L2DmaeState[]
+  profileSources?: Record<string, { content: string; sources: import("../../shared/memory-governance").MemorySourceLocator[] }>
+  forgetting?: {
+    memoryIds: string[]
+    sourceKeys: string[]
+    wikiClaimKeys: string[]
+    profileRecords?: Array<{ key: string; sourceKeys: string[] }>
+  }
   /** @deprecated Use schemaVersion for memory.json migrations. */
   version: number
 }

@@ -3,11 +3,23 @@ import type { IpcScope } from "../application/ipc-scope";
 import { memoryStore } from "./memory-store";
 import { createMemoryGovernance } from "./memory-governance";
 import { addL2MemoryVector, deleteUserMemoryVectors, flushRAGStore } from "../rag";
+import { getWikiMemoryStore } from "./wiki-memory-scheduler";
 
 export function registerMemoryGovernanceIpc(ipc: IpcScope): void {
   const service = createMemoryGovernance({
     load: () => memoryStore.load(),
     save: state => memoryStore.save(state),
+    relatedWiki: async sources => {
+      const wiki = getWikiMemoryStore();
+      if (!wiki) return { available: false, claims: [] };
+      try { return { available: true, claims: await wiki.findClaimsBySources(sources) }; }
+      catch { return { available: false, claims: [] }; }
+    },
+    deleteWiki: async claim => {
+      const wiki = getWikiMemoryStore();
+      if (!wiki) throw new Error("Wiki unavailable");
+      await wiki.eraseGovernedClaim(claim);
+    },
     deleteVectors: async ids => { deleteUserMemoryVectors(ids); await flushRAGStore(); },
     sync: async (id, content) => {
       try {

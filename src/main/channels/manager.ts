@@ -19,6 +19,7 @@ export type DispatchFn = (msg: IncomingMessage) => Promise<OutgoingMessage | nul
 export class ChannelManager {
   private adapters = new Map<ChannelId, ChannelAdapter>();
   private dispatchFn: DispatchFn | null = null;
+  private acceptFn: ((msg: IncomingMessage) => Promise<void>) | null = null;
   /** 启动后已开启的 adapter（start 成功的才会调 stop） */
   private startedAdapters = new Set<ChannelId>();
   private stoppingAdapters = new Set<ChannelId>();
@@ -36,11 +37,13 @@ export class ChannelManager {
   }
 
   /** 设置 dispatcher 入口。注册 adapter 时机不限，dispatcher 注入必须早于 startAll。 */
-  setDispatcher(fn: DispatchFn): void {
+  setDispatcher(fn: DispatchFn, accept?: (msg: IncomingMessage) => Promise<void>): void {
     this.dispatchFn = fn;
+    this.acceptFn = accept ?? null;
     // 给所有已注册的 adapter 注入 handler
     for (const adapter of this.adapters.values()) {
       setAdapterHandler(adapter, this.makeAdapterHandler(adapter.id));
+      this.setAcceptanceHandler(adapter);
     }
   }
 
@@ -53,6 +56,7 @@ export class ChannelManager {
         // 每次 start 前重新注入 handler（防止 setDispatcher 之前 adapter 已经被外部注入 null）
         if (this.dispatchFn) {
           setAdapterHandler(adapter, this.makeAdapterHandler(adapter.id));
+          this.setAcceptanceHandler(adapter);
         }
         await adapter.start();
         this.startedAdapters.add(adapter.id);
@@ -87,6 +91,7 @@ export class ChannelManager {
     if (this.startedAdapters.has(id)) return;
     if (this.dispatchFn) {
       setAdapterHandler(adapter, this.makeAdapterHandler(id));
+      this.setAcceptanceHandler(adapter);
     }
     await adapter.start();
     this.startedAdapters.add(id);
@@ -150,6 +155,13 @@ export class ChannelManager {
         return null;
       }
     };
+  }
+
+  private setAcceptanceHandler(adapter: ChannelAdapter): void {
+    adapter.onMessageAccepted = this.acceptFn ? async msg => {
+      if (this.stoppingAdapters.has(adapter.id) || !adapter.getStatus().enabled) throw new Error("channel_disabled");
+      await this.acceptFn!(msg); // Do not swallow persistence failures: transport must retain its cursor.
+    } : null;
   }
 }
 

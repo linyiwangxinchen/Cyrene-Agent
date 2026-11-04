@@ -9,6 +9,7 @@ import { SettingsInput, SettingsPasswordInput, SettingsSelect, SettingsSwitch } 
 import { useTranslation } from "../../i18n";
 import "./ChannelsSettingsPanel.css";
 import { Card } from "../../components/ui/Card";
+import { ChannelRecoveryPanel, type ChannelRecoveryApi } from "./ChannelRecoveryPanel";
 
 type ChannelId = "wechat" | "feishu" | "qq" | "qqbot";
 type ChannelConfig = Record<string, unknown>;
@@ -72,6 +73,10 @@ function splitList(value: string, openid = false): string[] {
 export function ChannelsSettingsPanel() {
   const { t } = useTranslation();
   const api = window.settings as unknown as SettingsApi | undefined;
+  const recoveryApi = useMemo<ChannelRecoveryApi | null>(() => api?.channelsRecoveryList ? {
+    list: () => api.channelsRecoveryList(), retry: input => api.channelsRecoveryRetry(input),
+    resolve: input => api.channelsRecoveryResolve(input), cancel: input => api.channelsRecoveryCancel(input),
+  } : null, [api]);
   const [values, setValues] = useState<ChannelValues>(defaultValues);
   const [statuses, setStatuses] = useState<ChannelStatuses>({});
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -330,6 +335,7 @@ export function ChannelsSettingsPanel() {
         </Card>}
       </section>
     </>}
+    {!loading && recoveryApi && <section className="cy-settings-section"><ChannelRecoveryPanel api={recoveryApi} /></section>}
     {channelRows.map(({ id }) => renderChannelDialog(id))}
   </>;
 }

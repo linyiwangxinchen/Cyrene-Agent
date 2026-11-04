@@ -37,6 +37,7 @@ export interface MaterializedTranscript {
   messages: ChatMessage[];
   uncertainEffects: UncertainEffect[];
   todoItems?: TodoItem[];
+  continuity?: import("./harness/task-continuity").TaskContinuity;
   todoItemsSource?: "transcript" | "legacy_run_store" | "legacy_presentation";
   throughSeq: number;
 }
@@ -323,6 +324,7 @@ function memoizeRunReader(runReader: TranscriptRunReader): TranscriptRunReader {
 
 interface MaterializedRecoveryState {
   todoItems?: TodoItem[];
+  continuity?: import("./harness/task-continuity").TaskContinuity;
   todoItemsSource?: "transcript" | "legacy_run_store" | "legacy_presentation";
   uncertainEffects: UncertainEffect[];
 }
@@ -341,12 +343,14 @@ function materializeRecoveryState(
   const activeAssistantMessageIds = new Set(activeNodes
     .filter((node): node is Extract<ActiveNode, { kind: "assistant" }> => node.kind === "assistant")
     .flatMap((node) => [node.entry.id, ...(node.entry.turnId ? [node.entry.turnId] : [])]));
-  const taskState = entries
+  const taskStates = entries
     .filter((entry): entry is Extract<TranscriptEntry, { kind: "task_state" }> =>
       entry.kind === "task_state" && activeAssistantIds.has(entry.payload.assistantEntryId),
     )
-    .sort((left, right) => left.seq - right.seq)
-    .at(-1);
+    .sort((left, right) => left.seq - right.seq);
+  const taskState = taskStates.at(-1);
+  // 旧 update_todo 仅更新列表，不得抹去当前活动分支此前记录的接续笔记。
+  const continuity = taskStates.filter(entry => entry.payload.continuity !== undefined).at(-1)?.payload.continuity ?? seed?.continuity;
 
   let todoItems = taskState ? taskState.payload.items : undefined;
   let todoItemsSource: MaterializedRecoveryState["todoItemsSource"] = taskState ? "transcript" : undefined;
@@ -448,6 +452,7 @@ function materializeRecoveryState(
 
   return {
     ...(todoItems ? { todoItems, todoItemsSource } : {}),
+    ...(continuity ? { continuity: structuredClone(continuity) } : {}),
     uncertainEffects,
   };
 }
@@ -1125,6 +1130,7 @@ export function buildFullModelContext(
     messages: result.messages,
     uncertainEffects: result.uncertainEffects,
     ...(result.todoItems ? { todoItems: result.todoItems } : {}),
+    ...(result.continuity ? { continuity: result.continuity } : {}),
     ...(result.todoItemsSource ? { todoItemsSource: result.todoItemsSource } : {}),
     throughSeq: result.throughSeq,
   };
@@ -1146,6 +1152,7 @@ export function buildFullModelContextWithSources(
     messages: withInternalNotes.messages,
     uncertainEffects: recovery.uncertainEffects,
     ...(recovery.todoItems ? { todoItems: recovery.todoItems } : {}),
+    ...(recovery.continuity ? { continuity: recovery.continuity } : {}),
     ...(recovery.todoItemsSource ? { todoItemsSource: recovery.todoItemsSource } : {}),
     throughSeq: active.throughSeq,
     sourceSeqs: withInternalNotes.sourceSeqs,
@@ -1184,6 +1191,7 @@ export function buildCompactionSourceView(
     ],
     uncertainEffects: recovery.uncertainEffects,
     ...(recovery.todoItems ? { todoItems: recovery.todoItems } : {}),
+    ...(recovery.continuity ? { continuity: recovery.continuity } : {}),
     ...(recovery.todoItemsSource ? { todoItemsSource: recovery.todoItemsSource } : {}),
     throughSeq: active.throughSeq,
     // 旧摘要对应的源边界是上一个检查点的 sourceThroughSeq：切点覆盖它时，
@@ -1289,6 +1297,7 @@ export function buildModelContextFromCompactedView(
     ],
     uncertainEffects: recovery.uncertainEffects,
     ...(recovery.todoItems ? { todoItems: recovery.todoItems } : {}),
+    ...(recovery.continuity ? { continuity: recovery.continuity } : {}),
     ...(recovery.todoItemsSource ? { todoItemsSource: recovery.todoItemsSource } : {}),
     throughSeq: active.throughSeq,
   };

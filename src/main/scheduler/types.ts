@@ -14,6 +14,7 @@ export type ScheduleConfig =
   | { kind: "interval"; every: number; unit: "minutes" | "hours" };
 
 export type SchedulerToolMode = "all-enabled" | "allow-list";
+export type MissedTaskPolicy = "skip" | "run-within-grace";
 
 /** 定时任务的可选外部渠道投递目标。凭证和协议上下文仍由渠道适配器持有。 */
 export interface ScheduledDeliveryTarget {
@@ -23,6 +24,8 @@ export interface ScheduledDeliveryTarget {
   threadId?: string;
   /** 用于把发送结果写回对应的渠道会话历史。 */
   sessionId: string;
+  /** 创建任务时冻结的权威会话，不随渠道重新绑定而改变。 */
+  conversationId?: string;
 }
 
 export interface ScheduledTask {
@@ -53,6 +56,9 @@ export interface ScheduledTask {
   /** reminder 任务不需要工作区，由调度器触发一次渠道侧人格回复。 */
   kind?: "agent" | "reminder";
   delivery?: ScheduledDeliveryTarget;
+  permissionMode?: "normal" | "allow_all";
+  missedPolicy?: MissedTaskPolicy;
+  missedGraceMinutes?: number;
 }
 
 export interface NewScheduledTaskInput {
@@ -71,11 +77,14 @@ export interface NewScheduledTaskInput {
   approvalFingerprint?: string;
   kind?: "agent" | "reminder";
   delivery?: ScheduledDeliveryTarget;
+  permissionMode?: "normal" | "allow_all";
+  missedPolicy?: MissedTaskPolicy;
+  missedGraceMinutes?: number;
 }
 
 export type ScheduledTaskPatch = Partial<Pick<
   ScheduledTask,
-  "title" | "prompt" | "enabled" | "schedule" | "nextFireAt" | "lastFiredAt" | "toolMode" | "allowedToolIds" | "pluginUserEnabled" | "approvalFingerprint" | "mode" | "workspaceBinding" | "maxRuns" | "endAt" | "kind" | "delivery"
+  "title" | "prompt" | "enabled" | "schedule" | "nextFireAt" | "lastFiredAt" | "toolMode" | "allowedToolIds" | "pluginUserEnabled" | "approvalFingerprint" | "mode" | "workspaceBinding" | "maxRuns" | "endAt" | "kind" | "delivery" | "permissionMode" | "missedPolicy" | "missedGraceMinutes"
 >> & { maxRuns?: number | null; endAt?: string | null };
 
 export interface ScheduledTaskHistoryEntry {
@@ -85,7 +94,7 @@ export interface ScheduledTaskHistoryEntry {
   firedAt: string;
   finishedAt?: string;
   durationMs?: number;
-  status: "running" | "success" | "failed" | "skipped";
+  status: "running" | "success" | "failed" | "skipped" | "unknown";
   reason?: string;
   outputPreview?: string;
   errorMessage?: string;

@@ -1162,6 +1162,7 @@ export async function buildAgentRunOptions(
       ...(transcriptContext || initialTodoItems ? {
         initialHarnessState: {
           todoItems: initialTodoItems ?? [],
+          ...(transcriptContext?.continuity ? { continuity: transcriptContext.continuity } : {}),
           uncertainEffects: transcriptContext?.uncertainEffects ?? [],
         },
       } : {}),

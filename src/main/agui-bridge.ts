@@ -8,6 +8,7 @@
 // Agent 的 Observable 是内存流、跨不过进程边界。
 // 因此主进程统一持有运行并仅把事件发送给 Renderer。
 import { app, IpcMainInvokeEvent, WebContents } from "electron";
+import { tryAcquireConversationRun } from "./orchestrator/conversation-run-guard";
 import { randomUUID } from "node:crypto";
 import { getConversationDatabase } from "./storage/conversation-database-client";
 import type { DispatchReceipt } from "./storage/conversation-run-repository";
@@ -715,6 +716,10 @@ export function registerAgUiIpc(
 
     let admitted = false;
     try {
+      const releaseSharedGuard = tryAcquireConversationRun(sessionId);
+      if (!releaseSharedGuard) throw new Error("SESSION_RUN_ACTIVE:channel-or-scheduler");
+      const releaseLocalGuard = releaseSessionGuard;
+      releaseSessionGuard = () => { releaseLocalGuard?.(); releaseSharedGuard(); };
       if (background && !inbox.canWake(sessionId)) {
         releaseSessionGuard?.();
         endConversation();

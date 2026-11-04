@@ -79,6 +79,7 @@ export function createSchedulerSubsystem(deps: SchedulerSubsystemDeps): Schedule
   const engineDeps: SchedulerEngineDeps = {
     store,
     runTask: runner.runScheduledTask,
+    prepareTask: runner.prepareScheduledTask,
     ...(deps.canRunTask ? { canRunTask: deps.canRunTask } : {}),
   };
   const engine = deps.createEngine
