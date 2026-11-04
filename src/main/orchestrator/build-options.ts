@@ -109,7 +109,7 @@ export interface BuildOptionsDeps {
     userText: string,
     messages: ReadonlyArray<{ role: string; content?: string }>,
   ) => Promise<string>;
-  buildRelationshipContext: () => Promise<string>;
+  buildRelationshipContext: (conversationId?: string, privateContext?: boolean) => Promise<string>;
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
   buildModePrompt?: (mode: ConversationMode) => string;
   /** 工具规则与目录 system prompt（进入 harness stablePrefix）。仅含自动生成的工具目录。 */
@@ -220,6 +220,7 @@ export interface OnRunFinishedDeps {
     feeling?: string;
   };
   feelingToExpression: Record<string, number>;
+  getAffectPresentation?: () => Promise<{ feeling: string; expression: number } | null>;
   setRuntimeState: (next: { status?: string; expression?: number; updatedAt?: number; feeling?: string }) => void;
   stickerTextIndex: readonly StickerTextEntry[];
   getStickerTextIndex?: () => readonly StickerTextEntry[];
@@ -734,7 +735,7 @@ export async function buildAgentRunOptions(
 
   let relationshipContext = "";
   try {
-    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext());
+    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, input.privateRelationshipContext !== false && input.promptSource !== "plugin-agent"));
   } catch (err) {
     console.warn("[Cyrene] relationship context build failed:", err);
   }
@@ -1213,6 +1214,7 @@ export async function onAgentRunFinished(
   finishedContext?: {
     runId?: string;
     source?: "desktop" | "channel";
+    privateRelationshipContext?: boolean;
     mode?: string;
     assistantEntryId?: string;
     userTurnId?: string;
@@ -1285,6 +1287,10 @@ export async function onAgentRunFinished(
       assistantText: chatContent,
       cyreneFeeling: deps.runtimeState.feeling ?? "平静",
       channel: channel ?? "desktop",
+      conversationId,
+      runId: finishedContext?.runId,
+      sourceEventId: finishedContext?.assistantEntryId ?? finishedContext?.vectorMemorySource?.assistantEntryId,
+      privateContext: finishedContext?.privateRelationshipContext !== false,
     });
   });
 
@@ -1306,6 +1312,10 @@ export async function onAgentRunFinished(
   }
 
   if (settings.runtimeSync === "local") {
+    if (finishedContext?.privateRelationshipContext !== false && deps.getAffectPresentation) {
+      const presentation = await deps.getAffectPresentation();
+      if (presentation) deps.setRuntimeState({ ...presentation, updatedAt: Date.now() });
+    }
     deps.broadcastRuntimeStateChanged();
   } else if (settings.runtimeSync === "llm") {
     deps.broadcastRuntimeStateChanged();

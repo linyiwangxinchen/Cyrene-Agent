@@ -1,3 +1,5 @@
+import { registerMemoryGovernanceIpc } from "../../main/memory/memory-governance-ipc";
+import { registerCompanionIpc } from "../../main/persona/companion-ipc";
 import fs from "node:fs";
 import path from "node:path";
 import { IPC } from "../../shared/ipc-channels";
@@ -220,7 +222,10 @@ export async function startHeadlessCore() {
     syncFilesystemMcp: async settings => { await restoreMcp; await syncFilesystemMcp(settings); },
   });
   registerMemoryUserToolIpc({ ipc, windowManager });
-  registerWikiMemoryIpc(ipc); registerKnowledgeBaseIpc(ipc);
+  registerWikiMemoryIpc(ipc);
+  registerCompanionIpc(ipc);
+  registerMemoryGovernanceIpc(ipc);
+  registerKnowledgeBaseIpc(ipc);
   await registerChatsIpc(ipc, {
     llmClient, isPrimaryModelBusy: hasActiveConversationRun, transcriptCompactor,
     beforeWorkspaceBindingChange: prepareBackgroundSessionMutation,

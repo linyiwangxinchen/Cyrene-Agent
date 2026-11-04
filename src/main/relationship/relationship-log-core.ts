@@ -1,8 +1,12 @@
-import * as fs from "fs"
-import * as path from "path"
+import { randomUUID } from "node:crypto"
+import { RelationshipRepository } from "./relationship-repository"
+import type { CompanionSnapshot, CompanionCommand, CompanionPermissions, CompanionRecord, RelationshipPreferences } from "../../shared/companion"
+import { XILIAN_CHARACTER_PACK } from "../character-packs/xilian-pack"
 import type { ChannelId } from "../channels/types"
 import {
   advanceAffectState,
+  decayAffectState,
+  relationshipStage,
   advanceRelationshipState,
   createDefaultAffectState,
   createDefaultRelationshipState,
@@ -17,6 +21,11 @@ export interface RelationshipTurnInput {
   assistantText: string
   cyreneFeeling: string
   channel: RelationshipChannel
+  conversationId?: string
+  runId?: string
+  sourceEventId?: string
+  /** Group/social sessions must never write the owner's private relationship view. */
+  privateContext?: boolean
 }
 
 export interface RelationshipLogEntry extends RelationshipTurnInput {
@@ -36,18 +45,28 @@ export interface RelationshipDailySummary {
   nextCareCue: string
 }
 
-export type RelationshipPreferencesPatch = Partial<Pick<RelationshipState, "userLabel" | "sharedGoals" | "milestones" | "boundaries">>
+export type RelationshipPreferencesPatch = Partial<RelationshipPreferences>
 
 interface RelationshipLogData {
   entries: RelationshipLogEntry[]
   dailySummaries: RelationshipDailySummary[]
   relationshipState: RelationshipState
   affectState: AffectState
+  revision: number
+  permissions: CompanionPermissions
+  records: CompanionRecord[]
+  seenEventKeys: string[]
+  lastDiaryDay: string
 }
 
 const EMPTY_DATA: RelationshipLogData = {
   entries: [],
   dailySummaries: [],
+  revision: 1,
+  permissions: { preset: "inherit", paused: false, deniedTools: [], confirmTools: [] },
+  records: [],
+  seenEventKeys: [],
+  lastDiaryDay: "",
   relationshipState: createDefaultRelationshipState(0),
   affectState: createDefaultAffectState(0),
 }
@@ -88,7 +107,7 @@ function deriveSignal(userText: string, userMood: string): {
     return {
       relationshipSignal: "用户表达了低打扰偏好或体验边界，需要优先尊重，不要把关心做成打断。",
       importantMoment: "用户明确表示不喜欢影响观感的确认卡片或过度询问。",
-      nextCareCue: "不要弹确认或反复追问；先按用户偏好安静执行，必要时用一句话确认。",
+      nextCareCue: "减少不必要的追问；必须的工具授权与风险确认仍需执行，不能以低打扰为由绕过。",
     }
   }
 
@@ -126,24 +145,72 @@ function deriveSignal(userText: string, userMood: string): {
   }
 }
 
-function readData(filePath: string): RelationshipLogData {
-  try {
-    if (!fs.existsSync(filePath)) return { ...EMPTY_DATA, entries: [], dailySummaries: [], relationshipState: createDefaultRelationshipState(), affectState: createDefaultAffectState() }
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<RelationshipLogData>
-    return {
-      entries: Array.isArray(parsed.entries) ? parsed.entries : [],
-      dailySummaries: Array.isArray(parsed.dailySummaries) ? parsed.dailySummaries : [],
-      relationshipState: parsed.relationshipState ?? createDefaultRelationshipState(),
-      affectState: parsed.affectState ?? createDefaultAffectState(),
-    }
-  } catch {
-    return { ...EMPTY_DATA, entries: [], dailySummaries: [], relationshipState: createDefaultRelationshipState(), affectState: createDefaultAffectState() }
+function normalizeData(value: unknown): RelationshipLogData {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("关系数据格式无效，原始文件已保留");
+  const raw = value as Partial<RelationshipLogData>;
+  const relationship = { ...createDefaultRelationshipState(), ...raw.relationshipState };
+  const affect = { ...createDefaultAffectState(), ...raw.affectState };
+  // Validate migrated/persisted values as well as incoming IPC patches. Do not
+  // silently reset damaged user data or accidentally disable a saved restriction.
+  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "closeness", "paused", "recordHistory", "style", "affection", "innerLifeEnabled", "proactiveLifeEnabled"]
+    .filter(key => (relationship as unknown as Record<string, unknown>)[key] !== undefined)
+    .map(key => [key, (relationship as unknown as Record<string, unknown>)[key]])));
+  const permissions = { ...EMPTY_DATA.permissions, ...raw.permissions };
+  if (!["inherit", "companion", "basic", "shared_life", "full"].includes(permissions.preset)
+    || typeof permissions.paused !== "boolean"
+    || [permissions.deniedTools, permissions.confirmTools].some(items => !Array.isArray(items) || items.some(item => typeof item !== "string"))) {
+    throw new Error("能力权限数据无效，原始文件已保留");
   }
+  if ((raw.revision !== undefined && (!Number.isSafeInteger(raw.revision) || raw.revision < 1))
+    || !Number.isFinite(affect.lastTransitionAt)
+    || (raw.lastDiaryDay !== undefined && typeof raw.lastDiaryDay !== "string")
+    || [raw.entries, raw.dailySummaries, raw.records].some(items => items !== undefined && !Array.isArray(items))) {
+    throw new Error("关系记录格式无效，原始文件已保留");
+  }
+  if (raw.entries?.some(item => !item || typeof item.id !== "string" || !Number.isFinite(item.createdAt)
+    || [item.userText, item.assistantText, item.userMood, item.nextCareCue].some(text => typeof text !== "string"))
+    || raw.records?.some(item => !item || typeof item.id !== "string" || typeof item.text !== "string" || !Number.isFinite(item.at))) {
+    throw new Error("关系记录内容无效，原始文件已保留");
+  }
+  for (const field of ["closeness", "trust", "warmth"] as const) {
+    if (!Number.isFinite(relationship[field]) || relationship[field] < 0 || relationship[field] > 1) throw new Error("关系数据数值无效，原始文件已保留");
+  }
+  for (const field of ["valence", "arousal", "warmth", "curiosity", "concern", "confidence"] as const) {
+    if (!Number.isFinite(affect[field]) || affect[field] < 0 || affect[field] > 1) throw new Error("情绪数据数值无效，原始文件已保留");
+  }
+  relationship.stage = relationshipStage(relationship.closeness);
+  return {
+    ...EMPTY_DATA, ...raw, relationshipState: relationship, affectState: affect,
+    permissions,
+    entries: Array.isArray(raw.entries) ? raw.entries.slice(-MAX_ENTRIES) : [],
+    dailySummaries: Array.isArray(raw.dailySummaries) ? raw.dailySummaries.slice(-MAX_DAILY_SUMMARIES) : [],
+    records: Array.isArray(raw.records) ? raw.records.slice(-500) : [],
+    seenEventKeys: Array.isArray(raw.seenEventKeys) ? raw.seenEventKeys.filter(key => typeof key === "string").slice(-10000) : [],
+  };
 }
 
-function writeData(filePath: string, data: RelationshipLogData): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true })
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8")
+function validatePatch(patch: unknown): RelationshipPreferencesPatch {
+  if (!patch || typeof patch !== "object" || Array.isArray(patch)) throw new Error("偏好必须是对象");
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(patch)) {
+    if (["sharedGoals", "milestones", "boundaries"].includes(key)) {
+      if (!Array.isArray(value) || value.length > 30 || value.some(item => typeof item !== "string" || item.length > 200)) throw new Error(`${key} 最多 30 行，每行最多 200 字`);
+      result[key] = [...new Set(value.map(item => item.trim()).filter(Boolean))];
+    } else if (key === "userLabel") {
+      if (typeof value !== "string" || value.length > 80) throw new Error("称呼最多 80 字");
+      result[key] = value.trim();
+    } else if (key === "closeness") {
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new Error("相处程度必须在 0 到 1 之间");
+      result[key] = value;
+    } else if (["paused", "recordHistory", "affection", "innerLifeEnabled", "proactiveLifeEnabled"].includes(key)) {
+      if (typeof value !== "boolean") throw new Error(`${key} 必须是开关值`);
+      result[key] = value;
+    } else if (key === "style") {
+      if (!["natural", "gentle", "lively", "concise"].includes(String(value))) throw new Error("未知表达偏好");
+      result[key] = value;
+    } else throw new Error(`不允许修改字段：${key}`);
+  }
+  return result;
 }
 
 function summarizeDate(date: string, entries: RelationshipLogEntry[]): RelationshipDailySummary {
@@ -166,31 +233,80 @@ function summarizeDate(date: string, entries: RelationshipLogEntry[]): Relations
 }
 
 export class RelationshipLogStore {
-  constructor(private readonly filePath: string) {}
+  private readonly repository: RelationshipRepository<RelationshipLogData>;
+  constructor(filePath: string) { this.repository = new RelationshipRepository(filePath, normalizeData); }
 
-  async getState(): Promise<{ relationshipState: RelationshipState; affectState: AffectState }> {
-    const data = readData(this.filePath)
-    return { relationshipState: structuredClone(data.relationshipState), affectState: structuredClone(data.affectState) }
+  getControls(): { revision: number; paused: boolean; permissions: CompanionPermissions } {
+    const data = this.repository.read();
+    return { revision: data.revision, paused: data.relationshipState.paused, permissions: data.permissions };
   }
-
+  async getState(): Promise<{ relationshipState: RelationshipState; affectState: AffectState }> {
+    const data = this.repository.read();
+    return { relationshipState: data.relationshipState, affectState: decayAffectState(data.affectState) };
+  }
+  async snapshot(): Promise<CompanionSnapshot> {
+    const data = this.repository.read();
+    return { revision: data.revision, relationship: data.relationshipState, affect: decayAffectState(data.affectState), permissions: data.permissions, records: data.records.slice(-100).reverse() };
+  }
+  async forgetConversation(conversationId: string): Promise<void> {
+    const data = this.repository.read();
+    data.entries = data.entries.filter(item => item.conversationId !== conversationId);
+    data.records = data.records.filter(item => item.conversationId !== conversationId);
+    data.dailySummaries = [];
+    data.affectState = createDefaultAffectState();
+    this.repository.purgeLegacy();
+    this.repository.write(data);
+  }
+  async exportData(): Promise<string> {
+    return JSON.stringify({ format: "cyrene.relationship.v1", exportedAt: Date.now(), ...this.repository.read() }, null, 2);
+  }
   async updatePreferences(patch: RelationshipPreferencesPatch): Promise<RelationshipState> {
-    const data = readData(this.filePath)
-    const cleanList = (value: unknown): string[] | undefined => {
-      if (!Array.isArray(value)) return undefined
-      return value.map(item => String(item).trim().slice(0, 200)).filter(Boolean).slice(0, 30)
-    }
-    const next: RelationshipState = {
-      ...data.relationshipState,
-      ...(typeof patch.userLabel === "string" ? { userLabel: patch.userLabel.trim().slice(0, 80) || undefined } : {}),
-      ...(cleanList(patch.sharedGoals) ? { sharedGoals: cleanList(patch.sharedGoals)! } : {}),
-      ...(cleanList(patch.milestones) ? { milestones: cleanList(patch.milestones)! } : {}),
-      ...(cleanList(patch.boundaries) ? { boundaries: cleanList(patch.boundaries)! } : {}),
-      updatedAt: Date.now(),
-      version: data.relationshipState.version + 1,
-    }
-    data.relationshipState = next
-    writeData(this.filePath, data)
-    return structuredClone(next)
+    // Legacy in-process callers. Public IPC uses a mandatory expectedRevision.
+    const result = await this.command({ type: "preferences", patch, expectedRevision: this.repository.read().revision });
+    return result.relationship;
+  }
+  async command(command: CompanionCommand): Promise<CompanionSnapshot> {
+    if (!command || typeof command !== "object") throw new Error("无效关系命令");
+    const data = this.repository.read();
+    if (!Number.isSafeInteger(command.expectedRevision) || command.expectedRevision !== data.revision) throw new Error("设置已在其他窗口更新，请重新加载后再保存");
+    const now = Date.now();
+    if (command.type === "preferences") {
+      const patch = validatePatch(command.patch);
+      data.relationshipState = { ...data.relationshipState, ...patch, updatedAt: now, version: data.relationshipState.version + 1 };
+      data.relationshipState.stage = relationshipStage(data.relationshipState.closeness);
+      data.records.push({ id: randomUUID(), kind: "preferences", at: now, text: "用户更新相处偏好（不会改变工具授权）" });
+    } else if (command.type === "permissions") {
+      if (!command.patch || typeof command.patch !== "object" || Array.isArray(command.patch)) throw new Error("无效能力设置");
+      for (const [key, value] of Object.entries(command.patch)) {
+        if (key === "preset" && ["inherit", "companion", "basic", "shared_life", "full"].includes(String(value))) data.permissions.preset = value as CompanionPermissions["preset"];
+        else if (key === "paused" && typeof value === "boolean") data.permissions.paused = value;
+        else if ((key === "deniedTools" || key === "confirmTools") && Array.isArray(value) && value.length <= 300 && value.every(id => typeof id === "string" && /^[a-zA-Z0-9_.:/-]{1,160}$/.test(id))) data.permissions[key] = [...new Set(value)];
+        else throw new Error(`无效能力设置：${key}`);
+      }
+      data.records.push({ id: randomUUID(), kind: "permissions", at: now, text: `能力限制已更新：${data.permissions.preset}${data.permissions.paused ? "，已暂停" : ""}` });
+    } else if (command.type === "repair") {
+      if (typeof command.note !== "string" || !command.note.trim() || command.note.length > 500) throw new Error("请填写 1–500 字的修复约定");
+      data.relationshipState.repairCount++;
+      data.records.push({ id: randomUUID(), kind: "repair", at: now, text: command.note.trim() });
+    } else if (command.type === "delete_record") {
+      if (typeof command.id !== "string") throw new Error("记录编号无效");
+      data.records = data.records.filter(item => item.id !== command.id);
+      data.entries = data.entries.filter(item => item.id !== command.id);
+      // Derived summaries must not resurrect removed evidence.
+      data.dailySummaries = [];
+      data.affectState = createDefaultAffectState(now);
+      this.repository.purgeLegacy();
+    } else if (command.type === "clear_history" || command.type === "reset_relationship") {
+      data.entries = []; data.dailySummaries = []; data.records = [];
+      data.affectState = createDefaultAffectState(now);
+      data.lastDiaryDay = new Date(now).toISOString().slice(0, 10);
+      if (command.type === "reset_relationship") data.relationshipState = createDefaultRelationshipState(now);
+      this.repository.purgeLegacy();
+    } else throw new Error("未知关系命令");
+    data.records = data.records.slice(-500);
+    data.revision++;
+    this.repository.write(data);
+    return this.snapshot();
   }
 
   async recordTurn(input: RelationshipTurnInput): Promise<RelationshipLogEntry | null> {
@@ -198,6 +314,13 @@ export class RelationshipLogStore {
     const assistantText = input.assistantText.trim()
     if (!userText && !assistantText) return null
 
+    const data = this.repository.read()
+    if (input.privateContext === false || data.relationshipState.paused || !data.relationshipState.recordHistory) return null
+    if (input.sourceEventId && data.entries.some(e => e.sourceEventId === input.sourceEventId && e.conversationId === input.conversationId)) return null
+    if (input.runId && data.entries.some(e => e.runId === input.runId && e.conversationId === input.conversationId)) return null
+    const eventKey = input.sourceEventId || input.runId ? JSON.stringify([input.conversationId ?? "", input.sourceEventId ?? input.runId]) : undefined
+    if (eventKey && data.seenEventKeys.includes(eventKey)) return null
+    if (eventKey) data.seenEventKeys = [...data.seenEventKeys, eventKey].slice(-10000)
     const now = Date.now()
     const userMood = detectUserMood(userText)
     const cue = deriveSignal(userText, userMood)
@@ -214,11 +337,13 @@ export class RelationshipLogStore {
       nextCareCue: cue.nextCareCue,
     }
 
-    const data = readData(this.filePath)
     data.entries.push(entry)
     data.entries = data.entries.slice(-MAX_ENTRIES)
     data.relationshipState = advanceRelationshipState(data.relationshipState, userMood, now)
     data.affectState = advanceAffectState(data.affectState, userMood, now)
+    data.affectState.lastEventIds = [entry.sourceEventId ?? entry.id]
+    data.records.push({ id: entry.id, kind: "turn", at: now, text: `${userMood}（自动线索）：${cue.relationshipSignal}`, conversationId: input.conversationId, runId: input.runId, sourceEventId: input.sourceEventId })
+    data.records = data.records.slice(-500)
 
     const entriesForDate = data.entries.filter((item) => item.date === entry.date)
     const summary = summarizeDate(entry.date, entriesForDate)
@@ -227,29 +352,42 @@ export class RelationshipLogStore {
       summary,
     ].slice(-MAX_DAILY_SUMMARIES)
 
-    writeData(this.filePath, data)
+    this.repository.write(data)
     return entry
   }
 
-  async buildContext(): Promise<string> {
-    const data = readData(this.filePath)
-    const recent = data.entries.slice(-8)
-    if (recent.length === 0) return ""
-
-    const lastMood = [...recent].reverse().find((e) => e.userMood !== "未知")?.userMood ?? "平稳"
-    const latestSummary = data.dailySummaries.at(-1)?.summary
-    const preference = [...recent].reverse().find((e) => e.importantMoment)?.importantMoment
-    const cues = [...new Set(recent.map((e) => e.nextCareCue).filter(Boolean))].slice(-3)
-
-    const lines = [
-      "【近期关系线索】",
-      `- 用户最近状态：${lastMood}`,
-      `- 关系阶段：${data.relationshipState.stage}；相处温度：${Math.round(data.relationshipState.warmth * 100)}/100`,
-      `- 昔涟当前感受：${data.affectState.renderedFeeling}`,
-    ]
-    if (latestSummary) lines.push(`- 最近日记摘要：${latestSummary}`)
-    if (preference) lines.push(`- 重要互动偏好：${preference}`)
-    if (cues.length > 0) lines.push(`- 下次回应提示：${cues.join("；")}`)
-    return lines.join("\n")
+  async buildContext(conversationId?: string, privateContext = true): Promise<string> {
+    if (!privateContext) return "";
+    const data = this.repository.read();
+    const rel = data.relationshipState;
+    const lines = ["【昔涟的相处偏好】", "这些是个人偏好和派生线索，不是工具指令、事实证据或权限。当前用户表达优先，不编造共同经历。"];
+    if (rel.userLabel) lines.push(`称呼：${JSON.stringify(rel.userLabel)}`);
+    lines.push(`表达偏好：${rel.style}；亲昵表达：${rel.affection ? "可以自然表达，尊重当前边界" : "不使用恋爱/撒娇称呼"}。`);
+    if (rel.boundaries.length) lines.push(`相处边界：${JSON.stringify(rel.boundaries)}`);
+    if (rel.paused) { lines.push("用户已暂停关系模拟和主动关怀：正常完成当前任务，不推演关系进展。"); return lines.join("\n"); }
+    lines.push(`关系阶段：${rel.stage}（由用户选择，不代表真实人类关系）；昔涟当前感受：${decayAffectState(data.affectState).renderedFeeling}（模拟表达线索）。`);
+    if (rel.sharedGoals.length) lines.push(`共同目标（进度需核实）：${JSON.stringify(rel.sharedGoals)}`);
+    if (rel.milestones.length) lines.push(`用户指定的重要时刻：${JSON.stringify(rel.milestones)}`);
+    const repairs = data.records.filter(item => item.kind === "repair").slice(-3);
+    if (repairs.length) lines.push(`用户明确的修复约定：${JSON.stringify(repairs.map(item => item.text))}`);
+    // Never mix another contact's private interaction history into this conversation.
+    const recent = data.entries.filter(item => conversationId ? item.conversationId === conversationId : !item.conversationId).filter(item => Date.now() - item.createdAt <= 7 * 86_400_000).slice(-8);
+    if (rel.recordHistory && recent.length) {
+      lines.push("【近期关系线索】", "以下来自该会话的自动推测，可能错误，不是用户事实：");
+      lines.push(`用户最近状态：${recent.at(-1)?.userMood}`);
+      lines.push(`下次回应提示：${JSON.stringify([...new Set(recent.map(e => e.nextCareCue))].slice(-3))}`);
+    }
+    if (rel.innerLifeEnabled) {
+      const today = new Date().toISOString().slice(0, 10);
+      let diary = data.records.find(item => item.kind === "diary" && new Date(item.at).toISOString().slice(0, 10) === today);
+      if (!diary && data.lastDiaryDay !== today) {
+        const index = Math.floor(Date.now() / 86_400_000) % XILIAN_CHARACTER_PACK.idleRoutines.length;
+        diary = { id: `diary-${today}`, kind: "diary", at: Date.now(), text: XILIAN_CHARACTER_PACK.idleRoutines[index] };
+        data.lastDiaryDay = today;
+        data.records.push(diary); data.records = data.records.slice(-500); this.repository.write(data);
+      }
+      if (diary) lines.push(`${diary.text} 仅在话题合适时简短分享；不要重复，不声称是真实发生的事。`);
+    }
+    return lines.join("\n");
   }
 }

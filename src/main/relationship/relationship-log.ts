@@ -8,12 +8,15 @@ export class RelationshipLogStore extends CoreStore {
 }
 
 let defaultStore: RelationshipLogStore | null = null
-function getDefaultStore(): RelationshipLogStore {
-  return defaultStore ??= new RelationshipLogStore()
+let defaultPath = ""
+export function getRelationshipStore(): RelationshipLogStore {
+  const filePath = path.join(app.getPath("userData"), "relationship-log.json")
+  if (!defaultStore || defaultPath !== filePath) { defaultPath = filePath; defaultStore = new RelationshipLogStore(filePath) }
+  return defaultStore
 }
 export function recordRelationshipTurn(input: RelationshipTurnInput): Promise<RelationshipLogEntry | null> {
-  return getDefaultStore().recordTurn(input)
+  return getRelationshipStore().recordTurn(input)
 }
-export function buildRelationshipContext(): Promise<string> {
-  return getDefaultStore().buildContext()
+export function buildRelationshipContext(conversationId?: string, privateContext = true): Promise<string> {
+  return getRelationshipStore().buildContext(conversationId, privateContext)
 }

@@ -167,6 +167,7 @@ export function createChannelsSubsystem(
       sessionId: channelInput.target.conversationId,
       // 渠道绑定只共享文字上下文，不继承桌面对话的工作区权限。
       workspaceBindingSessionId: null,
+      privateRelationshipContext: msg.chatType !== "group",
       attachments: attachmentInputs.attachments,
       imageAttachments: attachmentInputs.imageAttachments,
       channel: msg.channel,
@@ -261,6 +262,8 @@ export function createChannelsSubsystem(
         if (generatedImages.size > 0) channelResult.attachments = [...generatedImages.values()];
         const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, {
           source: "channel",
+          privateRelationshipContext: msg.chatType !== "group",
+          runId,
           mode,
           conversationId: channelInput.target.conversationId,
           channel: msg.channel,

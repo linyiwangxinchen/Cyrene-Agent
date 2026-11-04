@@ -689,8 +689,6 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       if (method === "POST" && url.pathname === "/api/channels/qq/auth-requirement") { const body = await readJson(request); writeJson(response, 200, channels.getAuthRequirement({ listenMode: body.listenMode, customHost: body.customHost })); return; }
       if (method === "GET" && url.pathname === "/api/memory") { writeJson(response, 200, await features.getMemory()); return; }
       if (method === "PATCH" && url.pathname === "/api/memory") { writeJson(response, 200, await features.patchMemory(await readJson(request) as never)); return; }
-      if (method === "GET" && url.pathname === "/api/persona") { writeJson(response, 200, await persona.getPersonaState()); return; }
-      if (method === "PATCH" && url.pathname === "/api/persona/relationship") { writeJson(response, 200, await persona.updateRelationshipPreferences(await readJson(request) as never)); broadcast({ type: "PERSONA_CHANGED" }); return; }
       if (method === "GET" && url.pathname === "/api/profile") { writeJson(response, 200, await features.getProfile()); return; }
       if (method === "PATCH" && url.pathname === "/api/profile") { writeJson(response, 200, await features.patchProfile(await readJson(request))); return; }
       if (method === "GET" && url.pathname === "/api/token-usage") { writeJson(response, 200, await features.getUsage()); return; }

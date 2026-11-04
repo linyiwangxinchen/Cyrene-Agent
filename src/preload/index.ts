@@ -1066,3 +1066,17 @@ const ttsApi = {
 contextBridge.exposeInMainWorld("tts", ttsApi);
 
 exposeMusicApi();
+
+const companionApi: import("../shared/companion").CompanionApi = {
+  get: () => ipcRenderer.invoke(IPC.COMPANION_GET),
+  update: (command) => ipcRenderer.invoke(IPC.COMPANION_UPDATE, command),
+  export: () => ipcRenderer.invoke(IPC.COMPANION_EXPORT),
+};
+contextBridge.exposeInMainWorld("companion", companionApi);
+
+const memoryGovernanceApi: import("../shared/memory-governance").MemoryGovernanceApi = {
+  explain: id => ipcRenderer.invoke(IPC.MEMORY_GOVERNANCE_EXPLAIN, id),
+  change: command => ipcRenderer.invoke(IPC.MEMORY_GOVERNANCE_CHANGE, command),
+  export: () => ipcRenderer.invoke(IPC.MEMORY_GOVERNANCE_EXPORT),
+};
+contextBridge.exposeInMainWorld("memoryGovernance", memoryGovernanceApi);

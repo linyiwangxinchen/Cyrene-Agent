@@ -20,7 +20,7 @@ describe("unified Xilian persona domain", () => {
   it("creates bounded relationship and affect state", () => {
     const relationship = createDefaultRelationshipState(123);
     const affect = createDefaultAffectState(123);
-    expect(relationship.stage).toBe("new");
+    expect(relationship.stage).toBe("familiar");
     expect([relationship.trust, relationship.closeness, relationship.warmth]).toEqual(
       expect.arrayContaining([expect.any(Number)]),
     );

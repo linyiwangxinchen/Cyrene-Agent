@@ -200,10 +200,10 @@ describe("harness tool runtime", () => {
       const runtime = await makeRuntime("allow_all");
 
       expect(await runtime.checkPermission("web_search", { query: "x" })).toBe(true);
-      expect(checkPermission).not.toHaveBeenCalled();
+      expect(checkPermission).toHaveBeenCalledWith(expect.objectContaining({ bypassBasePolicy: true, effect: "read" }));
     });
 
-    it.each([undefined, false])("非 Plan 模式行为不变：allow_all 直接放行全部工具 (allowPrompt=%s)", async allowPrompt => {
+    it.each([undefined, false])("非 Plan 的 allow_all 仍检查可撤回能力限制 (allowPrompt=%s)", async allowPrompt => {
       isPlanReadOnly.mockReturnValue(false);
       getById.mockReturnValue({
         id: "run_verification",
@@ -214,7 +214,7 @@ describe("harness tool runtime", () => {
       const runtime = await makeRuntime("allow_all", allowPrompt);
 
       expect(await runtime.checkPermission("run_verification", { kind: "test" })).toBe(true);
-      expect(checkPermission).not.toHaveBeenCalled();
+      expect(checkPermission).toHaveBeenCalledWith(expect.objectContaining({ bypassBasePolicy: true, effect: "verification" }));
     });
   });
 });

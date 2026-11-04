@@ -11,7 +11,9 @@ vi.mock("electron", () => ({
 }));
 vi.mock("./logger", () => ({ logger: { info: vi.fn() }, LogTag: { Permission: "permission" } }));
 vi.mock("./toast/toast-events", () => ({ toastEvents: { publishApprovalPending: vi.fn(), publishApprovalSettled: vi.fn() } }));
-import { cancelPendingApprovalsForRun, checkPermission, setCurrentLevel } from "./permission";
+import { cancelPendingApprovalsForRun, checkPermission, setCurrentLevel, registerPermissionIpc } from "./permission";
+import { getRelationshipStore } from "./relationship/relationship-log";
+import { IPC } from "../shared/ipc-channels";
 
 beforeEach(() => {
   state.root = mkdtempSync(join(tmpdir(), "permission-background-"));
@@ -45,4 +47,23 @@ it("preserves full permission mode for background tools without requesting appro
   setCurrentLevel("full");
   expect((await checkPermission({ toolId: "fixture", toolName: "fixture", toolDescription: "fixture", args: {}, risk: "shell", allowPrompt: false })).allowed).toBe(true);
   expect(state.send).not.toHaveBeenCalled();
+});
+
+it("enforces a companion pause even when the harness bypasses the base approval policy", async () => {
+  const store = getRelationshipStore();
+  await store.command({ type: "permissions", expectedRevision: 1, patch: { paused: true } });
+  const result = await checkPermission({ toolId: "fixture", toolName: "fixture", toolDescription: "fixture", args: {}, risk: "safe", effect: "read", bypassBasePolicy: true });
+  expect(result.allowed).toBe(false);
+  expect(state.send).not.toHaveBeenCalled();
+});
+
+it("rejects an approved call if its authorization was revoked while the card was open", async () => {
+  const handlers = new Map<string, (...args: any[]) => unknown>();
+  registerPermissionIpc({ handle: (name, fn) => { handlers.set(name, fn); }, on() {}, dispose() {}, removeHandler() {} });
+  const pending = checkPermission({ toolId: "fixture", toolName: "fixture", toolDescription: "fixture", args: {}, risk: "fs-write", effect: "mutation", runId: "foreground" });
+  const request = state.send.mock.calls.find(([name]) => name === IPC.PERMISSION_APPROVAL_REQUEST)![1];
+  const store = getRelationshipStore();
+  await store.command({ type: "permissions", expectedRevision: 1, patch: { deniedTools: ["fixture"] } });
+  handlers.get(IPC.PERMISSION_APPROVAL_RESOLVE)!({}, { id: request.id, allowed: true });
+  expect(await pending).toMatchObject({ allowed: false, reason: "等待审批期间能力授权已撤回。" });
 });

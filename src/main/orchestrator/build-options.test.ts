@@ -842,6 +842,7 @@ describe("build-options", () => {
     await onAgentRunFinished({ reply: "好呀", toolResults: [] }, "今天有点累", deps, "wechat")
 
     expect(recordRelationshipTurn).toHaveBeenCalledWith({
+      privateContext: true,
       userText: "今天有点累",
       assistantText: "好呀",
       cyreneFeeling: "温柔",

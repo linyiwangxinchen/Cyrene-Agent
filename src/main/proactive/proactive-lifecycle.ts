@@ -1,3 +1,6 @@
+import { relationshipOpportunities } from "./relationship-opportunities";
+import { buildPersonaContractPrompt } from "../persona/persona-spec";
+import { buildRelationshipContext, getRelationshipStore } from "../relationship/relationship-log";
 import { powerMonitor } from "electron";
 import { randomUUID } from "node:crypto";
 import * as chatsStore from "../chats/chats-store";
@@ -57,6 +60,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   let normalConversationBusyCount = 0;
   let proactiveScreenLocked = false;
   let lastMessageActivityAt: number | null = null;
+  let generationRelationshipRevision: number | undefined;
   let generationRecipient: RecentProactiveChannelRecipient | undefined;
   let lastOutcome: ProactiveEvaluationStatus["lastOutcome"];
   let proactiveStatus: ProactiveEvaluationStatus = {
@@ -68,7 +72,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   };
 
   function buildProactivePersonaPrompt(): string {
-    const parts: string[] = [];
+    const parts: string[] = [buildPersonaContractPrompt()];
     const chatSystem = loadPromptFile("chat_system.md");
     if (chatSystem) parts.push(chatSystem);
     const soul = loadPromptFile("soul.md");
@@ -125,7 +129,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       // Policy quiet hours must use the same clock as candidate selection.
       localHour: getZonedDateParts(new Date(now), resolveChatContextTimezone(loadUserProfile().timezone)).hour,
       idleSec,
-      enabled: options.loadGeneralSettings().proactiveChatMode === "on",
+      enabled: options.loadGeneralSettings().proactiveChatMode === "on" && !getRelationshipStore().getControls().paused,
       conversationBusy: normalConversationBusyCount > 0,
       generationBusy: false,
       screenLocked: proactiveScreenLocked,
@@ -133,6 +137,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   }
 
   async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
+    generationRelationshipRevision = (await getRelationshipStore().snapshot()).revision;
     const target = options.loadGeneralSettings().proactiveDeliveryTarget;
     const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
     if (route && !route.available) throw new Error(route.reason);
@@ -150,7 +155,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const profile = loadUserProfile();
     const timezone = resolveChatContextTimezone(profile.timezone);
     return buildProactiveMessages({
-      basePersona: buildProactivePersonaPrompt(),
+      basePersona: buildProactivePersonaPrompt() + "\n\n" + await buildRelationshipContext(generationRecipient?.conversationId ?? generationRecipient?.sessionId ?? "proactive-local"),
       userProfile: profileContext,
       relevantMemory: memoryContext,
       ordinaryHistory: histories.ordinary,
@@ -195,6 +200,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   };
 
   function getProactiveCommitDecision(candidate: ProactiveCandidate, generationEpoch: number) {
+    if (generationRelationshipRevision !== undefined && getRelationshipStore().getControls().revision !== generationRelationshipRevision) return { allowed: false, reason: "stale_epoch" as const };
     return canCommitProactiveMessage(
       getProactiveRuntimeSnapshot(),
       loadProactiveState(),
@@ -387,6 +393,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         if (!histories.ordinary.some(turn => turn.role === "user")) return null;
         return histories.ordinary.at(-1)?.at ?? null;
       },
+      getAdditionalCandidates: async ctx => relationshipOpportunities((await getRelationshipStore().getState()).relationshipState, ctx),
+      onExplanation: explanation => { proactiveStatus.explanation = explanation; },
       onEvaluation: (status: ProactiveEvaluationStatus) => { proactiveStatus = status; },
       // getWeatherContext 第一版不传：未来天气缓存接入后填，函数体无需改
       getLastEvaluatedAtByScene: () => new Map(proactiveBackoffMap),

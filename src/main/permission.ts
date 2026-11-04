@@ -1,3 +1,6 @@
+import { getRelationshipStore } from "./relationship/relationship-log";
+import { companionToolPolicy } from "./persona/capability-policy";
+import type { ToolEffectKind } from "./orchestrator/tools/registry/tool-registry";
 // 文件/工具权限档位 — 控制 agent 能做什么
 // 四档：read-only / scoped / per-action / full
 // 未来 fetch_url、run_shell、install_mcp_server 等"危险工具"都要先过 checkPermission
@@ -236,10 +239,16 @@ export async function checkPermission(input: {
   signal?: AbortSignal;
   /** 后台续轮没有所属会话的审批界面，遇到 ask 时直接拒绝。 */
   allowPrompt?: boolean;
+  effect?: ToolEffectKind;
+  bypassBasePolicy?: boolean;
 }): Promise<{ allowed: boolean; reason?: string }> {
   if (input.signal?.aborted) throw createAbortError();
   const level = currentLevel;
-  const policy = policyFor(level, input.risk);
+  const profile = getRelationshipStore().getControls().permissions;
+  const extra = companionToolPolicy(profile, input);
+  if (extra === "deny") return { allowed: false, reason: "昔涟能力限制已暂停或禁止此工具，请在昔涟设置中查看。" };
+  const basePolicy = input.bypassBasePolicy ? "allow" : policyFor(level, input.risk);
+  const policy = basePolicy === "deny" ? "deny" : extra === "ask" ? "ask" : basePolicy;
   console.log(LOG_PREFIX, "checkPermission:", input.toolId, "risk=" + input.risk, "level=" + level, "→", policy);
 
   if (policy === "allow") return { allowed: true };
@@ -261,7 +270,14 @@ export async function checkPermission(input: {
     risk: input.risk,
     runId: input.runId,
   });
-  if (approved) return { allowed: true };
+  if (approved) {
+    if (input.signal?.aborted) throw createAbortError();
+    // A denial/pause made while approval was open wins over the earlier request.
+    const latest = companionToolPolicy(getRelationshipStore().getControls().permissions, input);
+    if (latest === "deny") return { allowed: false, reason: "等待审批期间能力授权已撤回。" };
+    if (!input.bypassBasePolicy && policyFor(currentLevel, input.risk) === "deny") return { allowed: false, reason: "等待审批期间权限档位已收回。" };
+    return { allowed: true };
+  }
   return { allowed: false, reason: "用户拒绝了此次操作。" };
 }
 

@@ -12,7 +12,8 @@ import { FileToolOutputStore } from "./orchestrator/harness/tool-output/file-too
 import type { HarnessEvent } from "./orchestrator/harness/types";
 import { ExecutionLedgerStore } from "./orchestrator/execution-ledger";
 import { buildToolSystemPrompt } from "./orchestrator/system-prompt-builder";
-import type { ToolDefinition } from "./orchestrator/tools/registry/tool-registry";
+import { resolveEffectKind, type ToolDefinition } from "./orchestrator/tools/registry/tool-registry";
+import { checkPermission } from "./permission";
 import type { ConversationJournalService } from "./orchestrator/conversation-journal-service";
 
 const DEFAULT_MAX_ROUNDS = 50;
@@ -242,7 +243,16 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
       taskExecutor: undefined,
       checkPermission: async (toolId, args) => {
         if (signals.signal.aborted) return false;
-        try { return options.checkTool ? await options.checkTool(toolId, args) : true; }
+        try {
+          if (options.checkTool && !await options.checkTool(toolId, args)) return false;
+          const tool = tools.find(item => item.id === toolId);
+          if (!tool) return false;
+          // Preserve the plugin's existing grants, but honor a user's additional
+          // pause/denial. Headless goals cannot display a fresh approval card.
+          return (await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description,
+            args, risk: tool.risk ?? "safe", effect: resolveEffectKind(tool, args), runId,
+            signal: signals.signal, bypassBasePolicy: true, allowPrompt: false })).allowed;
+        }
         catch { return false; }
       },
       toolContext: {

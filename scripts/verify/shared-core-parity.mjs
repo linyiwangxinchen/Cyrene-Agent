@@ -84,7 +84,9 @@ const fixtureModel = createServer(async (req, res) => {
   if (userText.includes('case:picker-css') && !toolResult('browser_get_element_css')) {
     name = 'browser_get_element_css'; args = { observationId: /obs=([\w-]+)/.exec(userText)?.[1], ref: /ref=([\w-]+)/.exec(userText)?.[1] };
   }
-  const content = '昔涟在这里，验收完成。';
+  const content = JSON.stringify(body.messages ?? []).includes('sessionSummary') && JSON.stringify(body.messages ?? []).includes('workspaceSummary')
+    ? JSON.stringify({ sessionSummary: '本地验收已完成，后续任务以最新用户指令为准。', workspaceSummary: '这是隔离验收工作区。' })
+    : '昔涟在这里，验收完成。';
   if (!body.stream) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ id: 'fixture', object: 'chat.completion', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 12, total_tokens: 112 } })); return; }
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   const chunk = (delta, finish_reason = null, usage) => res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta, finish_reason }], ...(usage ? { usage } : {}) })}\n\n`);
@@ -375,6 +377,14 @@ try {
   await check('SQLite restart retains transcripts, stopped shell jobs, child tasks, usage and idempotency receipts', async () => {
     const before = await invoke('chats:get', sessions.chat.id), usage = await invoke('token-usage:get', 366);
     await handle.close(); socket = undefined; clientToken = '';
+    // Shutdown flushes pending summary memory, which can legitimately add model
+    // usage. Compare the durable post-flush rows across restart, not a stale UI snapshot.
+    const readUsageRows = () => {
+      const db = new DatabaseSync(path.join(data, 'cyrene.sqlite'), { readOnly: true });
+      try { return db.prepare('SELECT * FROM token_usage ORDER BY day, model').all(); }
+      finally { db.close(); }
+    };
+    const shutdownUsage = readUsageRows();
     const stopped = shellRecord(backgroundJobId);
     assert.equal(stopped.status, 'stopped'); assert.equal(stopped.reason, 'app_exiting'); assert.ok(stopped.endedAtMs);
     await waitFor(() => {
@@ -390,7 +400,12 @@ try {
     assert.equal((await invoke('stickers:get-config')).some(item => item.id === 'parity-sticker'), false);
     assert.deepEqual(shellRecord(backgroundJobId), stopped, 'normal shutdown history must survive startup recovery');
     const after = await invoke('chats:get', sessions.chat.id); assert.deepEqual(after.messages, before.messages);
-    assert.deepEqual(await invoke('token-usage:get', 366), usage);
+    assert.deepEqual(readUsageRows(), shutdownUsage);
+    const restoredUsage = await invoke('token-usage:get', 366);
+    for (const model of usage.models) {
+      const restored = restoredUsage.models.find(item => item.model === model.model);
+      assert.ok(restored && restored.input >= model.input && restored.requests >= model.requests);
+    }
     const task = await invoke('task-session:get', { taskId: legacyTask.id, parentConversationId: legacyConversation.id }); assert.equal(task.resultText, legacyTask.resultText);
     const count = requests.length, duplicate = await invoke('agui:run', replayInput); assert.equal(duplicate.duplicate, true); assert.equal(duplicate.runId, replayRunId); assert.equal(requests.length, count);
     assert.deepEqual((await invoke('chats:get', legacyConversation.id)).messages.map(message => message.content), ['legacy question', 'legacy reply']);

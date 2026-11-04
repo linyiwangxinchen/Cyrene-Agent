@@ -22,7 +22,7 @@ describe("relationship log", () => {
       channel: "desktop",
     })
 
-    const data = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+    const data = JSON.parse(await store.exportData()) as {
       entries: Array<{ userMood: string; relationshipSignal: string; nextCareCue: string }>
       dailySummaries: Array<{ summary: string }>
     }
@@ -30,7 +30,7 @@ describe("relationship log", () => {
     expect(data.entries).toHaveLength(1)
     expect(data.entries[0].userMood).toBe("明确边界")
     expect(data.entries[0].relationshipSignal).toContain("低打扰")
-    expect(data.entries[0].nextCareCue).toContain("不要弹确认")
+    expect(data.entries[0].nextCareCue).toContain("风险确认仍需执行")
     expect(data.dailySummaries[0].summary).toContain("明确边界")
   })
 
@@ -68,7 +68,7 @@ describe("relationship log", () => {
       })
     }
 
-    const data = JSON.parse(fs.readFileSync(filePath, "utf8")) as {
+    const data = JSON.parse(await store.exportData()) as {
       entries: Array<{ userMood: string }>
     }
     expect(data.entries.every((e) => e.userMood === "未知")).toBe(true)
@@ -78,9 +78,9 @@ describe("relationship log", () => {
     const { RelationshipLogStore } = await import("./relationship-log")
     const store = new RelationshipLogStore(filePath)
     await store.recordTurn({ userText: "太好了，终于完成了！", assistantText: "我也替你开心。", cyreneFeeling: "开心", channel: "desktop" })
-    const data = JSON.parse(fs.readFileSync(filePath, "utf8")) as { relationshipState: { stage: string; warmth: number }; affectState: { renderedFeeling: string } }
+    const data = JSON.parse(await store.exportData()) as { relationshipState: { stage: string; warmth: number }; affectState: { renderedFeeling: string } }
     expect(data.relationshipState.stage).toBe("familiar")
-    expect(data.relationshipState.warmth).toBeGreaterThan(0.55)
+    expect(data.relationshipState.warmth).toBe(0.55)
     expect(data.affectState.renderedFeeling).toBe("平静")
   })
 

@@ -50,6 +50,7 @@ type ProactiveEvaluationStatus = {
   evaluatedAt: number | null;
   state: "candidate" | "no_candidate" | "suppressed" | "backoff";
   reason?: string;
+  explanation?: string;
   lastOutcome?: { state: "blocked" | "silent" | "failed" | "sent"; reason?: string; at: number };
   delivery?: { target: string; ready: boolean; reason?: string };
   unansweredCount?: number;
@@ -293,6 +294,7 @@ export function PreferencesSettingsPanel() {
                       : `${proactiveStatus.candidateScore} / ${proactiveStatus.targetScore}`}
                       {proactiveStatus.sceneId ? ` · ${proactiveStatus.sceneId}` : ""}
                       {proactiveStatus.evaluatedAt ? ` · ${new Date(proactiveStatus.evaluatedAt).toLocaleString()}` : ""}</span>
+                    {proactiveStatus.explanation && <span>{proactiveStatus.explanation}</span>}
                     <span>{proactiveReason(proactiveStatus.reason ?? proactiveStatus.state)}</span>
                     {proactiveStatus.delivery && <span>{t("settingsPage.preferences.proactiveDeliveryStatus")}: {proactiveReason(proactiveStatus.delivery.ready ? "ready" : proactiveStatus.delivery.reason ?? "delivery_unavailable")}</span>}
                     {proactiveStatus.lastOutcome && <span>{t("settingsPage.preferences.proactiveLastOutcome")}: {proactiveReason(proactiveStatus.lastOutcome.state)}{proactiveStatus.lastOutcome.reason ? ` · ${proactiveReason(proactiveStatus.lastOutcome.reason)}` : ""} · {new Date(proactiveStatus.lastOutcome.at).toLocaleString()}</span>}

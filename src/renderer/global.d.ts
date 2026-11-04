@@ -197,6 +197,8 @@ interface BrowserPanelApi {
 
 declare global {
   interface Window {
+    memoryGovernance: import("../shared/memory-governance").MemoryGovernanceApi;
+    companion: import("../shared/companion").CompanionApi;
     /** True only for the authenticated headless Web host. */
     __cyreneWeb?: boolean;
     cyrene?: {

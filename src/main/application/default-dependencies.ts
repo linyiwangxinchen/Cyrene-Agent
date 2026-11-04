@@ -1,3 +1,5 @@
+import { registerMemoryGovernanceIpc } from "../memory/memory-governance-ipc";
+import { registerCompanionIpc } from "../persona/companion-ipc";
 import { disposeAllShellJobs } from "../orchestrator/tools/builtin-tools/shell-job-manager";
 import { closeConversationDatabases } from "../storage/conversation-database-client";
 /**
@@ -712,6 +714,8 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           windowManager: shell.windowManager,
         });
         registerWikiMemoryIpc(ipc);
+        registerCompanionIpc(ipc);
+        registerMemoryGovernanceIpc(ipc);
         registerKnowledgeBaseIpc(ipc);
 
         // ── TTS IPC ──

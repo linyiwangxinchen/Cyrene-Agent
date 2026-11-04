@@ -1,3 +1,5 @@
+import { buildPersonaContractPrompt } from "../persona/persona-spec";
+import { buildRelationshipContext } from "../relationship/relationship-log";
 import { buildAlwaysOnContext, buildMemoryInjection } from "../orchestrator";
 import { buildToneInjection } from "../orchestrator/tone-injector";
 import { buildSkillCatalog, skillRegistry } from "../skills";
@@ -53,7 +55,7 @@ export async function buildCallSystemPrompt(
   try { memoryInjection = await buildMemoryInjection(userText); } catch { /* ignore */ }
 
   // ④ 通话专用人设 prompt
-  const phoneParts: string[] = [];
+  const phoneParts: string[] = [buildPersonaContractPrompt(), await buildRelationshipContext("call")];
   const phoneSystem = loadPromptFile("phone_system.md");
   if (phoneSystem) phoneParts.push(phoneSystem);
   const phoneIdentity = loadPromptFile("phone_identity.md");

@@ -114,7 +114,7 @@ describe("Web persona parity and continuity", () => {
     const f = await fixture();
     const initial = await f.runtime.getPersonaState();
     expect(initial.spec.displayName).toBe("昔涟");
-    expect(initial.relationshipState.stage).toBe("new");
+    expect(initial.relationshipState.stage).toBe("familiar");
     const updated = await f.runtime.updateRelationshipPreferences({ userLabel: "小夏", boundaries: ["少打断"] });
     expect(updated.userLabel).toBe("小夏");
     expect(updated.boundaries).toEqual(["少打断"]);

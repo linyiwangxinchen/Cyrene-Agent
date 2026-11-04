@@ -74,8 +74,9 @@ describe("headless model service", () => {
     expect(payload).toContain("小夏的菜园");
     expect(payload).toContain("称呼偏好：小夏");
     expect(payload).toContain("[表达风格]");
-    const { readFile } = await import("node:fs/promises");
-    expect(JSON.parse(await readFile(path.join(f.data, "relationship-log.json"), "utf8")).entries).toHaveLength(1);
+    const { RelationshipLogStore } = await import("../main/relationship/relationship-log-core");
+    const relationship = new RelationshipLogStore(path.join(f.data, "relationship-log.json"));
+    expect(JSON.parse(await relationship.exportData()).entries).toHaveLength(1);
   });
   it("does not replace delayed replies with a local fallback", async () => {
     const f = await fixture("openai", { delay: 1800 });

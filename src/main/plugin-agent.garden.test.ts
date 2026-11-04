@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPluginAgentRunner } from "./plugin-agent";
+vi.mock("./permission", () => ({ checkPermission: vi.fn(async () => ({ allowed: true })) }));
 
 describe("原生内容插件的共享人格与工具策略", () => {
   it("沿用 Chat 人格、档案和动态上下文，不注入 Minecraft 或原全局工具清单", async () => {

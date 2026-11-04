@@ -55,7 +55,7 @@ export async function prepareToolRuntime(input: {
       }
     }
     // 契约检查完毕后，allow_all 才生效（只影响执行阶段语义）
-    if (options.permissionMode === "allow_all") return true;
+    // Explicit channel auto-approval still obeys live capability revocation.
     const tool = toolRegistry.getById(toolId);
     if (!tool) return false;
     const risk: ToolRiskLevel = (tool as ToolDefinition & { risk?: ToolRiskLevel }).risk ?? "safe";
@@ -68,6 +68,8 @@ export async function prepareToolRuntime(input: {
       runId,
       signal,
       allowPrompt: options.allowPermissionPrompt,
+      bypassBasePolicy: options.permissionMode === "allow_all",
+      effect: resolveEffectKind(tool, args),
     })).allowed;
   };
 

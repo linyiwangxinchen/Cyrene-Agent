@@ -192,6 +192,8 @@ export interface AguiRunInput {
   promptSource?: "conversation" | "plugin-agent";
   /** 仅主进程内部使用：传给插件提示词 Provider 的逻辑渠道，不参与内置渠道规则。 */
   promptChannel?: string;
+  /** Host-only privacy boundary; never accepted from renderer payload. */
+  privateRelationshipContext?: boolean;
   /** @deprecated 仅保留 Renderer 兼容；主进程按 ChatSession.mode 分流并忽略该值。 */
   executionMode?: ConversationMode | "soul-only" | "collaboration";
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
@@ -237,6 +239,7 @@ export type OnRunFinishedFn = (
     channel?: string;
     runId?: string;
     assistantEntryId?: string;
+    privateRelationshipContext?: boolean;
     userTurnId?: string;
   },
 ) => Promise<void | RunFinishedEffects> | void | RunFinishedEffects;

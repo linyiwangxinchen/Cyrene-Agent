@@ -15,7 +15,8 @@ vi.mock("./harness", async (importOriginal) => {
   return { ...actual, runCyreneHarness: runHarness };
 });
 
-vi.mock("./tools/registry/tool-registry", () => ({
+vi.mock("./tools/registry/tool-registry", async importOriginal => ({
+  ...await importOriginal<typeof import("./tools/registry/tool-registry")>(),
   toolRegistry: {
     getEnabledTools: vi.fn(() => []),
     getById,
@@ -103,6 +104,7 @@ describe("runHarnessWithAdapter cancellation context", () => {
   });
 
   it("passes the mobile non-interactive policy and allows tools without approval", async () => {
+    permissionCheck.mockResolvedValue({ allowed: true });
     getById.mockReturnValue({
       id: "write_file",
       name: "Write File",
@@ -132,6 +134,6 @@ describe("runHarnessWithAdapter cancellation context", () => {
     expect(input.includeInteractiveTools).toBe(false);
     expect(input.toolContext?.permissionMode).toBe("allow_all");
     await expect(input.checkPermission?.("write_file", { path: "x" })).resolves.toBe(true);
-    expect(permissionCheck).not.toHaveBeenCalled();
+    expect(permissionCheck).toHaveBeenCalledWith(expect.objectContaining({ bypassBasePolicy: true }));
   });
 });

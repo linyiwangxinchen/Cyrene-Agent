@@ -73,8 +73,10 @@ export interface ProactiveTriggerDependencies {
   getLastEvaluatedAtByScene: () => Map<string, number>;
   setLastEvaluatedAtByScene: (next: Map<string, number>) => void;
   getTargetScore?: () => number;
+  onExplanation?: (explanation: string) => void;
   onEvaluation?: (status: ProactiveEvaluationStatus) => void;
   getConversationLastActivity?: () => Promise<number | null>;
+  getAdditionalCandidates?: (context: ProactiveTriggerContext) => Promise<ProactiveOpportunity[]>;
   getCandidateBlockReason?: (candidate: ProactiveCandidate) => string | undefined;
 }
 
@@ -493,7 +495,7 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
       conversationLastActivity: await deps.getConversationLastActivity?.() ?? null,
     };
 
-    const allOpps = generateProactiveCandidates(ctx);
+    const allOpps = [...generateProactiveCandidates(ctx), ...await deps.getAdditionalCandidates?.(ctx) ?? []];
     const allSorted = sortCandidates(allOpps);
     const filtered = allSorted.filter((o) => o.score >= targetScore());
     const sorted = filtered;
@@ -533,6 +535,7 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
 
     const selected = candidates[0];
     reportEvaluation(snapshot, "candidate", selected.score, selected.sceneId);
+    deps.onExplanation?.(selected.reason);
     log("selected", { sceneId: selected.sceneId, score: selected.score, reason });
 
     // 记录评估时间（无论结果：committed / blocked / silent / fallback_unavailable）

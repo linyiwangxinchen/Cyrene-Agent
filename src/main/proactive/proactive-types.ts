@@ -24,6 +24,7 @@ export interface ProactiveEvaluationStatus {
   evaluatedAt: number | null;
   state: ProactiveEvaluationState;
   reason?: string;
+  explanation?: string;
   lastOutcome?: { state: "blocked" | "silent" | "failed" | "sent"; reason?: string; at: number; sceneId: string | null };
   delivery?: { target: "local" | "wechat" | "feishu"; ready: boolean; reason?: string };
   unansweredCount?: number;

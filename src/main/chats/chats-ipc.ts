@@ -1,3 +1,4 @@
+import { getRelationshipStore } from "../relationship/relationship-log";
 import { getAdapterForConfig } from "../orchestrator/vendors";
 import { modelMessageOrigin } from "../orchestrator/vendors/model-history";
 // 聊天会话 IPC 桥接：把 chats-store 的纯数据 API 暴露给渲染进程。
@@ -439,6 +440,8 @@ export async function registerChatsIpc(
           console.warn("[ChatsIpc] failed to delete session summary memory:", id, error);
         }
       }
+      try { await getRelationshipStore().forgetConversation(id); }
+      catch (error) { console.error("[ChatsIpc] failed to delete relationship derivatives", error); }
       // 删除当前活动目标会话时使语音输入租约目标失效（登记表内部判断是否命中）
       activeChatTargetRegistry.notifySessionDeleted(id);
       try {

@@ -1,3 +1,4 @@
+import { resolveEffectKind } from "./tools/registry/tool-registry";
 // CyreneAgent —— 把两条 Agent 循环包进 AG-UI 的 AbstractAgent。
 //
 // - 持有 runWithEvents 入口：Chat 使用 chat-loop，其余模式使用 CyreneHarness。
@@ -408,6 +409,7 @@ async function executeToolCall(
     toolDescription: tool.description,
     args,
     risk,
+    effect: resolveEffectKind(tool, args),
     runId: ctx?.runId,
   });
   if (!perm.allowed) {

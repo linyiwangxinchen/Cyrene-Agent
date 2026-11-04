@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PluginTool } from "../plugins/api";
 import { createPluginAgentRunner } from "./plugin-agent";
+import { checkPermission } from "./permission";
+vi.mock("./permission", () => ({ checkPermission: vi.fn(async () => ({ allowed: true })) }));
 
 function goalTool(patch: Partial<PluginTool> = {}): PluginTool {
   return {
@@ -125,6 +127,9 @@ describe("plugin-agent", () => {
     expect(input.promptLayers.stablePrefix).toContain("minecraft-bot_goto");
     expect(input.promptLayers.stablePrefix).not.toContain("GLOBAL TOOL CATALOG");
     expect(input.promptLayers.runtimeContext).toContain("WORLD SNAPSHOT");
+    vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, reason: "paused" });
+    expect(await input.checkPermission("minecraft-bot_goto", { x: 0, y: 0, z: 0 })).toBe(false);
+    expect(checkPermission).toHaveBeenLastCalledWith(expect.objectContaining({ bypassBasePolicy: true, allowPrompt: false, effect: "mutation" }));
     expect(events).toEqual([]);
     expect(result).toEqual({
       text: "木头已收集。",

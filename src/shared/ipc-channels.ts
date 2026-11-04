@@ -29,6 +29,12 @@ export interface SpeechInputCommitResult {
 }
 
 export const IPC = {
+  MEMORY_GOVERNANCE_EXPLAIN: "memory-governance:explain",
+  MEMORY_GOVERNANCE_CHANGE: "memory-governance:change",
+  MEMORY_GOVERNANCE_EXPORT: "memory-governance:export",
+  COMPANION_GET: "companion:get",
+  COMPANION_UPDATE: "companion:update",
+  COMPANION_EXPORT: "companion:export",
   // pet window
   WINDOW_MINIMIZE: "window:minimize",
   WINDOW_CLOSE: "window:close",

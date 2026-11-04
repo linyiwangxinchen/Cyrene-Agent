@@ -380,6 +380,8 @@ describe("createChannelsSubsystem lifecycle", () => {
       "渠道问题",
       {
         source: "channel",
+        privateRelationshipContext: true,
+        runId: "channel-run",
         mode: "chat",
         conversationId: "channel-session",
         channel: "telegram",

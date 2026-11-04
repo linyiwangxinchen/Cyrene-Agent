@@ -1,0 +1,12 @@
+.cy-companion { min-width: 0; }
+.cy-companion__status, .cy-companion__actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-block: 12px; }
+.cy-companion__form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.cy-companion__form > label { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cy-companion__form > p, .cy-companion__form label > span { color: var(--rb-text-secondary); line-height: 1.6; }
+.cy-companion__form > label.cy-companion__switch { flex-direction: row; align-items: center; justify-content: space-between; }
+.cy-companion__wide { grid-column: 1 / -1; }
+.cy-companion__record { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; border-top: 1px solid var(--rb-border-default); padding-block: 14px; overflow-wrap: anywhere; }
+.cy-companion__record p { white-space: pre-wrap; }
+.cy-companion__record time, .cy-companion__record small { color: var(--rb-text-secondary); }
+.cy-companion .ant-select { width: 100%; }
+@media (max-width: 680px) { .cy-companion__form { grid-template-columns: minmax(0, 1fr); } }
