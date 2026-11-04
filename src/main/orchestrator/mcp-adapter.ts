@@ -7,6 +7,7 @@ import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { createHash } from "node:crypto";
 import { ToolDefinition, toolRegistry, type ToolEffectKind } from "./tools/registry/tool-registry";
 import { checkExecutionPolicy } from "./shell-execution-policy";
+import { getCurrentLevel } from "../permission";
 import { ToolExecutionError } from "./tools/registry/tool-execution-error";
 
 const LOG_PREFIX = "[MCP Adapter]";
@@ -199,10 +200,9 @@ export async function connectMcpServer(config: McpServerConfig, options: { signa
       description: mt.description || mt.name,
       enabled: true,
       // MCP 不经过 Shell 沙箱，第三方 annotations/效果 override 不能证明权限边界。
-      // 复用仅完全访问或逐次审批可用的高风险等级，避免缺省 safe 放行。
+      // 统一放在逐次交互的 input-control 风险层，effectKind 仍由执行守卫校验。
       risk: "input-control",
       effectKind: resolvedEffectKind,
-      risk: resolvedEffectKind === "read" ? "fs-read" : "fs-write",
       inputSchema: {
         type: "object",
         properties: mt.inputSchema?.properties as Record<string, { type: string; description: string }> || {},
@@ -212,7 +212,12 @@ export async function connectMcpServer(config: McpServerConfig, options: { signa
       execute: async (args, ctx) => {
         // Both the Harness and legacy callers reach this boundary. Unknown MCP
         // effects must be refused before any remote side effect can occur.
-        const policy = checkExecutionPolicy(resolvedEffectKind, "none", toolId);
+        // An unknown third-party effect is denied at every normal level. An
+        // explicitly selected full-access session is the one deliberate escape
+        // hatch, while the tool remains input-control risk in the permission UI.
+        const policy = resolvedEffectKind === "unknown" && getCurrentLevel() === "full"
+          ? { allowed: true }
+          : checkExecutionPolicy(resolvedEffectKind, "none", toolId);
         if (!policy.allowed) throw new ToolExecutionError(policy.errorCode!, policy.message!, "permission_denied");
         ctx?.signal?.throwIfAborted();
         console.log(LOG_PREFIX, "调用工具:", toolId, JSON.stringify(args));
