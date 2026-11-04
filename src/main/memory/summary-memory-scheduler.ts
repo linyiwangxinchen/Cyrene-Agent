@@ -198,7 +198,7 @@ export class SummaryMemoryScheduler {
     // on next for the caller. A finally-only tail would reject unobserved.
     const settled = next.then(cleanup, cleanup);
     queues.set(key, settled);
-    return next;
+    return settled;
   }
 
   private reportError(conversationId: string, error: unknown): void {

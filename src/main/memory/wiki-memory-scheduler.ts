@@ -215,7 +215,7 @@ export class WikiMemoryScheduler {
     // unhandled rejected promise even when the caller catches next.
     const settled = next.then(cleanup, cleanup);
     this.queues.set(conversationId, settled);
-    return next;
+    return settled;
   }
 
   private reportError(conversationId: string, error: unknown): void {

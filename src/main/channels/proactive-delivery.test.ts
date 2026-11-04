@@ -27,11 +27,11 @@ function incoming(channel: "wechat" | "feishu", senderId: string, chatId = sende
   return { channel, senderId, chatId, text: "你好", at: new Date() };
 }
 
-function fakeAdapter(phase: "running" | "offline" = "running"): ChannelAdapter {
+function fakeAdapter(phase: "running" | "offline" = "running", maxTextLength = capability.maxTextLength): ChannelAdapter {
   return {
     id: "wechat",
     displayName: "test",
-    capability,
+    capability: { ...capability, maxTextLength },
     onMessage: null,
     start: vi.fn(),
     stop: vi.fn(),
@@ -127,6 +127,20 @@ describe("proactive channel delivery", () => {
       targetId: "wx-1",
       parts: [{ kind: "text", text: "第一句。第二句？" }],
     });
+  });
+
+  it("respects the channel text limit even when mobile segmentation is off", async () => {
+    const adapter = fakeAdapter("running", 4);
+    const sent: string[] = [];
+    vi.mocked(adapter.send).mockImplementation(async message => {
+      const part = message.parts[0]; if (part.kind === "text") sent.push(part.text);
+      return { ok: true };
+    });
+    registry.remember(incoming("wechat", "wx-1"), "session-wx-1");
+    const result = await sendProactiveChannelMessage({ channel: "wechat", text: "第一句。🌸🌸🌸🌸🌸", mobileMessageSegmentation: "off",
+      manager: { getAdapter: () => adapter }, recipientRegistry: registry, appendHistory: vi.fn(), appendLog: vi.fn() });
+    expect(result).toMatchObject({ kind: "committed", deliveredParts: 3, totalParts: 3 });
+    expect(sent).toEqual(["第一句。", "🌸🌸🌸🌸", "🌸"]);
   });
 
   it("sends segmented text sequentially and caps it at ten parts", async () => {
