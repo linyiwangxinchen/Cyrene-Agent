@@ -18,8 +18,8 @@
   "releaseCommitMessageFormat": "chore(版本号): 更新至 {{currentTag}}",
   "bumpFiles": ["package.json"],
   "packageFiles": ["package.json"],
-  "commitUrlFormat": "https://github.com/Playa-Cyrene/Cyrene-Agent/commit/{{hash}}",
-  "compareUrlFormat": "https://github.com/Playa-Cyrene/Cyrene-Agent/compare/{{previousTag}}...{{currentTag}}",
-  "issueUrlFormat": "https://github.com/Playa-Cyrene/Cyrene-Agent/issues/{{id}}",
+  "commitUrlFormat": "https://github.com/linyiwangxinchen/Cyrene-Agent/commit/{{hash}}",
+  "compareUrlFormat": "https://github.com/linyiwangxinchen/Cyrene-Agent/compare/{{previousTag}}...{{currentTag}}",
+  "issueUrlFormat": "https://github.com/linyiwangxinchen/Cyrene-Agent/issues/{{id}}",
   "userUrlFormat": "https://github.com/{{user}}"
 }

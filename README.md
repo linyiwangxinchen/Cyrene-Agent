@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>主仓库</strong>：<a href="https://github.com/Playa-Cyrene/Cyrene-Agent">GitHub</a> ・
+  <strong>主仓库</strong>：<a href="https://github.com/linyiwangxinchen/Cyrene-Agent">GitHub</a> ・
   <strong>国内镜像</strong>：<a href="https://gitee.com/playa0/cyrene-agent">Gitee</a>
 </p>
 
@@ -62,9 +62,9 @@
 ### 1. 克隆并安装依赖
 
 ```bash
-git clone https://github.com/linyiwangxinchen/Cyrene-Agent-Date.git
+git clone https://github.com/linyiwangxinchen/Cyrene-Agent.git
 # 或 Gitee（国内镜像）：git clone https://gitee.com/playa0/cyrene-agent.git
-cd Cyrene-Agent-Date
+cd Cyrene-Agent
 pnpm install --frozen-lockfile
 ```
 
@@ -106,7 +106,7 @@ pnpm run package:win:dir
 
 Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 Embedding 模型**：
 
-[前往 Releases 下载 BGE-M3](https://github.com/Playa-Cyrene/Cyrene-Agent/releases)
+[前往 Releases 下载 BGE-M3](https://github.com/linyiwangxinchen/Cyrene-Agent/releases)
 
 > [!IMPORTANT]
 >
@@ -608,11 +608,11 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
 
 ## <img src="./docs/image/icons/star.svg" width="20" height="20" alt=""> Star History
 
-<a href="https://www.star-history.com/?repos=playa-cyrene%2Fcyrene-agent&type=date&legend=bottom-right">
+<a href="https://www.star-history.com/?repos=linyiwangxinchen%2FCyrene-Agent&type=date&legend=bottom-right">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&theme=dark&legend=bottom-right" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&legend=bottom-right" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&legend=bottom-right" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=linyiwangxinchen/cyrene-agent&type=date&theme=dark&legend=bottom-right" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=linyiwangxinchen/cyrene-agent&type=date&legend=bottom-right" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=linyiwangxinchen/cyrene-agent&type=date&legend=bottom-right" />
   </picture>
 </a>
 

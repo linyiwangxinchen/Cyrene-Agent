@@ -6,7 +6,7 @@
 
 **English** | [中文](./README.md)
 
-**Primary repo**: [GitHub](https://github.com/Playa-Cyrene/Cyrene-Agent) ・ **Mirror for China**: [Gitee](https://gitee.com/playa0/cyrene-agent)
+**Primary repo**: [GitHub](https://github.com/linyiwangxinchen/Cyrene-Agent) ・ **Mirror for China**: [Gitee](https://gitee.com/playa0/cyrene-agent)
 
 </div>
 
@@ -107,9 +107,9 @@ CyreneHarness is the core Agent Loop of Cyrene Agent. It chains **model decision
 ### 1. Clone and Install Dependencies
 
 ```bash
-git clone https://github.com/linyiwangxinchen/Cyrene-Agent-Date.git
+git clone https://github.com/linyiwangxinchen/Cyrene-Agent.git
 # Or via the Gitee mirror (China): git clone https://gitee.com/playa0/cyrene-agent.git
-cd Cyrene-Agent-Date
+cd Cyrene-Agent
 pnpm install --frozen-lockfile
 ```
 
@@ -148,7 +148,7 @@ pnpm run package:win:dir
 
 Cyrene can chat normally without running a local large language model. However, installing the **BGE-M3 Embedding model** is recommended (used for semantic sticker matching, Worldbook semantic retrieval, and RAG retrieval):
 
-[Download BGE-M3 from Releases](https://github.com/Playa-Cyrene/Cyrene-Agent/releases)
+[Download BGE-M3 from Releases](https://github.com/linyiwangxinchen/Cyrene-Agent/releases)
 
 > [!IMPORTANT]
 >
@@ -619,11 +619,11 @@ GitHub Issues and pull requests are welcome. Please keep discussions respectful 
 
 ## ⭐ Star History
 
-<a href="https://www.star-history.com/?repos=playa-cyrene%2Fcyrene-agent&type=date&legend=bottom-right">
+<a href="https://www.star-history.com/?repos=linyiwangxinchen%2FCyrene-Agent&type=date&legend=bottom-right">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&theme=dark&legend=bottom-right" />
-    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&legend=bottom-right" />
-    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=playa-cyrene/cyrene-agent&type=date&legend=bottom-right" />
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=linyiwangxinchen/cyrene-agent&type=date&theme=dark&legend=bottom-right" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=linyiwangxinchen/cyrene-agent&type=date&legend=bottom-right" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=linyiwangxinchen/cyrene-agent&type=date&legend=bottom-right" />
   </picture>
 </a>
 

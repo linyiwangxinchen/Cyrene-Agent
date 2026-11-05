@@ -29,7 +29,7 @@ async function fixture(t, fault = {}) {
   await write(path.join(origin, 'source.txt'), 'old source'); await write(path.join(origin, 'dist/asset.txt'), 'old asset');
   await git(['add', '.'], origin); await git(['commit', '-m', 'old'], origin);
   const oldCommit = await git(['rev-parse', 'HEAD'], origin);
-  await git(['-c', 'core.autocrlf=false', 'clone', origin, app], root); await git(['config', 'core.autocrlf', 'false'], app); await git(['remote', 'add', 'cyrene-date', origin], app);
+  await git(['-c', 'core.autocrlf=false', 'clone', origin, app], root); await git(['config', 'core.autocrlf', 'false'], app); await git(['remote', 'add', 'cyrene', origin], app);
   for (const entry of entries) await write(path.join(app, entry), 'old runtime');
   await write(path.join(app, 'node_modules/runtime.txt'), 'old dependencies');
   await write(path.join(data, 'conversation.txt'), 'old private conversation');
@@ -108,11 +108,11 @@ test('systemd WorkingDirectory must be an absolute normalized path', () => {
   assert.throws(() => parseSystemdWorkingDirectory(''), /绝对路径/);
 });
 
-test('update fetches an explicitly selected remote for an existing clone', async t => {
+test('update fetches an explicitly selected Cyrene-Agent remote for an existing clone', async t => {
   const f = await fixture(t);
-  const result = await f.update({ remote: 'cyrene-date' });
+  const result = await f.update({ remote: 'cyrene' });
   assert.equal(result.phase, 'complete');
-  assert.deepEqual(f.fetchCalls, [['fetch', 'cyrene-date', 'master']]);
+  assert.deepEqual(f.fetchCalls, [['fetch', 'cyrene', 'master']]);
 });
 
 test('isolated build, stopped consistent snapshot and ready check finish a recorded update', async t => {
