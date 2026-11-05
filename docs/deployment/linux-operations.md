@@ -334,8 +334,11 @@ set -Eeuo pipefail
 test -f package.json && test -f pnpm-lock.yaml
 git branch "backup/legacy-$(date +%Y%m%d-%H%M%S)" master
 git stash push -u -m "legacy-before-cyrene-agent-migration"
-git remote get-url cyrene >/dev/null 2>&1 || \
-  git remote add cyrene ssh://git@ssh.github.com:443/linyiwangxinchen/Cyrene-Agent.git
+if git remote get-url cyrene >/dev/null 2>&1; then
+  git remote set-url cyrene https://github.com/linyiwangxinchen/Cyrene-Agent.git
+else
+  git remote add cyrene https://github.com/linyiwangxinchen/Cyrene-Agent.git
+fi
 git fetch cyrene master
 CYRENE_UPDATE_SCRIPT="$(mktemp --suffix=.mjs)"
 trap 'rm -f -- "$CYRENE_UPDATE_SCRIPT"' EXIT
