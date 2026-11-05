@@ -28,7 +28,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        有依据的单厂商声明更新可以直接提 PR（合并请求），无需等待认领。先看英文版 [贡献指南](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/contributing/model-adaptation.en.md) 和 [适配清单](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/references/adapted-models.en.md)。
+        有依据的单厂商声明更新可以直接提 PR（合并请求），无需等待认领。先看英文版 [贡献指南](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/contributing/model-adaptation.en.md) 和 [适配清单](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/references/adapted-models.en.md)。
         不要提供密钥、授权头、私人对话或带凭证的端点地址。
   - type: input
     id: provider-model

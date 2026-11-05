@@ -97,7 +97,7 @@ Cyrene-Agent 由个人发起，背后没有公司，也没有商业团队。仓�
 
 ## 想一起做
 
-如果你也在用 Cyrene、也想让它更好，欢迎从 [Issues](https://github.com/Playa-Cyrene/Cyrene-Agent/issues) 开始：报一个 bug、补一段文档、试一个渠道，都是有价值的贡献。贡献方式与已收录的贡献记录见 [贡献者名单](./CONTRIBUTORS.md)。
+如果你也在用 Cyrene、也想让它更好，欢迎从 [Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues) 开始：报一个 bug、补一段文档、试一个渠道，都是有价值的贡献。贡献方式与已收录的贡献记录见 [贡献者名单](./CONTRIBUTORS.md)。
 
 ---
 

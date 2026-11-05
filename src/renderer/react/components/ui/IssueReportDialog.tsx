@@ -7,7 +7,7 @@ import { copyTextToClipboard } from "../../features/chat/components/CopyButton";
 import { SettingsSelect } from "./SettingsControls";
 import "./IssueReportDialog.css";
 
-const ISSUES_URL = "https://github.com/Playa-Cyrene/Cyrene-Agent/issues";
+const ISSUES_URL = "https://github.com/linyiwangxinchen/Cyrene-Agent/issues";
 const REPORT_EMAIL = "ky2569ly@gmail.com";
 
 // 源码运行与安装包的 GitHub 表单字段并不相同：安装包模板填应用版本，源码模板必填提交号。

@@ -7,7 +7,7 @@ const GITHUB_RELEASE_HTML = [
   "<blockquote><p>本次更新没有新增功能。</p></blockquote>",
   "<h2>新增与改进</h2><ul><li>新增 GPT-6.1 Terra</li><li>内置浏览器新增自动显示模式</li></ul>",
   "<p>手动安装：Cyrene-Setup-1.3.5.exe<br>提示：安装包未做代码签名</p>",
-  "<p><a href=\"https://github.com/Playa-Cyrene/Cyrene-Agent/compare/v1.3.4...v1.3.5\">完整源码比较</a></p>",
+  "<p><a href=\"https://github.com/linyiwangxinchen/Cyrene-Agent/compare/v1.3.4...v1.3.5\">完整源码比较</a></p>",
   "<hr><h1>Cyrene-Agent 1.3.5</h1>",
 ].join(" ");
 
@@ -19,7 +19,7 @@ describe("更新说明转成可安全渲染的 HTML", () => {
     expect(html).toContain("<blockquote><p>本次更新没有新增功能。</p></blockquote>");
     expect(html).toContain("<br />");
     expect(html).toContain("<hr />");
-    expect(html).toContain('<a href="https://github.com/Playa-Cyrene/Cyrene-Agent/compare/v1.3.4...v1.3.5">完整源码比较</a>');
+    expect(html).toContain('<a href="https://github.com/linyiwangxinchen/Cyrene-Agent/compare/v1.3.4...v1.3.5">完整源码比较</a>');
   });
 
   it("去掉脚本、事件属性、样式、图片与非 https 链接", () => {

@@ -1177,7 +1177,7 @@
           "blocks": [
             {
               "kind": "paragraph",
-              "text": "The project's original source code is licensed under the [MIT License](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/LICENSE). Use, modification, and distribution of that code must comply with the license, including retaining the copyright and permission notices it requires."
+              "text": "The project's original source code is licensed under the [MIT License](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/LICENSE). Use, modification, and distribution of that code must comply with the license, including retaining the copyright and permission notices it requires."
             },
             {
               "kind": "paragraph",
@@ -1415,7 +1415,7 @@
               "items": [
                 "Email: [ky2569ly@gmail.com](mailto:ky2569ly@gmail.com), with “版权事宜” (copyright matter) in the subject;",
                 "Bilibili: [Playa0's profile](https://space.bilibili.com/260670644), marking your private message “版权联络” (copyright contact);",
-                "GitHub: [Playa-Cyrene/Cyrene-Agent](https://github.com/Playa-Cyrene/Cyrene-Agent)."
+                "GitHub: [linyiwangxinchen/Cyrene-Agent](https://github.com/linyiwangxinchen/Cyrene-Agent)."
               ]
             },
             {
@@ -1438,7 +1438,7 @@
             {
               "kind": "list",
               "items": [
-                "[GitHub Issues](https://github.com/Playa-Cyrene/Cyrene-Agent/issues);",
+                "[GitHub Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues);",
                 "Email: [ky2569ly@gmail.com](mailto:ky2569ly@gmail.com), preferably with “反馈” (feedback) or “Bug” in the subject;",
                 "A Bilibili private message to [Playa0](https://space.bilibili.com/260670644), beginning with “反馈/Bug” (feedback/bug)."
               ]
@@ -1466,7 +1466,7 @@
             },
             {
               "kind": "paragraph",
-              "text": "See the [contributors list](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md) for contributors and the [maintainers list](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/MAINTAINERS.md) for organization members and maintainers."
+              "text": "See the [contributors list](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md) for contributors and the [maintainers list](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/MAINTAINERS.md) for organization members and maintainers."
             }
           ]
         }

@@ -16,7 +16,7 @@ The project's fan-work positioning does not change the open-source license of it
 
 ## 2. Code license and third-party content
 
-The project's original source code is licensed under the [MIT License](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/LICENSE). Use, modification, and distribution of that code must comply with the license, including retaining the copyright and permission notices it requires.
+The project's original source code is licensed under the [MIT License](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/LICENSE). Use, modification, and distribution of that code must comply with the license, including retaining the copyright and permission notices it requires.
 
 The MIT License does not automatically cover characters, images, models, voices, text, fonts, trademarks, or other third-party content. Dependencies and bundled resources remain subject to their respective licenses, authorization terms, or rights-holder policies. This statement neither changes the MIT License nor replaces third-party licenses.
 
@@ -132,7 +132,7 @@ If miHoYo / HoYoverse or another legitimate rights holder believes this software
 
 - Email: [ky2569ly@gmail.com](mailto:ky2569ly@gmail.com), with “版权事宜” (copyright matter) in the subject;
 - Bilibili: [Playa0's profile](https://space.bilibili.com/260670644), marking your private message “版权联络” (copyright contact);
-- GitHub: [Playa-Cyrene/Cyrene-Agent](https://github.com/Playa-Cyrene/Cyrene-Agent).
+- GitHub: [linyiwangxinchen/Cyrene-Agent](https://github.com/linyiwangxinchen/Cyrene-Agent).
 
 Where possible, identify the content in question, provide the basis for your rights and your specific request, and include a way to reply. For private information, unpublished authorization materials, or other sensitive content, use a non-public contact channel rather than uploading it to a public Issue.
 
@@ -142,7 +142,7 @@ Upon receiving a valid notice, we will investigate and address it as soon as pos
 
 If you encounter a problem or bug, or have a feature suggestion, you are welcome to use:
 
-- [GitHub Issues](https://github.com/Playa-Cyrene/Cyrene-Agent/issues);
+- [GitHub Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues);
 - Email: [ky2569ly@gmail.com](mailto:ky2569ly@gmail.com), preferably with “反馈” (feedback) or “Bug” in the subject;
 - A Bilibili private message to [Playa0](https://space.bilibili.com/260670644), beginning with “反馈/Bug” (feedback/bug).
 
@@ -156,4 +156,4 @@ Special thanks to Bilibili creator [是依七哒](https://space.bilibili.com/457
 
 Thanks to all developers who contribute through Pull Requests, and everyone who reports issues, offers suggestions, or supports the project.
 
-See the [contributors list](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md) for contributors and the [maintainers list](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/MAINTAINERS.md) for organization members and maintainers.
+See the [contributors list](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md) for contributors and the [maintainers list](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/MAINTAINERS.md) for organization members and maintainers.

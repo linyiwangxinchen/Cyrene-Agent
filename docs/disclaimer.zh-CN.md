@@ -16,7 +16,7 @@ Cyrene 是开源桌面 Agent 与拟人化交互工具。本项目以个人粉丝
 
 ## 二、代码许可与第三方内容
 
-本项目原创源代码依 [MIT License](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/LICENSE) 授权。代码的使用、修改和分发应遵守该许可证，包括保留其中要求保留的版权与许可声明。
+本项目原创源代码依 [MIT License](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/LICENSE) 授权。代码的使用、修改和分发应遵守该许可证，包括保留其中要求保留的版权与许可声明。
 
 MIT License 不自动适用于角色、图像、模型、声音、文字、字体、商标及其他第三方内容。依赖库和其他随附资源应分别遵守其适用的许可、授权说明或权利人政策。本声明不修改 MIT License，也不替代各项第三方许可。
 
@@ -132,7 +132,7 @@ AI 回复可能包含事实错误、遗漏、不适当表达或前后不一致�
 
 - 电子邮箱：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)，邮件标题请注明“版权事宜”；
 - B 站：[Playa0 作者空间](https://space.bilibili.com/260670644)，私信请注明“版权联络”；
-- GitHub：[Playa-Cyrene/Cyrene-Agent](https://github.com/Playa-Cyrene/Cyrene-Agent)。
+- GitHub：[linyiwangxinchen/Cyrene-Agent](https://github.com/linyiwangxinchen/Cyrene-Agent)。
 
 请尽量提供被指内容的位置、相关权利依据、具体请求及可回复的联系方式。涉及私人资料、未公开授权材料或其他敏感内容时，请优先通过非公开渠道联系，不要直接上传至公开 Issue。
 
@@ -142,7 +142,7 @@ AI 回复可能包含事实错误、遗漏、不适当表达或前后不一致�
 
 如遇到问题、Bug 或有功能建议，欢迎通过以下渠道反馈：
 
-- [GitHub Issues](https://github.com/Playa-Cyrene/Cyrene-Agent/issues)；
+- [GitHub Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues)；
 - 电子邮箱：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)，标题建议注明“反馈”或“Bug”；
 - B 站私信 [Playa0](https://space.bilibili.com/260670644)，开头注明“反馈/Bug”。
 
@@ -156,4 +156,4 @@ AI 回复可能包含事实错误、遗漏、不适当表达或前后不一致�
 
 感谢所有通过 Pull Request 为项目作出贡献的开发者，以及提交问题反馈、建议和支持本项目的朋友。
 
-贡献记录见 [贡献者名单](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md)；项目作者、组织成员与维护者介绍见 [组织成员与维护者](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/MAINTAINERS.md)。
+贡献记录见 [贡献者名单](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md)；项目作者、组织成员与维护者介绍见 [组织成员与维护者](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/MAINTAINERS.md)。

@@ -1177,7 +1177,7 @@
           "blocks": [
             {
               "kind": "paragraph",
-              "text": "本プロジェクト独自のソースコードは [MIT License](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/LICENSE) に基づいて提供されます。使用、変更、配布に際しては、必要な著作権表示および許諾表示の保持を含め、同ライセンスを遵守してください。"
+              "text": "本プロジェクト独自のソースコードは [MIT License](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/LICENSE) に基づいて提供されます。使用、変更、配布に際しては、必要な著作権表示および許諾表示の保持を含め、同ライセンスを遵守してください。"
             },
             {
               "kind": "paragraph",
@@ -1415,7 +1415,7 @@
               "items": [
                 "メール：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)。件名に「版权事宜」と記載してください。",
                 "Bilibili：[Playa0 のプロフィール](https://space.bilibili.com/260670644)。私信に「版权联络」と記載してください。",
-                "GitHub：[Playa-Cyrene/Cyrene-Agent](https://github.com/Playa-Cyrene/Cyrene-Agent)。"
+                "GitHub：[linyiwangxinchen/Cyrene-Agent](https://github.com/linyiwangxinchen/Cyrene-Agent)。"
               ]
             },
             {
@@ -1438,7 +1438,7 @@
             {
               "kind": "list",
               "items": [
-                "[GitHub Issues](https://github.com/Playa-Cyrene/Cyrene-Agent/issues)。",
+                "[GitHub Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues)。",
                 "メール：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)。件名に「反馈」または「Bug」と記載することを推奨します。",
                 "[Playa0](https://space.bilibili.com/260670644) への Bilibili 私信。冒頭に「反馈/Bug」と記載してください。"
               ]
@@ -1466,7 +1466,7 @@
             },
             {
               "kind": "paragraph",
-              "text": "貢献者は [貢献者一覧](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md)、組織メンバーとメンテナーは [メンテナー一覧](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/MAINTAINERS.md) をご覧ください。"
+              "text": "貢献者は [貢献者一覧](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md)、組織メンバーとメンテナーは [メンテナー一覧](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/MAINTAINERS.md) をご覧ください。"
             }
           ]
         }

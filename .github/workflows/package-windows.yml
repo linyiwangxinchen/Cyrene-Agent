@@ -71,7 +71,7 @@ jobs:
         run: pnpm run prepare:mpv
 
       - name: Build NSIS installer
-        run: pnpm exec electron-builder --win nsis --publish never
+        run: pnpm exec electron-builder --config electron-builder.fork.yml --win nsis --x64 --publish never
 
       # 验证安装器、latest.yml 更新元数据与 win-unpacked 内随包二进制齐全
       - name: Verify installer artifacts

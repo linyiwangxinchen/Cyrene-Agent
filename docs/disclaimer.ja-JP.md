@@ -16,7 +16,7 @@ Cyrene は、オープンソースのデスクトップ Agent および擬人的
 
 ## 2. コードのライセンスと第三者コンテンツ
 
-本プロジェクト独自のソースコードは [MIT License](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/LICENSE) に基づいて提供されます。使用、変更、配布に際しては、必要な著作権表示および許諾表示の保持を含め、同ライセンスを遵守してください。
+本プロジェクト独自のソースコードは [MIT License](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/LICENSE) に基づいて提供されます。使用、変更、配布に際しては、必要な著作権表示および許諾表示の保持を含め、同ライセンスを遵守してください。
 
 MIT License は、キャラクター、画像、モデル、声、文章、フォント、商標などの第三者コンテンツに自動的に適用されるものではありません。依存ライブラリや同梱リソースには、それぞれのライセンス、許諾条件、権利者の方針が適用されます。本声明は MIT License を変更するものでも、第三者のライセンスに代わるものでもありません。
 
@@ -132,7 +132,7 @@ miHoYo / HoYoverse またはその他の正当な権利者が、本ソフトウ�
 
 - メール：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)。件名に「版权事宜」と記載してください。
 - Bilibili：[Playa0 のプロフィール](https://space.bilibili.com/260670644)。私信に「版权联络」と記載してください。
-- GitHub：[Playa-Cyrene/Cyrene-Agent](https://github.com/Playa-Cyrene/Cyrene-Agent)。
+- GitHub：[linyiwangxinchen/Cyrene-Agent](https://github.com/linyiwangxinchen/Cyrene-Agent)。
 
 可能な範囲で、対象コンテンツの場所、権利の根拠、具体的な要望、返信先をお知らせください。個人情報、未公開の許諾資料などの機微な内容は、公開 Issue に直接掲載せず、非公開の連絡手段を優先してください。
 
@@ -142,7 +142,7 @@ miHoYo / HoYoverse またはその他の正当な権利者が、本ソフトウ�
 
 問題、不具合、機能に関する提案は、以下の窓口にお寄せください。
 
-- [GitHub Issues](https://github.com/Playa-Cyrene/Cyrene-Agent/issues)。
+- [GitHub Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues)。
 - メール：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)。件名に「反馈」または「Bug」と記載することを推奨します。
 - [Playa0](https://space.bilibili.com/260670644) への Bilibili 私信。冒頭に「反馈/Bug」と記載してください。
 
@@ -156,4 +156,4 @@ Live2D モデル関連のリソースを制作・共有し、本プロジェク�
 
 Pull Request を通じて貢献する開発者の皆様、問題の報告や提案を寄せてくださる方々、プロジェクトを支援してくださる皆様に感謝します。
 
-貢献者は [貢献者一覧](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md)、組織メンバーとメンテナーは [メンテナー一覧](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/MAINTAINERS.md) をご覧ください。
+貢献者は [貢献者一覧](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md)、組織メンバーとメンテナーは [メンテナー一覧](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/MAINTAINERS.md) をご覧ください。

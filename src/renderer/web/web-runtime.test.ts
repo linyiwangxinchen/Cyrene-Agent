@@ -120,8 +120,8 @@ it("opens issue mail on the visiting computer without an asynchronous server hop
 it("isolates external HTTP pages and rejects executable or file links", async () => {
   const open = vi.spyOn(window, "open").mockReturnValue(null);
   const api = await runtime();
-  expect(await api.system.openExternal("https://github.com/Playa-Cyrene/Cyrene-Agent/issues")).toEqual({ ok: true });
-  expect(open).toHaveBeenCalledWith("https://github.com/Playa-Cyrene/Cyrene-Agent/issues", "_blank", "noopener,noreferrer");
+  expect(await api.system.openExternal("https://github.com/linyiwangxinchen/Cyrene-Agent/issues")).toEqual({ ok: true });
+  expect(open).toHaveBeenCalledWith("https://github.com/linyiwangxinchen/Cyrene-Agent/issues", "_blank", "noopener,noreferrer");
   for (const url of ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,unsafe", "not a URL"]) expect(await api.system.openExternal(url)).toMatchObject({ ok: false });
   expect(open).toHaveBeenCalledTimes(1);
 });

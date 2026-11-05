@@ -5,13 +5,13 @@ import { describe, expect, it } from "vitest";
 
 describe("application update packaging", () => {
   it("packages GitHub update metadata for electron-updater downloads", () => {
-    const config = load(readFileSync(resolve(process.cwd(), "electron-builder.yml"), "utf8")) as {
+    const config = load(readFileSync(resolve(process.cwd(), "electron-builder.fork.yml"), "utf8")) as {
       publish?: { provider?: string; owner?: string; repo?: string };
     };
 
     expect(config.publish).toMatchObject({
       provider: "github",
-      owner: "Playa-Cyrene",
+      owner: "linyiwangxinchen",
       repo: "Cyrene-Agent",
     });
   });

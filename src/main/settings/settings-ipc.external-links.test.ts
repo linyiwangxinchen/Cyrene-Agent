@@ -21,7 +21,7 @@ beforeEach(() => {
   // 只登记生产 IPC 回调；所有外部模块隔离，不启动应用或访问真实配置。
   registerSettingsIpc({ ipc: { handle(channel, callback) { if (channel === IPC.OPEN_EXTERNAL) open = callback as typeof open; }, on() {}, removeHandler() {}, dispose() {} } } as SettingsIpcDependencies);
 });
-it.each(["mailto:ky2569ly@gmail.com", "https://github.com/Playa-Cyrene/Cyrene-Agent", "http://example.com"])("既有 IPC 允许协议 %s 并交给模拟 shell", async (url) => {
+it.each(["mailto:ky2569ly@gmail.com", "https://github.com/linyiwangxinchen/Cyrene-Agent", "http://example.com"])("既有 IPC 允许协议 %s 并交给模拟 shell", async (url) => {
   expect(await open(null, url)).toEqual({ ok: true });
   expect(shell.openExternal).toHaveBeenCalledExactlyOnceWith(url);
 });

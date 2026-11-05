@@ -1177,7 +1177,7 @@
           "blocks": [
             {
               "kind": "paragraph",
-              "text": "本项目原创源代码依 [MIT License](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/LICENSE) 授权。代码的使用、修改和分发应遵守该许可证，包括保留其中要求保留的版权与许可声明。"
+              "text": "本项目原创源代码依 [MIT License](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/LICENSE) 授权。代码的使用、修改和分发应遵守该许可证，包括保留其中要求保留的版权与许可声明。"
             },
             {
               "kind": "paragraph",
@@ -1415,7 +1415,7 @@
               "items": [
                 "电子邮箱：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)，邮件标题请注明“版权事宜”；",
                 "B 站：[Playa0 作者空间](https://space.bilibili.com/260670644)，私信请注明“版权联络”；",
-                "GitHub：[Playa-Cyrene/Cyrene-Agent](https://github.com/Playa-Cyrene/Cyrene-Agent)。"
+                "GitHub：[linyiwangxinchen/Cyrene-Agent](https://github.com/linyiwangxinchen/Cyrene-Agent)。"
               ]
             },
             {
@@ -1438,7 +1438,7 @@
             {
               "kind": "list",
               "items": [
-                "[GitHub Issues](https://github.com/Playa-Cyrene/Cyrene-Agent/issues)；",
+                "[GitHub Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues)；",
                 "电子邮箱：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)，标题建议注明“反馈”或“Bug”；",
                 "B 站私信 [Playa0](https://space.bilibili.com/260670644)，开头注明“反馈/Bug”。"
               ]
@@ -1466,7 +1466,7 @@
             },
             {
               "kind": "paragraph",
-              "text": "贡献记录见 [贡献者名单](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md)；项目作者、组织成员与维护者介绍见 [组织成员与维护者](https://github.com/Playa-Cyrene/Cyrene-Agent/blob/master/docs/MAINTAINERS.md)。"
+              "text": "贡献记录见 [贡献者名单](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md)；项目作者、组织成员与维护者介绍见 [组织成员与维护者](https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/MAINTAINERS.md)。"
             }
           ]
         }

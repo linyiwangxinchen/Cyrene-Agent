@@ -72,11 +72,11 @@ describe("设置页的更新说明", () => {
   it("点击链接交给系统浏览器打开，设置窗口本身不跳转", async () => {
     const openExternal = vi.fn(async () => undefined);
     (window as unknown as { system: unknown }).system = { openExternal };
-    const notes = await render("<p><a href=\"https://github.com/Playa-Cyrene/Cyrene-Agent/compare/v1.3.4...v1.3.5\">完整源码比较</a></p>");
+    const notes = await render("<p><a href=\"https://github.com/linyiwangxinchen/Cyrene-Agent/compare/v1.3.4...v1.3.5\">完整源码比较</a></p>");
     const link = notes.querySelector("a")!;
     const event = new MouseEvent("click", { bubbles: true, cancelable: true });
     await act(async () => { link.dispatchEvent(event); });
     expect(event.defaultPrevented).toBe(true);
-    expect(openExternal).toHaveBeenCalledWith("https://github.com/Playa-Cyrene/Cyrene-Agent/compare/v1.3.4...v1.3.5");
+    expect(openExternal).toHaveBeenCalledWith("https://github.com/linyiwangxinchen/Cyrene-Agent/compare/v1.3.4...v1.3.5");
   });
 });
