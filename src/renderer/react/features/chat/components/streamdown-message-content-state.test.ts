@@ -33,9 +33,15 @@ import { MarkdownContent } from "./ChatMessageList";
 let container: HTMLDivElement;
 let root: Root;
 
-function update(content: string, streaming: boolean) {
-  act(() => {
+async function update(content: string, streaming: boolean) {
+  // Warm the deferred renderer so the assertion observes the completed
+  // Suspense retry rather than its intentional plain-text fallback.
+  await import("./StreamdownMessageContent");
+  await act(async () => {
     root.render(React.createElement(MarkdownContent, { content, streaming }));
+    // Markdown is intentionally lazy in the production Web bundle; allow the
+    // dynamic chunk and its Suspense retry to settle before inspecting the DOM.
+    await new Promise(resolve => setTimeout(resolve, 0));
   });
 }
 
@@ -51,24 +57,24 @@ afterEach(() => {
 });
 
 describe("MarkdownContent Streamdown lifecycle", () => {
-  it("preserves the rendered KaTeX tree when a math response completes and later state updates repeat", () => {
+  it("preserves the rendered KaTeX tree when a math response completes and later state updates repeat", async () => {
     const content = "公式：$E=mc^2$\n\n$$a^2+b^2=c^2$$";
-    update(content, true);
+    await update(content, true);
     const streamedMath = container.querySelector(".katex");
     expect(streamedMath).not.toBeNull();
 
-    update(content, false);
+    await update(content, false);
     expect(container.querySelector(".katex")).toBe(streamedMath);
 
-    update(content, false);
+    await update(content, false);
     expect(container.querySelector(".katex")).toBe(streamedMath);
   });
 
-  it("replaces an incomplete streamed fence with completed unrelated content without stale blocks", () => {
-    update("~~~ts\nconst oldAnswer = true;", true);
+  it("replaces an incomplete streamed fence with completed unrelated content without stale blocks", async () => {
+    await update("~~~ts\nconst oldAnswer = true;", true);
     expect(container.textContent).toContain("oldAnswer");
 
-    update("完全替换 BBB", false);
+    await update("完全替换 BBB", false);
 
     expect(container.textContent).toContain("完全替换 BBB");
     expect(container.textContent).not.toContain("oldAnswer");

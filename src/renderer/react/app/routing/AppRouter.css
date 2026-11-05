@@ -13,3 +13,11 @@
 .cy-app-router__view.is-hidden {
   display: none;
 }
+
+.cy-app-router__loading {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  color: var(--rb-text-secondary, #806c75);
+}

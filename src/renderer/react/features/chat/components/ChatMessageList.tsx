@@ -1,5 +1,5 @@
 import { Bubble, Think, ThoughtChain, type BubbleItemType } from "@ant-design/x";
-import { Component, createContext, createElement, useCallback, useContext, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
+import { Component, createContext, createElement, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { t, useTranslation } from "../../../i18n";
 import { normalizeModelMarkdown } from "./markdown-normalize";
 import { resolveAsset } from "../../../../../shared/renderer-base";
@@ -41,7 +41,6 @@ import { FileIcon } from "./file-icon";
 import { relativePathInsideWorkspace } from "./file-link";
 import { ReviewPanel } from "./ReviewPanel";
 import { reportChatPerfRender } from "./chat-perf-probe";
-import { StreamdownMessageContent } from "./StreamdownMessageContent";
 import { Archive, ScanLine } from "lucide-react";
 import type { BrowserElementSelection } from "../../../../../shared/browser-panel-types";
 import { Marker, MarkerContent, MarkerIcon } from "../../../components/ui/marker";
@@ -50,6 +49,13 @@ import { useChatScrollFollow } from "./useChatScrollFollow";
 import { AttachmentImage } from "./AttachmentImage";
 import { GeneratedImageAttachments } from "./GeneratedImageAttachments";
 import { MailDraftCard } from "./MailDraftCard";
+import { MessageStreamingContext } from "./message-render-context";
+
+// Markdown, KaTeX, Mermaid and the code highlighter are only needed once a
+// message body is rendered. Keep them out of the initial workspace chunk so
+// login and the chat shell can become interactive sooner.
+const StreamdownMessageContent = lazy(() => import("./StreamdownMessageContent").then(module => ({ default: module.StreamdownMessageContent })));
+export { MessageStreamingContext } from "./message-render-context";
 
 export interface ChatMessageItem {
   id: string;
@@ -175,8 +181,6 @@ function useCharacterMoodUrl(mood: CharacterStatusMood): string {
 
 // 消息是否正在流式输出。code 渲染器收不到 MarkdownContent 的 props，用 context 传下去，
 // mermaid 块靠它在流式期间显示占位而不是渲染半截语法。
-export const MessageStreamingContext = createContext(false);
-
 // 文件链接环境 context 定义在独立文件 FileLinkContext.ts：避免与正文渲染器 /
 // 文件卡片互相 import 形成循环依赖（消费方直接 import 该文件）。
 
@@ -289,7 +293,9 @@ export function MarkdownContent({
   return (
     <MarkdownRenderBoundary content={normalized}>
       <MessageStreamingContext.Provider value={Boolean(streaming)}>
-        <StreamdownMessageContent content={normalized} streaming={Boolean(streaming)} />
+        <Suspense fallback={<pre className="cy-message-markdown-fallback">{normalized}</pre>}>
+          <StreamdownMessageContent content={normalized} streaming={Boolean(streaming)} />
+        </Suspense>
       </MessageStreamingContext.Provider>
     </MarkdownRenderBoundary>
   );

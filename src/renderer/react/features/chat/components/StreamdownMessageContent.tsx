@@ -9,7 +9,7 @@ import {
 import type { PluggableList } from "unified";
 import React, { isValidElement, useCallback, useContext, useState, type ReactNode } from "react";
 import { useTranslation } from "../../../i18n";
-import { MessageStreamingContext } from "./ChatMessageList";
+import { MessageStreamingContext } from "./message-render-context";
 import { chatStore } from "../pages/chat-page-bridge";
 import { copyTextToClipboard } from "./CopyButton";
 import { FileContextMenu, clampMenuPosition, type FileContextMenuItem } from "./FileContextMenu";
