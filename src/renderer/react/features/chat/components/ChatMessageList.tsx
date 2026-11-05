@@ -293,7 +293,7 @@ export function MarkdownContent({
   return (
     <MarkdownRenderBoundary content={normalized}>
       <MessageStreamingContext.Provider value={Boolean(streaming)}>
-        <Suspense fallback={<pre className="cy-message-markdown-fallback">{normalized}</pre>}>
+        <Suspense fallback={<pre className="cy-streamdown-message cy-message-markdown-fallback">{normalized}</pre>}>
           <StreamdownMessageContent content={normalized} streaming={Boolean(streaming)} />
         </Suspense>
       </MessageStreamingContext.Provider>
