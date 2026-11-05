@@ -270,17 +270,19 @@ export async function manageLinuxUpdate(options = {}, deps = productionDependenc
     }
     const branch = options.branch ?? 'master';
     if (!/^[a-zA-Z0-9_./-]+$/.test(branch) || branch.startsWith('-')) throw new Error('分支名称无效');
+    const remote = options.remote ?? 'origin';
+    if (!/^[a-zA-Z0-9_./:@+-]+$/.test(remote) || remote.startsWith('-')) throw new Error('远程名称或地址无效');
     if (await deps.git(['branch', '--show-current'], appDir) !== branch) throw new Error(`请切换到 ${branch} 分支后更新`);
     const dirty = await deps.git(['status', '--porcelain=v1', '--untracked-files=all'], appDir);
     if (dirty.split('\n').filter(Boolean).some(line => !/^\?\? models\//.test(line))) throw new Error('存在未提交源码/配置修改；先保存。仅 models/ 下未跟踪模型可保留');
     if (!await deps.active(service)) throw new Error('服务当前未运行，请先确认旧版本可以正常启动');
-    await deps.git(['fetch', 'origin', branch], appDir);
+    await deps.git(['fetch', remote, branch], appDir);
     const oldCommit = await deps.git(['rev-parse', 'HEAD'], appDir), newCommit = await deps.git(['rev-parse', 'FETCH_HEAD^{commit}'], appDir);
     await deps.git(['merge-base', '--is-ancestor', oldCommit, newCommit], appDir);
     if (oldCommit === newCommit) { deps.log('当前源码已是目标版本'); return { phase: 'unchanged' }; }
     const id = `${new Date().toISOString().replace(/[^0-9]/g, '')}-${randomUUID().slice(0, 8)}`;
     recordDir = path.join(stateRoot, id); await fs.mkdir(recordDir, { mode: 0o700 });
-    state = { version: 1, id, appDir, dataDir: config.dataDir, service, branch, oldCommit, newCommit, createdAt: new Date().toISOString(), stopAttempted: false, backupComplete: false, startedNew: false };
+    state = { version: 1, id, appDir, dataDir: config.dataDir, service, remote, branch, oldCommit, newCommit, createdAt: new Date().toISOString(), stopAttempted: false, backupComplete: false, startedNew: false };
     await fs.copyFile(fileURLToPath(import.meta.url), path.join(stateRoot, 'updater.mjs'));
     await save('building');
     await deps.git(['worktree', 'add', '--detach', stageDir(), newCommit], appDir);
@@ -333,7 +335,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const args = process.argv.slice(2), options = { action: args.shift() || 'update' };
     for (let i = 0; i < args.length; i++) {
       if (args[i] === '--restore-data') options.restoreData = true;
-      else if (['--repo', '--service', '--branch'].includes(args[i]) && args[i + 1]) options[args[i].slice(2)] = args[++i];
+      else if (['--repo', '--service', '--remote', '--branch'].includes(args[i]) && args[i + 1]) options[args[i].slice(2)] = args[++i];
       else throw new Error(`未知参数: ${args[i]}`);
     }
     const controller = new AbortController();

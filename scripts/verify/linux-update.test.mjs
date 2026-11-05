@@ -29,7 +29,7 @@ async function fixture(t, fault = {}) {
   await write(path.join(origin, 'source.txt'), 'old source'); await write(path.join(origin, 'dist/asset.txt'), 'old asset');
   await git(['add', '.'], origin); await git(['commit', '-m', 'old'], origin);
   const oldCommit = await git(['rev-parse', 'HEAD'], origin);
-  await git(['-c', 'core.autocrlf=false', 'clone', origin, app], root); await git(['config', 'core.autocrlf', 'false'], app);
+  await git(['-c', 'core.autocrlf=false', 'clone', origin, app], root); await git(['config', 'core.autocrlf', 'false'], app); await git(['remote', 'add', 'cyrene-date', origin], app);
   for (const entry of entries) await write(path.join(app, entry), 'old runtime');
   await write(path.join(app, 'node_modules/runtime.txt'), 'old dependencies');
   await write(path.join(data, 'conversation.txt'), 'old private conversation');
@@ -37,10 +37,14 @@ async function fixture(t, fault = {}) {
   await write(path.join(origin, 'source.txt'), 'new source'); await write(path.join(origin, 'dist/asset.txt'), 'new asset');
   await git(['add', '.'], origin); await git(['commit', '-m', 'new'], origin);
   const newCommit = await git(['rev-parse', 'HEAD'], origin);
-  const calls = []; let active = true, newVerifyFailed = false, interrupted = false;
+  const calls = [], fetchCalls = []; let active = true, newVerifyFailed = false, interrupted = false;
+  const trackedGit = async (args, cwd) => {
+    if (args[0] === 'fetch') fetchCalls.push([...args]);
+    return git(args, cwd);
+  };
   const config = { appDir: app, dataDir: data, browserDir: path.join(app, '.browsers'), port: 4317 };
   const deps = {
-    git,
+    git: trackedGit,
     inspect: async () => ({ ...config }),
     active: async () => active,
     stop: async () => { calls.push('stop'); active = false; },
@@ -89,7 +93,7 @@ async function fixture(t, fault = {}) {
     assert.equal(await read(path.join(data, 'conversation.txt')), 'old private conversation');
     assert.equal(await read(path.join(data, 'cyrene.sqlite-wal')), 'old WAL');
   };
-  return { root, app, data, config, calls, stateRoot, record, update, assertOld, oldCommit, newCommit };
+  return { root, app, data, config, calls, fetchCalls, stateRoot, record, update, assertOld, oldCommit, newCommit };
 }
 
 test('systemd environment parser retains quoted spaces and never executes expansion', () => {
@@ -102,6 +106,13 @@ test('systemd WorkingDirectory must be an absolute normalized path', () => {
   assert.equal(parseSystemdWorkingDirectory('/srv/cyrene/../cyrene-agent'), '/srv/cyrene-agent');
   assert.throws(() => parseSystemdWorkingDirectory('~/cyrene-agent'), /绝对路径/);
   assert.throws(() => parseSystemdWorkingDirectory(''), /绝对路径/);
+});
+
+test('update fetches an explicitly selected remote for an existing clone', async t => {
+  const f = await fixture(t);
+  const result = await f.update({ remote: 'cyrene-date' });
+  assert.equal(result.phase, 'complete');
+  assert.deepEqual(f.fetchCalls, [['fetch', 'cyrene-date', 'master']]);
 });
 
 test('isolated build, stopped consistent snapshot and ready check finish a recorded update', async t => {

@@ -107,9 +107,9 @@ CyreneHarness is the core Agent Loop of Cyrene Agent. It chains **model decision
 ### 1. Clone and Install Dependencies
 
 ```bash
-git clone https://github.com/Playa-Cyrene/Cyrene-Agent.git
+git clone https://github.com/linyiwangxinchen/Cyrene-Agent-Date.git
 # Or via the Gitee mirror (China): git clone https://gitee.com/playa0/cyrene-agent.git
-cd Cyrene-Agent
+cd Cyrene-Agent-Date
 pnpm install --frozen-lockfile
 ```
 

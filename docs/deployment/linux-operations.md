@@ -24,8 +24,8 @@ sudo apt-get install -y git ca-certificates curl python3 build-essential pkg-con
 在构建账号拥有的目录执行：
 
 ```bash
-git clone https://github.com/linyiwangxinchen/Cyrene-Agent.git
-cd Cyrene-Agent
+git clone https://github.com/linyiwangxinchen/Cyrene-Agent-Date.git
+cd Cyrene-Agent-Date
 # Web 构建需要开发依赖，但无需下载 Electron 二进制。
 ELECTRON_SKIP_BINARY_DOWNLOAD=1 pnpm install --frozen-lockfile
 pnpm run check:server
@@ -324,6 +324,28 @@ git status --short
 源码同级的 `.cyrene-updates-<Clone目录名>/` 保存每次 `record.json`、旧产物、停机数据快照和独立恢复工具。记录包含 old/new commit、构建入口 SHA256、SQLite `user_version`（诊断信息，不代表所有业务迁移版本）、执行阶段和失败恢复状态。数据快照包含私有会话、凭据和上传，不要提交 Git、放到 Web 可访问目录或分享；升级前应留出临时构建、旧运行文件和整份数据备份的空间。默认保留历史备份，人工确认不再需要后再清理。
 
 更新器不会覆盖源码/配置修改，也不会改变 systemd 路径。要求 `CYRENE_DATA_DIR` 是独立的真实目录，`dist` 和 `node_modules` 不是符号链接；仅适用于本教程生成的直接 Node `ExecStart`。自定义包装脚本、软链接发布目录或 `EnvironmentFile` 配置需先核对部署方式。配置中的目录或 Node 路径变化时，按第 4.1 节重新生成服务配置。HTTPS 反向代理地址保持不变，更新成功后刷新浏览器。
+
+### 5.3.1.1 从旧仓库目录迁移到 Cyrene-Agent-Date
+
+如果当前目录是以前从 `Playa-Cyrene/Cyrene-Agent` 或旧 fork 克隆的目录，`origin/master` 可能没有本更新器。不要把新仓库的 `src`、`dist` 或 `node_modules` 单独复制覆盖旧目录；先保存旧目录的本地修改，再让更新器在同一路径完整切换 `package.json`、锁文件、源码、依赖和构建产物。下面命令默认新仓库为公开的 `linyiwangxinchen/Cyrene-Agent-Date`，不会改变现有 `CYRENE_DATA_DIR`：
+
+```bash
+set -Eeuo pipefail
+test -f package.json && test -f pnpm-lock.yaml
+git branch "backup/legacy-$(date +%Y%m%d-%H%M%S)" master
+git stash push -u -m "legacy-before-cyrene-agent-date-migration"
+git remote get-url cyrene-date >/dev/null 2>&1 || \
+  git remote add cyrene-date ssh://git@ssh.github.com:443/linyiwangxinchen/Cyrene-Agent-Date.git
+git fetch cyrene-date master
+CYRENE_UPDATE_SCRIPT="$(mktemp --suffix=.mjs)"
+trap 'rm -f -- "$CYRENE_UPDATE_SCRIPT"' EXIT
+git show cyrene-date/master:scripts/deployment/update-linux.mjs > "$CYRENE_UPDATE_SCRIPT"
+node "$CYRENE_UPDATE_SCRIPT" update --repo "$(pwd -P)" --remote cyrene-date --branch master
+```
+
+如果 `git stash push -u` 报错，先停止命令并保存 `git status --short --untracked-files=all`；不要用 `git reset --hard` 代替。迁移完成后，旧目录仍是 systemd 的 `WorkingDirectory`，服务继续使用原数据目录；旧修改可用 `git stash list` 和备份分支找回，但不能直接把旧版 `package.json`、锁文件或 `dist/node_modules` 覆盖回新版本。
+
+Windows 安装目录不是 Git Clone，不能把 GitHub 源码复制进去运行。应在源码目录按依赖和构建步骤重新编译 Windows 安装包，再用安装器更新；Linux 的本节只适用于 systemd 指向的源码 Clone 目录。
 
 若新版本已经启动成功，但需要主动回退，在同一 Clone 根目录粘贴下段。**这会恢复升级前整份数据**；新版本产生的数据另存于原数据目录同级的 `.cyrene-failed-data-<记录编号>/`，不会混入旧版数据库。外部工作区文件、已发送的微信消息等副作用不属于数据快照，不能通过程序回退撤销。
 

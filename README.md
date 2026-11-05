@@ -62,9 +62,9 @@
 ### 1. 克隆并安装依赖
 
 ```bash
-git clone https://github.com/Playa-Cyrene/Cyrene-Agent.git
+git clone https://github.com/linyiwangxinchen/Cyrene-Agent-Date.git
 # 或 Gitee（国内镜像）：git clone https://gitee.com/playa0/cyrene-agent.git
-cd Cyrene-Agent
+cd Cyrene-Agent-Date
 pnpm install --frozen-lockfile
 ```
 
