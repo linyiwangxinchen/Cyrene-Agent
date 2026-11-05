@@ -71,7 +71,17 @@ async function check(name, fn) {
 }
 async function companionTab(name) {
   const mobile = page.getByRole("combobox", { name: "昔涟设置分组", exact: true });
-  if (await mobile.isVisible()) {
+  // Viewport changes trigger the responsive settings selector asynchronously.
+  // Wait for the narrow layout to settle before falling back to desktop tabs;
+  // otherwise the first mobile navigation can race the React media-query update.
+  let mobileVisible = false;
+  try {
+    await mobile.waitFor({ state: "visible", timeout: 5_000 });
+    mobileVisible = true;
+  } catch {
+    // Desktop layout: the selector is absent/hidden and role=tab is authoritative.
+  }
+  if (mobileVisible) {
     await mobile.click();
     await page.locator(".ant-select-dropdown:visible .ant-select-item-option-content").getByText(name, { exact: true }).click();
   } else await page.getByRole("tab", { name, exact: true }).click();
