@@ -26,7 +26,8 @@ function extractHint(tool: ToolDefinition): string {
  */
 export function buildToolCatalog(tools: ReadonlyArray<ToolDefinition>): string {
   if (tools.length === 0) return "（当前没有可用工具）";
-  return tools
+  return [...tools]
+    .sort((left, right) => left.id.localeCompare(right.id))
     .map((tool) => {
       const hint = extractHint(tool);
       const risk = tool.risk ?? "safe";

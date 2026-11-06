@@ -61,6 +61,12 @@ describe("buildSkillCatalog", () => {
     expect(out).toContain("自动注入");
     expect(out).toContain("无需再次调用 invoke_skill");
   });
+
+  it("skill 注册顺序变化时仍按 id 输出稳定目录", () => {
+    expect(buildSkillCatalog([e("zeta", "Z"), e("alpha", "A")])).toMatch(
+      /- alpha: A[\s\S]*- zeta: Z/,
+    );
+  });
 });
 
 describe("buildAutoInjectedSkillContext", () => {

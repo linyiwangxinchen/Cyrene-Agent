@@ -216,5 +216,28 @@ describe("harness tool runtime", () => {
       expect(await runtime.checkPermission("run_verification", { kind: "test" })).toBe(true);
       expect(checkPermission).toHaveBeenCalledWith(expect.objectContaining({ bypassBasePolicy: true, effect: "verification" }));
     });
+
+  it("passes the explicit headless companion bypass only to channel-style runs", async () => {
+    const runtime = await prepareToolRuntime({
+      options: {
+        conversationId: "channel-thread",
+        conversationMode: "work",
+        settings: { provider: "test", baseUrl: "", model: "model", apiKey: "" },
+        messages: [{ role: "user", content: "执行任务" }],
+        permissionMode: "allow_all",
+        allowPermissionPrompt: false,
+        bypassCompanionApproval: true,
+      } as never,
+      signal: new AbortController().signal,
+      prepared: { threadId: "channel-thread", runId: "run-channel", systemPrompt: "system", vendorConfig: {}, tools: [], runStore: {} } as never,
+      sendBaseEvent: vi.fn(),
+    });
+    await runtime.checkPermission("read_file", { path: "x" });
+    expect(checkPermission).toHaveBeenCalledWith(expect.objectContaining({
+      bypassBasePolicy: true,
+      bypassCompanionApproval: true,
+      allowPrompt: false,
+    }));
+  });
   });
 });

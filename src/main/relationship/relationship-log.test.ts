@@ -94,4 +94,20 @@ describe("relationship log", () => {
     expect(state.trust).toBe(0.5)
     expect(state.closeness).toBe(0.35)
   })
+
+  it("injects user-defined Xilian taste notes without changing permissions", async () => {
+    const { RelationshipLogStore } = await import("./relationship-log-core")
+    const store = new RelationshipLogStore(filePath)
+    const before = await store.snapshot()
+    const after = await store.command({
+      type: "preferences",
+      expectedRevision: before.revision,
+      patch: { tasteNotes: ["喜欢雨天", "喜欢把复杂问题讲清楚"] },
+    })
+    expect(after.relationship.tasteNotes).toEqual(["喜欢雨天", "喜欢把复杂问题讲清楚"])
+    expect(after.permissions).toEqual(before.permissions)
+    const context = await store.buildContext("conversation-1")
+    expect(context).toContain("昔涟的兴趣与品味")
+    expect(context).toContain("喜欢雨天")
+  })
 })

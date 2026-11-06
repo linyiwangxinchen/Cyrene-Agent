@@ -58,6 +58,32 @@ describe("AnthropicAdapter", () => {
     expect(JSON.parse(req.body).tool_choice).toEqual({ type: "auto" });
   });
 
+  test("把工具定义的缓存断点放在最后一个 tool", () => {
+    const adapter = new AnthropicAdapter("claude", { ...anthropicCap, id: "claude" });
+    const req = adapter.buildRequest({
+      model: "claude-sonnet-4-6",
+      messages: [{ role: "user", content: "搜歌" }],
+      tools: [
+        { name: "first", description: "第一只", parameters: { type: "object" } },
+        { name: "last", description: "最后一只", parameters: { type: "object" } },
+      ],
+    }, { provider: "Claude（Anthropic）", baseUrl: "https://e.test/v1", model: "claude-sonnet-4-6", apiKey: "k" });
+    const body = JSON.parse(req.body) as { tools: Array<Record<string, unknown>> };
+    expect(body.tools[0].cache_control).toBeUndefined();
+    expect(body.tools[1].cache_control).toEqual({ type: "ephemeral" });
+  });
+
+  test("没有缓存能力声明的 Anthropic 兼容线路不修改 tool 定义", () => {
+    const adapter = new AnthropicAdapter("plain", { ...anthropicCap, id: "plain", cacheStrategy: "none" });
+    const req = adapter.buildRequest({
+      model: "m",
+      messages: [{ role: "user", content: "搜歌" }],
+      tools: [{ name: "only", description: "唯一工具", parameters: { type: "object" } }],
+    }, { provider: "plain", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" });
+    const body = JSON.parse(req.body) as { tools: Array<Record<string, unknown>> };
+    expect(body.tools[0].cache_control).toBeUndefined();
+  });
+
   test("maps a must-call intent to named Anthropic tool_choice when reasoning is off", () => {
     const adapter = new AnthropicAdapter("claude", { ...anthropicCap, id: "claude" });
     const req = adapter.buildRequest({
@@ -365,6 +391,20 @@ describe("AnthropicAdapter", () => {
     );
     const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: unknown }> };
     expect(body.messages[0]).toEqual({ role: "user", content: "hi" });
+  });
+
+  test("MiniMax M3：不向工具定义发送显式断点，保留被动缓存兼容性", () => {
+    const adapter = new AnthropicAdapter("minimax", { ...anthropicCap, id: "minimax" });
+    const req = adapter.buildRequest(
+      {
+        model: "MiniMax-M3",
+        messages: [{ role: "user", content: "hi" }],
+        tools: [{ name: "only", description: "唯一工具", parameters: { type: "object" } }],
+      },
+      { provider: "MiniMax（稀宇科技）", baseUrl: "https://e.test/v1", model: "MiniMax-M3", apiKey: "k" },
+    );
+    const body = JSON.parse(req.body) as { tools: Array<Record<string, unknown>> };
+    expect(body.tools[0].cache_control).toBeUndefined();
   });
 
   // ---- 图片块转换（known-issues 问题 1：Anthropic 协议发图 400）----

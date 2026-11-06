@@ -128,9 +128,17 @@ function decryptField(stored: string): string {
   return stored;
 }
 
+export type ChannelToolSandbox = "off" | "all";
+
 export interface ChannelRuntimeConfig {
   /** 是否启用本渠道 */
   enabled: boolean;
+  /** 覆盖全局渠道工具执行策略；未设置时继承全局配置。 */
+  toolSandbox?: ChannelToolSandbox;
+  /** 渠道工具后台执行白名单。 */
+  allowedUserIds?: string[];
+  /** false 时，未列入白名单的发送者仍可聊天，但不能使用工具。 */
+  allowAnyUser?: boolean;
   /** 自定义 CLI 路径（用户手动指定时填，否则空走探测） */
   manualCliPath?: string;
   /** 用户填的公网回调 URL（飞书等需要公网回调的渠道用） */
@@ -190,8 +198,6 @@ export function decryptFeishuSecret(cfg: FeishuChannelConfig | undefined): strin
   return decryptField(cfg?.appSecret ?? "");
 }
 
-export type ChannelToolSandbox = "off" | "all";
-
 export interface ChannelsSettings {
   wechat: WechatChannelConfig;
   feishu: FeishuChannelConfig;
@@ -213,6 +219,23 @@ export interface ChannelsSettings {
   mirrorToDesktop: boolean;
   /** 全局：关闭时走 Chat；全部开启时走无交互审批的 Harness。 */
   toolSandbox: ChannelToolSandbox;
+}
+
+export function resolveChannelToolSandbox(settings: ChannelsSettings, channel: ChannelId): ChannelToolSandbox {
+  return settings[channel]?.toolSandbox ?? settings.toolSandbox;
+}
+
+/** 只有工具授权受白名单影响；未授权发送者仍可进入普通 Chat。 */
+export function isChannelToolAuthorized(
+  settings: ChannelsSettings,
+  channel: ChannelId,
+  senderId: string,
+  chatId?: string,
+): boolean {
+  const config = settings[channel];
+  if (!config || config.allowAnyUser !== false) return true;
+  const allowed = config.allowedUserIds ?? [];
+  return allowed.includes(senderId) || (typeof chatId === "string" && allowed.includes(chatId));
 }
 
 const DEFAULT_SETTINGS: ChannelsSettings = {
@@ -284,12 +307,22 @@ function normalize(input: Partial<ChannelsSettings> | null | undefined): Channel
   };
   // 收敛规则与渲染端共用同一份实现（shared/qq-listen），不再各写一遍枚举判定
   const normalizeListenMode = normalizeQqListenMode;
+  const normalizeUserIds = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value.map(item => String(item).trim()).filter(item => item.length > 0 && item.length <= 256)));
+  };
+  const normalizeChannelRuntime = (value: Partial<ChannelRuntimeConfig> | undefined) => ({
+    enabled: safeBool(value?.enabled, false),
+    ...(value?.toolSandbox === "all" || value?.toolSandbox === "off" ? { toolSandbox: value.toolSandbox } : {}),
+    allowedUserIds: normalizeUserIds(value?.allowedUserIds),
+    allowAnyUser: safeBool(value?.allowAnyUser, true),
+    manualCliPath: typeof value?.manualCliPath === "string" ? value.manualCliPath : undefined,
+    publicWebhookUrl: typeof value?.publicWebhookUrl === "string" ? value.publicWebhookUrl : undefined,
+  });
 
   return {
     wechat: {
-      enabled: safeBool(w?.enabled, false),
-      manualCliPath: typeof w?.manualCliPath === "string" ? w.manualCliPath : undefined,
-      publicWebhookUrl: typeof w?.publicWebhookUrl === "string" ? w.publicWebhookUrl : undefined,
+      ...normalizeChannelRuntime(w),
       pairingPending: Array.isArray(w?.pairingPending)
         ? w!.pairingPending!.map((p) => ({
             code: safeStr((p as { code?: unknown }).code),
@@ -298,17 +331,15 @@ function normalize(input: Partial<ChannelsSettings> | null | undefined): Channel
           }))
         : [],
     },
-feishu: {
-      enabled: safeBool(f?.enabled, false),
-      manualCliPath: typeof f?.manualCliPath === "string" ? f?.manualCliPath : undefined,
-      publicWebhookUrl: typeof f?.publicWebhookUrl === "string" ? f?.publicWebhookUrl : undefined,
+    feishu: {
+      ...normalizeChannelRuntime(f),
       appId: typeof f?.appId === "string" ? f?.appId : undefined,
       // appSecret 字段：对外 API 是明文，磁盘存储是 enc: 前缀密文。
       // load 函数会先 decrypt 再返回；save 函数会自动 encrypt。
       appSecret: typeof f?.appSecret === "string" ? f?.appSecret : undefined,
     },
     qq: {
-      enabled: safeBool(q?.enabled, false),
+      ...normalizeChannelRuntime(q),
       listenMode: normalizeListenMode(q?.listenMode),
       customHost: typeof q?.customHost === "string" && q.customHost.trim()
         ? q.customHost.trim()
@@ -323,9 +354,7 @@ feishu: {
       groupMemoryPolicy: "shared-personal",
     },
     qqbot: {
-      enabled: safeBool(b?.enabled, false),
-      manualCliPath: typeof b?.manualCliPath === "string" ? b?.manualCliPath : undefined,
-      publicWebhookUrl: typeof b?.publicWebhookUrl === "string" ? b?.publicWebhookUrl : undefined,
+      ...normalizeChannelRuntime(b),
       appId: typeof b?.appId === "string" ? b.appId.trim() : undefined,
       appSecret: typeof b?.appSecret === "string" ? b?.appSecret : undefined,
       allowAnyPrivate: safeBool(b?.allowAnyPrivate, false),

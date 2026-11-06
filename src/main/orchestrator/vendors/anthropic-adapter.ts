@@ -199,11 +199,23 @@ export class AnthropicAdapter implements ChatVendorAdapter {
       }
     }
     if (req.tools && req.tools.length > 0) {
-      body.tools = req.tools.map(t => ({
+      const tools: Array<Record<string, unknown>> = req.tools.map(t => ({
         name: t.name,
         description: t.description,
         input_schema: t.parameters,
       }));
+      // Anthropic 的缓存层级是 tools → system → messages。标记最后一个
+      // tool 会把整段工具定义写入缓存；只给 system 打断点时，最大的一段
+      //工具 schema 仍会在每轮重新处理。官方要求断点放在 tools 数组最后一项。
+      if (this.capability.cacheStrategy === "cache_control"
+        && supportsMessageCacheBreakpoint(this.id, req.model)) {
+        const last = tools.length - 1;
+        tools[last] = {
+          ...tools[last],
+          cache_control: { type: "ephemeral" },
+        };
+      }
+      body.tools = tools;
       if (req.toolChoiceIntent) {
         const policy = resolveToolChoicePolicy({
           providerId: this.capability.id,

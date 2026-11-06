@@ -28,7 +28,7 @@ export function CompanionSettingsPanel() {
   function accept(value: CompanionSnapshot) {
     setSnapshot(value);
     const r = value.relationship;
-    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled });
+    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled });
     setPermissions({ ...value.permissions });
   }
   useEffect(() => {
@@ -104,10 +104,11 @@ export function CompanionSettingsPanel() {
           <label className="cy-companion__switch">记录本轮关系线索<Switch aria-label="记录本轮关系线索" checked={draft.recordHistory} onChange={value => field("recordHistory", value)} /></label>
           <label className="cy-companion__switch">虚构角色小记<Switch aria-label="虚构角色小记" checked={draft.innerLifeEnabled} onChange={value => field("innerLifeEnabled", value)} /></label>
           <label className="cy-companion__switch cy-companion__wide">共同目标与重要时刻主动关怀<Switch aria-label="共同目标与重要时刻主动关怀" checked={draft.proactiveLifeEnabled} onChange={value => field("proactiveLifeEnabled", value)} /></label>
+          <label className="cy-companion__wide">昔涟的兴趣与品味<Input.TextArea aria-label="昔涟的兴趣与品味" autoSize={{ minRows: 2, maxRows: 6 }} value={draft.tasteNotes.join("\n")} onChange={e => field("tasteNotes", e.target.value.split("\n"))} placeholder="每行一项，最多 30 项，每项 120 字；例如：喜欢雨天、蓝色和把复杂问题讲清楚" /></label>
           <p className="cy-companion__wide">需同时开启偏好设置中的主动聊天。重要时刻可写“MM-DD 名称”（每年）或“YYYY-MM-DD 名称”（单次）；只在白天按评分、勿扰与渠道设置判断是否发送。精确时间提醒请使用定时任务。</p>
           <p className="cy-companion__wide">角色小记每天最多一条，并明确标记虚构；不会为它单独发送消息。关闭关系记录不影响原始聊天历史和已启用的长期记忆，长期记忆请在“记忆”中设置。</p>
           {([ ["sharedGoals", "共同目标"], ["milestones", "重要时刻"], ["boundaries", "相处边界"] ] as const).map(([key, label]) => <label className="cy-companion__wide" key={key}>{label}<Input.TextArea aria-label={label} autoSize={{ minRows: 2, maxRows: 6 }} value={draft[key].join("\n")} onChange={e => field(key, e.target.value.split("\n"))} placeholder="每行一项，最多 30 项，每项 200 字" /></label>)}
-          <div className="cy-companion__actions cy-companion__wide"><Button type="primary" loading={busy} onClick={() => void command({ type: "preferences", patch: { ...draft, sharedGoals: lines(draft.sharedGoals.join("\n")), milestones: lines(draft.milestones.join("\n")), boundaries: lines(draft.boundaries.join("\n")) } })}>保存相处偏好</Button><Button danger disabled={busy} onClick={() => setConfirm({ type: "reset_relationship" })}>重置关系</Button></div>
+          <div className="cy-companion__actions cy-companion__wide"><Button type="primary" loading={busy} onClick={() => void command({ type: "preferences", patch: { ...draft, sharedGoals: lines(draft.sharedGoals.join("\n")), milestones: lines(draft.milestones.join("\n")), boundaries: lines(draft.boundaries.join("\n")), tasteNotes: lines(draft.tasteNotes.join("\n")) } })}>保存相处偏好</Button><Button danger disabled={busy} onClick={() => setConfirm({ type: "reset_relationship" })}>重置关系</Button></div>
         </div> },
         { key: "followups", label: "具体跟进", children: <div className="cy-companion__form">
           <p className="cy-companion__wide">把希望昔涟之后关心的一件事记在这里。到达最早时间后，还会遵守主动聊天开关、评分、勿扰和渠道设置；不是精确定时提醒。微信或飞书只跟进当前绑定会话的事项。</p>
@@ -123,12 +124,12 @@ export function CompanionSettingsPanel() {
           </article>)}</div>
         </div> },
         { key: "permissions", label: "能力与权限", children: <div className="cy-companion__form">
-          <p className="cy-companion__wide">这些限制作用于 Windows、Web、渠道和子任务的工具调用。它们不会提高现有文件权限；目录授权仍在“工具配置”中设置。暂停不能撤销已经执行的操作，也不能隔离同进程运行的可信插件。</p>
+          <p className="cy-companion__wide">这些限制作用于 Windows、Web、渠道和子任务的工具调用。它们不会提高现有文件权限；目录授权仍在“工具配置”中设置。外部渠道选择“后台直接执行工具”时不会等待 Web 审批，但暂停和禁止调用仍会即时生效。暂停不能撤销已经执行的操作，也不能隔离同进程运行的可信插件。</p>
           <label>能力范围<Select aria-label="能力范围" value={permissions.preset} onChange={preset => setPermissions({ ...permissions, preset })} options={[{ value: "inherit", label: "沿用现有授权" }, { value: "companion", label: "仅无副作用的基础工具" }, { value: "basic", label: "基础查询（只读文件与网络）" }, { value: "shared_life", label: "日常协作（写文件按原权限，其余审批）" }, { value: "full", label: "完整能力（写入、外发及未知操作需确认）" }]} /></label>
           <label className="cy-companion__switch">暂停新工具调用<Switch aria-label="暂停新工具调用" checked={permissions.paused} onChange={paused => setPermissions({ ...permissions, paused })} /></label>
           <label className="cy-companion__wide">禁止调用<Select aria-label="禁止调用" mode="multiple" showSearch optionFilterProp="label" value={permissions.deniedTools} onChange={deniedTools => setPermissions({ ...permissions, deniedTools })} options={tools.map(tool => ({ value: tool.id, label: `${tool.name} · ${tool.id} · ${tool.risk ?? "未知"} / ${tool.effectKind ?? "未知"}` }))} /></label>
           <label className="cy-companion__wide">每次确认<Select aria-label="每次确认" mode="multiple" showSearch optionFilterProp="label" value={permissions.confirmTools} onChange={confirmTools => setPermissions({ ...permissions, confirmTools })} options={tools.map(tool => ({ value: tool.id, label: `${tool.name} · ${tool.id}` }))} /></label>
-          <p className="cy-companion__wide">后台或无审批界面的运行遇到“每次确认”会停止该工具，不会悄悄放行。已有的工具轨迹与执行账本继续记录实际调用结果。</p>
+          <p className="cy-companion__wide">桌面和 Web 普通运行会遵守“每次确认”；外部渠道选择后台执行时不会把确认卡投到 Web 等待。已有的工具轨迹与执行账本继续记录实际调用结果。</p>
           <div className="cy-companion__wide"><Button type="primary" loading={busy} onClick={() => void command({ type: "permissions", patch: permissions })}>保存能力限制</Button></div>
         </div> },
         { key: "history", label: "记录与修复", children: <div className="cy-companion__form">

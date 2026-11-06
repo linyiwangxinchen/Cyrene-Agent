@@ -384,6 +384,29 @@ describe("AgentRunController", () => {
     expect(host.patchMessage.mock.calls.some(([, , patch]) => (patch as { modelRetry?: unknown }).modelRetry === null)).toBe(true);
   });
 
+  it("accepts non-sensitive cache diagnostics without persisting prompt contents", async () => {
+    const api = createFakeApi({ success: true, runId: "run-1" });
+    const store = createFakeStore();
+    const { host } = createRecordingHost();
+    const { promise } = launch(createInput(), { api, store, host, registries: createRegistries() });
+    await flush();
+    api.emit(RUN_STARTED_EVENT);
+    const diagnostic = {
+      runId: "run-1",
+      cacheEpoch: 1,
+      round: 0,
+      stablePromptFingerprint: "a".repeat(64),
+      toolSchemaFingerprint: "b".repeat(64),
+      messagePrefixFingerprint: "c".repeat(64),
+      messageCount: 2,
+    };
+    api.emit({ type: "CUSTOM", name: "cyrene.cache.diagnostic", runId: "run-1", value: diagnostic });
+    expect(host.patchMessage).toHaveBeenCalledWith("session-1", "assistant-1", { cacheDiagnostic: diagnostic });
+    expect(store.checkpointPresentation.mock.calls.some((call) => JSON.stringify(call[3]).includes("cacheDiagnostic"))).toBe(false);
+    api.emit({ type: "RUN_FINISHED", runId: "run-1", result: { status: "success" } });
+    await promise;
+  });
+
   it("keeps shell output with its own tool across the final result and checkpoint", async () => {
     const api = createFakeApi({ success: true, runId: "run-1" });
     const store = createFakeStore();

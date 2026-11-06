@@ -146,7 +146,7 @@ function normalizeData(value: unknown): RelationshipLogData {
   const affect = { ...createDefaultAffectState(), ...raw.affectState };
   // Validate migrated/persisted values as well as incoming IPC patches. Do not
   // silently reset damaged user data or accidentally disable a saved restriction.
-  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "closeness", "paused", "recordHistory", "style", "affection", "innerLifeEnabled", "proactiveLifeEnabled"]
+  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "tasteNotes", "closeness", "paused", "recordHistory", "style", "affection", "innerLifeEnabled", "proactiveLifeEnabled"]
     .filter(key => (relationship as unknown as Record<string, unknown>)[key] !== undefined)
     .map(key => [key, (relationship as unknown as Record<string, unknown>)[key]])));
   const permissions = { ...EMPTY_DATA.permissions, ...raw.permissions };
@@ -190,6 +190,9 @@ function validatePatch(patch: unknown): RelationshipPreferencesPatch {
   for (const [key, value] of Object.entries(patch)) {
     if (["sharedGoals", "milestones", "boundaries"].includes(key)) {
       if (!Array.isArray(value) || value.length > 30 || value.some(item => typeof item !== "string" || item.length > 200)) throw new Error(`${key} 最多 30 行，每行最多 200 字`);
+      result[key] = [...new Set(value.map(item => item.trim()).filter(Boolean))];
+    } else if (key === "tasteNotes") {
+      if (!Array.isArray(value) || value.length > 30 || value.some(item => typeof item !== "string" || item.length > 120)) throw new Error("tasteNotes 最多 30 行，每行最多 120 字");
       result[key] = [...new Set(value.map(item => item.trim()).filter(Boolean))];
     } else if (key === "userLabel") {
       if (typeof value !== "string" || value.length > 80) throw new Error("称呼最多 80 字");
@@ -405,6 +408,9 @@ export class RelationshipLogStore {
     if (rel.userLabel) lines.push(`称呼：${JSON.stringify(rel.userLabel)}`);
     lines.push(`表达偏好：${rel.style}；亲昵表达：${rel.affection ? "可以自然表达，尊重当前边界" : "不使用恋爱/撒娇称呼"}。`);
     if (rel.boundaries.length) lines.push(`相处边界：${JSON.stringify(rel.boundaries)}`);
+    if (rel.tasteNotes.length) {
+      lines.push("昔涟的兴趣与品味（由用户明确设定，仅用于形成稳定表达，不代表现实经历）：", JSON.stringify(rel.tasteNotes));
+    }
     if (rel.paused) { lines.push("用户已暂停关系模拟和主动关怀：正常完成当前任务，不推演关系进展。"); return lines.join("\n"); }
     lines.push(`关系阶段：${rel.stage}（由用户选择，不代表真实人类关系）；昔涟当前感受：${decayAffectState(data.affectState).renderedFeeling}（模拟表达线索）。`);
     if (rel.sharedGoals.length) lines.push(`共同目标（进度需核实）：${JSON.stringify(rel.sharedGoals)}`);

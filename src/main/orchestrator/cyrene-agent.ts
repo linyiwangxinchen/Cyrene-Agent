@@ -24,6 +24,7 @@ import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./to
 import { runChatLoop } from "./chat-loop";
 import type { RunCapabilities } from "./run-capabilities";
 import { runHarnessWithAdapter } from "./harness-adapter";
+import type { CacheDiagnostic } from "../../shared/cache-diagnostic";
 
 /** Skill 路由条目（类型本地定义，不再依赖 task-router 模块） */
 export interface SkillRouteInfo {
@@ -151,10 +152,14 @@ export interface CyreneRunOptions {
   capabilities?: RunCapabilities;
   /** Harness 是否公布需要桌面交互卡片的内置工具；默认开启。 */
   harnessInteractiveTools?: boolean;
-  /** 工具权限结算方式；手机端全部开启使用 allow_all 跳过逐项审批。 */
+  /** 工具权限结算方式；外部渠道全部开启使用 allow_all 跳过逐项审批。 */
   permissionMode?: "normal" | "allow_all";
+  /** 明确开启的无头渠道运行可跳过昔涟的 ask 规则，但仍服从暂停和明确禁用。 */
+  bypassCompanionApproval?: boolean;
   /** 无前端运行控制器的续轮不能创建人工审批卡片。 */
   allowPermissionPrompt?: boolean;
+  /** Harness 每轮请求前发出的非敏感缓存结构诊断。 */
+  onCacheDiagnostic?: (diagnostic: CacheDiagnostic) => void;
   /** 直发图片被主模型接口拒绝时，懒加载 caption fallback 消息并重试。 */
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   /** 工具规则与目录 system prompt（进入 harness stablePrefix）。 */

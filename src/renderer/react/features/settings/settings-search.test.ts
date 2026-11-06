@@ -206,7 +206,7 @@ it("搜索动画样式保持百毫秒双向入场和三次半秒闪烁", () => {
 it("固定设置行的标题不能在新增时漏出索引，动态重复行显式排除", () => {
   const indexed = new Set(settingsSearchIndex.map((item) => item.titleKey));
   // 搜索密钥包含供应商参数；频道开关在多个频道重复，需要复合身份后才能索引。
-  const dynamicRows = new Set(["settingsPage.tools.searchKey", "settingsPage.channels.enableChannel", "settingsPage.channels.qqbot.allowAnyPrivate"]);
+  const dynamicRows = new Set(["settingsPage.tools.searchKey", "settingsPage.channels.enableChannel", "settingsPage.channels.qqbot.allowAnyPrivate", "settingsPage.channels.channelAllowAnyUser"]);
   for (const source of new Set(settingsSearchIndex.map((item) => item.source))) {
     const content = readFileSync(resolve(source), "utf8");
     const rows = content.matchAll(/className="cy-settings-row__copy"><strong[^>]*>(?:<[^>]+\/>)?\{t\("([^"]+)"/g);

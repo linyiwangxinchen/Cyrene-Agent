@@ -57,6 +57,18 @@ it("enforces a companion pause even when the harness bypasses the base approval 
   expect(state.send).not.toHaveBeenCalled();
 });
 
+it("allows an explicitly headless channel to skip companion ask rules without publishing approval", async () => {
+  const store = getRelationshipStore();
+  await store.command({ type: "permissions", expectedRevision: 1, patch: { preset: "full", confirmTools: ["fixture"] } });
+  const result = await checkPermission({
+    toolId: "fixture", toolName: "fixture", toolDescription: "fixture", args: {},
+    risk: "shell", effect: "mutation", allowPrompt: false,
+    bypassBasePolicy: true, bypassCompanionApproval: true,
+  });
+  expect(result.allowed).toBe(true);
+  expect(state.send).not.toHaveBeenCalled();
+});
+
 it("rejects an approved call if its authorization was revoked while the card was open", async () => {
   const handlers = new Map<string, (...args: any[]) => unknown>();
   registerPermissionIpc({ handle: (name, fn) => { handlers.set(name, fn); }, on() {}, dispose() {}, removeHandler() {} });

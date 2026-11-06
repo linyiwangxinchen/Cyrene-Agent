@@ -143,6 +143,8 @@ describe("channels/dispatcher", () => {
       loadGeneralSettings: options.loadGeneralSettings ?? (() => ({})),
       observeExternalChat: options.observeExternalChat,
       broadcastChat: options.broadcastChat,
+      isControlAllowed: options.isControlAllowed,
+      sendProgressUpdates: options.sendProgressUpdates,
     });
   }
 
@@ -158,6 +160,45 @@ describe("channels/dispatcher", () => {
     makeDispatcher({});
 
     expect(reloadLogFromDisk).not.toHaveBeenCalled();
+  });
+
+  it("status/stop 控制命令绕过运行队列并取消当前渠道任务", async () => {
+    let signal: AbortSignal | undefined;
+    const buildAndRunAgent = vi.fn(async (_msg: IncomingMessage, input: { signal?: AbortSignal }) => {
+      signal = input.signal;
+      await new Promise<void>((resolve) => input.signal?.addEventListener("abort", () => resolve(), { once: true }));
+      throw new Error("channel_stopped");
+    });
+    const dispatcher = makeDispatcher({ buildAndRunAgent: buildAndRunAgent as never });
+    const running = dispatcher.handleIncoming(makeIncoming({ text: "执行一个长任务", messageId: "long-1" }));
+    await vi.waitFor(() => expect(signal).toBeDefined());
+
+    const status = await dispatcher.handleIncoming(makeIncoming({ text: "/status", messageId: "status-1" }));
+    expect(status?.parts).toEqual([{ kind: "text", text: expect.stringContaining("正在执行") }]);
+    const stopped = await dispatcher.handleIncoming(makeIncoming({ text: "/stop", messageId: "stop-1" }));
+    expect(stopped?.parts).toEqual([{ kind: "text", text: expect.stringContaining("已请求停止") }]);
+    expect(signal?.aborted).toBe(true);
+    await expect(running).resolves.toBeNull();
+
+    const after = await dispatcher.handleIncoming(makeIncoming({ text: "/status", messageId: "status-2" }));
+    expect(after?.parts).toEqual([{ kind: "text", text: "当前没有正在执行的渠道任务。" }]);
+  });
+
+  it("unknown /stop returns a bounded status and unauthorized control does not reach the agent", async () => {
+    const send = vi.fn(async () => ({ ok: true }));
+    const buildAndRunAgent = vi.fn(async () => ({ text: "不应执行", sticker: null }));
+    const dispatcher = makeDispatcher({
+      manager: makeManager(send),
+      buildAndRunAgent: buildAndRunAgent as never,
+      isControlAllowed: () => false,
+    });
+    const denied = await dispatcher.handleIncoming(makeIncoming({ text: "/status", messageId: "denied-1" }));
+    expect(denied?.parts).toEqual([{ kind: "text", text: "当前渠道账号没有执行控制命令的权限。" }]);
+    expect(buildAndRunAgent).not.toHaveBeenCalled();
+
+    const allowedDispatcher = makeDispatcher({ manager: makeManager(send), buildAndRunAgent: buildAndRunAgent as never });
+    const empty = await allowedDispatcher.handleIncoming(makeIncoming({ text: "/stop", messageId: "empty-1" }));
+    expect(empty?.parts).toEqual([{ kind: "text", text: "当前没有正在执行的渠道任务。" }]);
   });
 
   it.each([true, false])("生成图真正进入微信发送边界，发送成功=%s", async (ok) => {

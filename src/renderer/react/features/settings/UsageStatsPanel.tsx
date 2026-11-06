@@ -118,9 +118,18 @@ export function UsageStatsPanel() {
     {
       label: t("settingsPage.usage.summaryCacheHitRate"),
       value: cacheHitRate === null ? t("settingsPage.usage.cacheUnavailable") : formatPercent(locale, cacheHitRate),
-      hint: cacheHitRate !== null && summary.cacheUsageRequests < summary.requests
+      hint: cacheHitRate !== null && summary.cacheCoverage !== null && summary.cacheCoverage < 1
         ? t("settingsPage.usage.cachePartial")
         : undefined,
+    },
+    {
+      label: t("settingsPage.usage.summaryCacheCoverage"),
+      value: summary.cacheCoverage === null ? t("settingsPage.usage.cacheUnavailable") : formatPercent(locale, summary.cacheCoverage),
+      hint: summary.cacheCoverage === null
+        ? t("settingsPage.usage.cacheCoverageUnavailable")
+        : summary.cacheCoverage < 1
+          ? t("settingsPage.usage.cacheCoveragePartial")
+          : t("settingsPage.usage.cacheCoverageComplete"),
     },
     { label: t("settingsPage.usage.summaryCurrentStreak"), value: `${summary.currentStreakDays} ${t("settingsPage.usage.unitDays")}` },
     { label: t("settingsPage.usage.summaryLongestStreak"), value: `${summary.longestStreakDays} ${t("settingsPage.usage.unitDays")}` },

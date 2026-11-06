@@ -70,6 +70,10 @@ function splitList(value: string, openid = false): string[] {
   return Array.from(new Set(value.split(/[\s,，]+/u).map((item) => item.trim()).filter((item) => pattern.test(item))));
 }
 
+function splitChannelUserIds(value: string): string[] {
+  return Array.from(new Set(value.split(/[\s,，]+/u).map(item => item.trim()).filter(item => item.length > 0 && item.length <= 256)));
+}
+
 export function ChannelsSettingsPanel() {
   const { t } = useTranslation();
   const api = window.settings as unknown as SettingsApi | undefined;
@@ -244,9 +248,20 @@ export function ChannelsSettingsPanel() {
     const config = values[id];
     const enabled = Boolean(config.enabled);
     const title = channelName(t, id);
+    const channelToolAccess = <>
+      <label className="cy-channels-field"><span>{t("settingsPage.channels.channelToolPermission")}</span><SettingsSelect ariaLabel={t("settingsPage.channels.channelToolPermission")} value={typeof config.toolSandbox === "string" ? config.toolSandbox : "inherit"} onChange={(value) => updateChannel(id, "toolSandbox", value === "inherit" ? undefined : value)} options={[{ value: "inherit", label: t("settingsPage.channels.channelToolInherit") }, { value: "off", label: t("settingsPage.channels.toolsOff") }, { value: "all", label: t("settingsPage.channels.toolsAll") }]} /></label>
+      <div className="cy-settings-row"><div className="cy-settings-row__copy"><strong>{t("settingsPage.channels.channelAllowAnyUser")}</strong><span>{t("settingsPage.channels.channelAllowAnyUserHint")}</span></div><SettingsSwitch ariaLabel={t("settingsPage.channels.channelAllowAnyUser")} checked={config.allowAnyUser !== false} onChange={(checked) => updateChannel(id, "allowAnyUser", checked)} /></div>
+      <label className="cy-channels-field"><span>{t("settingsPage.channels.channelUserAllowlist")}</span><Input.TextArea rows={2} value={listValue(config, "allowedUserIds")} placeholder={t("settingsPage.channels.channelUserAllowlistHint")} onChange={(event) => updateChannel(id, "allowedUserIds", event.target.value)} /></label>
+      <div className="cy-channels-actions"><Button loading={busy === id} onClick={() => void saveChannel(id, {
+        toolSandbox: config.toolSandbox === "inherit" ? undefined : config.toolSandbox,
+        allowAnyUser: config.allowAnyUser !== false,
+        allowedUserIds: splitChannelUserIds(listValue(config, "allowedUserIds")),
+      })}>{t("settingsPage.channels.saveChannelToolAccess")}</Button></div>
+    </>;
     return <Modal key={id} className="cy-settings-theme-modal cy-channels-dialog" open={dialog === id} title={title} onCancel={() => { if (id === "wechat") cancelWechatLogin(); setDialog(null); setQrCode(""); setFeedback(""); }} footer={null} destroyOnHidden>
       <div className="cy-channels-dialog__body">
         <div className="cy-settings-row"><div className="cy-settings-row__copy"><strong>{t("settingsPage.channels.enableChannel")}</strong><span>{statusLabel(statuses[id])}</span></div><SettingsSwitch ariaLabel={t("settingsPage.channels.enableChannel")} checked={enabled} disabled={Boolean(busy)} onChange={(checked) => { void changeChannelSwitch(id, checked); }} /></div>
+        {channelToolAccess}
         {id === "wechat" && <>
           <p className="cy-channels-hint">{t("settingsPage.channels.wechat.description")}</p>
           {qrCode && <div className="cy-channels-qr"><img src={qrCode} alt={t("settingsPage.channels.wechat.qrAlt")} /><Button onClick={cancelWechatLogin}>{t("settingsPage.channels.cancel")}</Button></div>}

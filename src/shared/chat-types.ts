@@ -9,6 +9,7 @@ import type { MusicCardData } from "./music-card";
 import type { TodoItem } from "./todo-types";
 import type { TaskDelegationPresentation } from "./task-session";
 import type { ContextUsageSnapshot } from "./context-usage";
+import type { CacheDiagnostic } from "./cache-diagnostic";
 import type { BrowserElementSelection } from "./browser-panel-types";
 import type { GeneratedImageAttachment } from "./generated-image";
 import type { MailDraftCardData } from "./mail-draft-card";
@@ -187,6 +188,8 @@ export interface ChatMessage {
   emailDraftCards?: MailDraftCardData[];
   /** 上下文容量快照（run 终态落盘）；运行中被每轮 preRequest 快照实时覆盖（纯内存）。 */
   contextUsage?: ContextUsageSnapshot;
+  /** 当前运行的非敏感缓存结构诊断；普通持久化投影会忽略该字段。 */
+  cacheDiagnostic?: CacheDiagnostic;
 }
 
 /**

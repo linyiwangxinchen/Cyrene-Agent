@@ -118,6 +118,8 @@ vi.mock("../orchestrator/cyrene-agent", () => ({
 }));
 vi.mock("./settings-store", () => ({
   loadChannelsSettings: () => ({ toolSandbox: "safe" }),
+  resolveChannelToolSandbox: (_settings: unknown, _channel: unknown) => "off",
+  isChannelToolAuthorized: () => true,
 }));
 vi.mock("../settings/settings-facade", () => ({
   loadGeneralSettings: () => ({}),

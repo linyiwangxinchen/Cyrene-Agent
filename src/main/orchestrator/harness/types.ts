@@ -15,6 +15,7 @@ import type { ToolErrorCategory } from "../tools/registry/tool-execution-error";
 import type { ToolRiskLevel } from "../../permission-policy";
 import type { ToolFileChange } from "../../../shared/chat-types";
 import type { ContextUsageSnapshot } from "../../../shared/context-usage";
+import type { CacheDiagnostic } from "../../../shared/cache-diagnostic";
 import type { ToolOutputRef, ToolOutputStore } from "./tool-output/tool-output-store";
 import { createHash } from "node:crypto";
 export type { ToolErrorCategory } from "../tools/registry/tool-execution-error";
@@ -104,15 +105,7 @@ export interface HarnessCacheState {
 }
 
 /** 只包含 hash 和计数的缓存诊断，禁止携带提示词或工具输出正文。 */
-export interface HarnessCacheDiagnostic {
-  runId?: string;
-  cacheEpoch: number;
-  round: number;
-  stablePromptFingerprint: string;
-  toolSchemaFingerprint: string;
-  messagePrefixFingerprint: string;
-  messageCount: number;
-}
+export type HarnessCacheDiagnostic = CacheDiagnostic;
 
 export const INITIAL_HARNESS_CACHE_STATE: HarnessCacheState = {
   cacheEpoch: 1,

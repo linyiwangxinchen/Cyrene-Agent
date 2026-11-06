@@ -239,13 +239,21 @@ export async function checkPermission(input: {
   signal?: AbortSignal;
   /** 后台续轮没有所属会话的审批界面，遇到 ask 时直接拒绝。 */
   allowPrompt?: boolean;
+  /** 明确授权的无头渠道运行跳过昔涟的 ask/confirm 规则；暂停和 deniedTools 仍然优先。 */
+  bypassCompanionApproval?: boolean;
   effect?: ToolEffectKind;
   bypassBasePolicy?: boolean;
 }): Promise<{ allowed: boolean; reason?: string }> {
   if (input.signal?.aborted) throw createAbortError();
   const level = currentLevel;
   const profile = getRelationshipStore().getControls().permissions;
-  const extra = companionToolPolicy(profile, input);
+  const companionPolicy = companionToolPolicy(profile, input);
+  // 渠道设置中的“允许可用工具”是一个明确的无头执行边界：
+  // 不把昔涟 preset/full 或 confirmTools 变成 Web 审批等待。
+  // companionToolPolicy 仍先检查 paused/deniedTools，因此撤销能力即时生效。
+  const extra = input.bypassCompanionApproval && companionPolicy === "ask"
+    ? "inherit"
+    : companionPolicy;
   if (extra === "deny") return { allowed: false, reason: "昔涟能力限制已暂停或禁止此工具，请在昔涟设置中查看。" };
   const basePolicy = input.bypassBasePolicy ? "allow" : policyFor(level, input.risk);
   const policy = basePolicy === "deny" ? "deny" : extra === "ask" ? "ask" : basePolicy;

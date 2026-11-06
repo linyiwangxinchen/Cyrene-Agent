@@ -1011,15 +1011,22 @@ export async function buildAgentRunOptions(
     .filter((part): part is string => Boolean(part))
     .join("\n\n---\n\n");
   const toolSystemContent = baseToolSystemPrompt
-    + (conversationTimeContext.includes("## Internal Context Policy") ? "\n\n" + conversationTimeContext.split("\n\n[对话时间信息]")[0] : "")
+    // 这是跨运行稳定的内部上下文保密规则；具体时间间隔仍留在 runtimeContext。
+    + (conversationTimeContext.includes("## Internal Context Policy")
+      ? "\n\n" + conversationTimeContext.split("\n\n[对话时间信息]")[0]
+      : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
-    + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
-    + (resolvedWorkspaceRoot
-      ? `\n\n[当前项目工作区]\n可信根目录：${resolvedWorkspaceRoot}`
-        + (workspaceMeta?.projectName ? `\n项目名称：${workspaceMeta.projectName}` : "")
-        + `\ngit 仓库：${workspaceMeta?.isGitRepo ? "是" : "否"}`
-        + `\n所有本地文件的读取、创建与生成都必须以此目录为根；不得写入桌面、下载目录或其他目录。`
-      : "");
+    + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "");
+
+  // 工作区绑定属于本次运行的事实。把绝对路径放进 stablePrefix 会让每个
+  // 项目、甚至同一项目的迁移路径产生新的缓存键；放入 runtime context
+  // 仍保留文件边界约束，同时让跨会话的身份/工具前缀可复用。
+  const workspaceRuntimeContext = resolvedWorkspaceRoot
+    ? `[当前项目工作区]\n可信根目录：${resolvedWorkspaceRoot}`
+      + (workspaceMeta?.projectName ? `\n项目名称：${workspaceMeta.projectName}` : "")
+      + `\ngit 仓库：${workspaceMeta?.isGitRepo ? "是" : "否"}`
+      + `\n所有本地文件的读取、创建与生成都必须以此目录为根；不得写入桌面、下载目录或其他目录。`
+    : "";
 
   let summaryMemoryContext: Awaited<ReturnType<NonNullable<BuildOptionsDeps["buildSummaryMemoryContext"]>>> | undefined;
   if (settings.memoryMode === "summary" && deps.buildSummaryMemoryContext) {
@@ -1042,6 +1049,7 @@ export async function buildAgentRunOptions(
   const soulRuntimeContext = [
     environmentContext,
     conversationTimeContext,
+    workspaceRuntimeContext,
     chatSocialContextBlock,
     momentsContextBlock,
     stylePromptBlock,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CyreneRunOptions } from "../orchestrator/cyrene-agent";
 import { enforceChannelAgentPolicy, resolveChannelAgentPolicy } from "./agent-policy";
 
@@ -9,6 +9,8 @@ describe("mobile channel agent policy", () => {
       exposeTools: false,
       includeInteractiveTools: false,
       permissionMode: "normal",
+      allowPermissionPrompt: false,
+      bypassCompanionApproval: false,
     });
   });
 
@@ -18,6 +20,8 @@ describe("mobile channel agent policy", () => {
       exposeTools: true,
       includeInteractiveTools: false,
       permissionMode: "allow_all",
+      allowPermissionPrompt: false,
+      bypassCompanionApproval: true,
     });
   });
 
@@ -28,6 +32,8 @@ describe("mobile channel agent policy", () => {
       exposeTools: false,
       includeInteractiveTools: false,
       permissionMode: "normal",
+      allowPermissionPrompt: false,
+      bypassCompanionApproval: false,
     });
 
     const options = {
@@ -48,5 +54,23 @@ describe("mobile channel agent policy", () => {
     expect(options.skillLayerContent).toBe("");
     expect(options.capabilities?.tools).toEqual([]);
     expect(options.capabilities?.toolIds.size).toBe(0);
+  });
+
+  it("removes the Web approval callback for background channel execution", () => {
+    const options = {
+      requestUserClarification: vi.fn(),
+      harnessInteractiveTools: true,
+      permissionMode: "normal",
+      allowPermissionPrompt: true,
+      bypassCompanionApproval: false,
+    } as unknown as CyreneRunOptions;
+    enforceChannelAgentPolicy(options, resolveChannelAgentPolicy("all", { channel: "wechat", chatType: "private" }));
+    expect(options).toMatchObject({
+      harnessInteractiveTools: false,
+      permissionMode: "allow_all",
+      allowPermissionPrompt: false,
+      bypassCompanionApproval: true,
+    });
+    expect(options.requestUserClarification).toBeUndefined();
   });
 });

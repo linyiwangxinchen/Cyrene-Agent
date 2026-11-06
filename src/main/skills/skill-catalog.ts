@@ -32,7 +32,7 @@ const SKILL_SELECTION_HEADER = [
  * 真正执行时的边界情况（如 xlsx/docx 的歧义处理规则）由各自 SKILL.md 正文负责。
  */
 export function buildSkillCatalog(skills: SkillEntry[]): string {
-  const enabled = skills.filter(s => s.enabled);
+  const enabled = skills.filter(s => s.enabled).sort((left, right) => left.id.localeCompare(right.id));
   if (enabled.length === 0) return "";
   const lines = enabled.map(s => {
     const toolsTag = s.tools && s.tools.length > 0 ? ` [tools: ${s.tools.join(", ")}]` : "";
@@ -54,6 +54,7 @@ export function buildAutoInjectedSkillContext(
 ): string {
   const blocks = skills
     .filter((skill) => skill.enabled && skill.manifest?.autoInject === true)
+    .sort((left, right) => left.id.localeCompare(right.id))
     .map((skill) => {
       const body = getBody(skill.id)?.trim();
       return body ? `### ${skill.id}\n${body}` : "";
@@ -78,6 +79,7 @@ export function buildAutoInjectedSoulContext(
 ): string {
   const blocks = skills
     .filter((skill) => skill.enabled && skill.manifest?.autoInject === true)
+    .sort((left, right) => left.id.localeCompare(right.id))
     .map((skill) => {
       const body = getBody(skill.id) ?? "";
       const match = body.match(/^## Soul 回复策略\s*\r?\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m);

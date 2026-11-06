@@ -95,6 +95,7 @@ export async function runHarnessWithAdapter(
         sendHarnessEventAsAgui(event, messageId, threadId, runId, sendBaseEvent);
       }
     },
+    ...(options.onCacheDiagnostic ? { onCacheDiagnostic: options.onCacheDiagnostic } : {}),
     ...(options.onToolFinished ? { onToolFinished: options.onToolFinished } : {}),
     ...(options.pollRunAdjustments ? { pollRunAdjustments: options.pollRunAdjustments } : {}),
     ...(options.pollShellCompletions ? { pollShellCompletions: options.pollShellCompletions } : {}),

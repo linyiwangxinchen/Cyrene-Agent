@@ -13,6 +13,7 @@ import type {
 } from "../../../../../../shared/chat-types";
 import type { GeneratedImageAttachment } from "../../../../../../shared/generated-image";
 import { isContextUsageSnapshot, type ContextUsageSnapshot } from "../../../../../../shared/context-usage";
+import { isCacheDiagnostic, type CacheDiagnostic } from "../../../../../../shared/cache-diagnostic";
 import type { TodoItem } from "../../../../../../shared/todo-types";
 import { normalizeMailDraftCardData, type MailDraftCardData } from "../../../../../../shared/mail-draft-card";
 import { isModelFailureInfo, type ModelFailureInfo } from "../../../../../../shared/model-error";
@@ -312,6 +313,8 @@ export class AgentRunController {
   private generatedImageAttachments: GeneratedImageAttachment[] = [];
   /** 上下文容量快照：preRequest 每轮实时覆盖（纯内存），terminal 随 checkpoint 落盘。 */
   private contextUsage: ContextUsageSnapshot | undefined;
+  /** 缓存结构诊断只保留在当前运行内，禁止进入会话正文或持久化轨迹。 */
+  private cacheDiagnostic: CacheDiagnostic | undefined;
   private assistantAt = 0;
   private checkpointTimer: number | undefined;
   private checkpointChain: Promise<boolean> = Promise.resolve(true);
@@ -1427,6 +1430,13 @@ export class AgentRunController {
         // session 级状态同步刷新：环形图优先读取点，手动压缩等场景不再依赖消息级兜底。
         this.deps.host.updateContextUsage(this.input.sessionId, snapshot);
         if (snapshot.phase === "terminal") void this.checkpointRun("running");
+      }
+    } else if (event.type === "CUSTOM" && event.name === "cyrene.cache.diagnostic") {
+      const diagnostic = isCacheDiagnostic(event.value) ? event.value : undefined;
+      if (diagnostic) {
+        this.cacheDiagnostic = diagnostic;
+        // 只作为当前消息的内存态字段供调试/可观测 UI 使用，不写入 checkpoint。
+        this.deps.host.patchMessage(this.input.sessionId, this.input.assistantId, { cacheDiagnostic: diagnostic });
       }
     } else if (event.type === "CUSTOM" && event.name === "cyrene.model.retry") {
       const status = normalizeModelRetryStatus(event.value);

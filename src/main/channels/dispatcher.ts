@@ -36,6 +36,13 @@ import {
   type ChannelConversationTarget,
   resolveChannelConversationTarget,
 } from "./channel-context";
+import {
+  formatChannelControlHelp,
+  formatChannelRunId,
+  makeChannelTextMessage,
+  parseChannelControlCommand,
+  type ChannelControlCommand,
+} from "./control-commands";
 
 export {
   formatChannelUserText,
@@ -85,11 +92,15 @@ export interface ChannelAgentInput {
   sessionId: string;
   target: ChannelConversationTarget;
   modelContext: MaterializedTranscript;
-  transcriptSink: TranscriptSink;
+  transcriptSink?: TranscriptSink;
   userTurnId: string;
   assistantTurnId: string;
   /** 渠道轮次运行标识：由 dispatcher 生成，贯通 sink、runStore 与生命周期事件。 */
   runId: string;
+  /** 当前渠道轮次的取消信号；由 dispatcher 持有并由 /stop 触发。 */
+  signal?: AbortSignal;
+  /** Harness/Agent 阶段更新，供 /status 查询。 */
+  onProgress?: (stage: string) => void;
 }
 
 /** Dispatcher 配置（依赖注入）。 */
@@ -129,10 +140,27 @@ export interface DispatcherDeps {
     text: string;
     at: number;
   }) => void;
+  /** 渠道控制权限；未提供时保持历史行为，安全配置可在组合根注入。 */
+  readonly isControlAllowed?: (msg: IncomingMessage) => boolean;
+  /** 是否发送“已收到，任务号为……”的后台进度回执。 */
+  readonly sendProgressUpdates?: boolean;
+}
+
+interface ActiveChannelRun {
+  readonly key: string;
+  readonly runId: string;
+  readonly channel: IncomingMessage["channel"];
+  readonly chatId: string;
+  readonly sessionId: string;
+  readonly startedAt: number;
+  readonly controller: AbortController;
+  stage: string;
+  cancelRequested: boolean;
 }
 
 export class ChannelDispatcher {
   private settingsCache: ChannelsSettings | null = null;
+  private readonly activeRuns = new Map<string, ActiveChannelRun>();
 
   constructor(private readonly deps: DispatcherDeps) {}
 
@@ -169,6 +197,14 @@ export class ChannelDispatcher {
     const sessionId = makeSessionId(msg.channel, msg.chatId);
     // 读取设置会同步刷新限速器，必须发生在本轮额度消费之前。
     void this.settings;
+    const control = parseChannelControlCommand(msg.text);
+    if (control) {
+      if (this.deps.isControlAllowed && !this.deps.isControlAllowed(msg)) {
+        return this.sendControlReply(msg, "当前渠道账号没有执行控制命令的权限。", `control:denied:${msg.channel}:${msg.chatId}:${msg.messageId ?? Date.now()}`);
+      }
+      // 控制命令不能进入同一会话队列，否则 /stop 会排在正在执行的模型后面。
+      return this.handleControlCommand(msg, sessionId, control);
+    }
     // Freeze the target on arrival, not after an earlier turn's compaction/model wait.
     // Both outcomes are handled immediately, even when the queue rejects this task.
     const pendingContext = Promise.resolve(options.context ?? this.deps.context.resolveDispatchContext(sessionId))
@@ -281,6 +317,35 @@ export class ChannelDispatcher {
       assistantTurnId,
     });
 
+    const activeKey = makeActiveRunKey(msg.channel, msg.chatId, context.sessionId);
+    const controller = new AbortController();
+    const activeRun: ActiveChannelRun = {
+      key: activeKey,
+      runId,
+      channel: msg.channel,
+      chatId: msg.chatId,
+      sessionId: context.sessionId,
+      startedAt: Date.now(),
+      controller,
+      stage: "准备模型上下文",
+      cancelRequested: false,
+    };
+    this.activeRuns.set(activeKey, activeRun);
+    const updateProgress = (stage: string): void => {
+      if (this.activeRuns.get(activeKey) !== activeRun) return;
+      activeRun.stage = stage.slice(0, 120);
+    };
+    if (this.deps.sendProgressUpdates) {
+      await this.sendControlReply(
+        msg,
+        `已收到，开始执行任务 ${formatChannelRunId(runId)}。发送 /status 查看进度，/stop 停止任务。`,
+        `channel:${runId}:progress:started`,
+        target.conversationId,
+        runId,
+      );
+    }
+
+    try {
     let result: Awaited<ReturnType<DispatcherDeps["buildAndRunAgent"]>>;
     try {
       result = await this.deps.buildAndRunAgent(msg, {
@@ -291,6 +356,8 @@ export class ChannelDispatcher {
         userTurnId: turnId,
         assistantTurnId,
         runId,
+        signal: controller.signal,
+        onProgress: updateProgress,
       });
     } catch (err) {
       this.logAgentFailure(msg, err);
@@ -398,6 +465,56 @@ export class ChannelDispatcher {
         console.warn(LOG, "清理出站临时文件失败:", err);
       }
     }
+    } finally {
+      if (this.activeRuns.get(activeKey) === activeRun) this.activeRuns.delete(activeKey);
+    }
+  }
+
+  private async handleControlCommand(
+    msg: IncomingMessage,
+    sessionId: string,
+    command: ChannelControlCommand,
+  ): Promise<OutgoingMessage | null> {
+    const key = makeActiveRunKey(msg.channel, msg.chatId, sessionId);
+    const active = this.activeRuns.get(key);
+    if (command === "help") {
+      return this.sendControlReply(msg, formatChannelControlHelp(msg.channel), `control:help:${msg.channel}:${msg.chatId}:${msg.messageId ?? Date.now()}`);
+    }
+    if (command === "status") {
+      const text = active
+        ? `任务 ${formatChannelRunId(active.runId)} 正在执行。\n阶段：${active.stage}\n已运行：${formatDuration(Date.now() - active.startedAt)}${active.cancelRequested ? "\n状态：正在停止" : ""}`
+        : "当前没有正在执行的渠道任务。";
+      return this.sendControlReply(msg, text, `control:status:${msg.channel}:${msg.chatId}:${msg.messageId ?? Date.now()}`);
+    }
+    if (!active) {
+      return this.sendControlReply(msg, "当前没有正在执行的渠道任务。", `control:stop-empty:${msg.channel}:${msg.chatId}:${msg.messageId ?? Date.now()}`);
+    }
+    if (!active.cancelRequested) {
+      active.cancelRequested = true;
+      active.stage = "正在停止";
+      active.controller.abort("channel_stop");
+    }
+    return this.sendControlReply(msg, `已请求停止任务 ${formatChannelRunId(active.runId)}。当前工具会在安全边界结束。`, `control:stop:${active.runId}:${msg.messageId ?? Date.now()}`);
+  }
+
+  private async sendControlReply(
+    msg: IncomingMessage,
+    text: string,
+    operationId: string,
+    conversationId?: string,
+    runId?: string,
+  ): Promise<OutgoingMessage | null> {
+    const outgoing = makeChannelTextMessage(msg, text);
+    const result = await this.deps.delivery.send(outgoing, {
+      operationId,
+      ...(conversationId ? { conversationId } : {}),
+      ...(runId ? { runId } : {}),
+    });
+    if (!result.ok) {
+      console.warn(LOG, "渠道控制回复发送失败:", result.error);
+      return null;
+    }
+    return outgoing;
   }
 
   private broadcastIncoming(msg: IncomingMessage): void {
@@ -443,6 +560,17 @@ export function makeChannelTurnId(msg: IncomingMessage, role: "user" | "assistan
   // 这里压成单行空格，保证任何适配器都能得到合法的 turn ID
   const source = (msg.messageId || `${msg.at.getTime()}:${msg.text}`).replace(/[\r\n]+/g, " ");
   return `${msg.channel}:${msg.chatId}:${source}:${role}`;
+}
+
+export function makeActiveRunKey(channel: IncomingMessage["channel"], chatId: string, sessionId: string): string {
+  return `${channel}:${chatId}:${sessionId}`;
+}
+
+function formatDuration(durationMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return minutes > 0 ? `${minutes} 分 ${seconds} 秒` : `${seconds} 秒`;
 }
 
 function toJournalAttachments(msg: IncomingMessage): Array<{ kind: "image" | "document"; name: string; filePath: string; mime?: string; caption?: string }> | undefined {

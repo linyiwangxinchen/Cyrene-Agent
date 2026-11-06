@@ -39,7 +39,7 @@ vi.mock("electron", () => {
 
 // 必须在 mock 后 import
 // eslint-disable-next-line import/first
-import { loadChannelsSettings, saveChannelsSettings } from "./settings-store";
+import { isChannelToolAuthorized, loadChannelsSettings, resolveChannelToolSandbox, saveChannelsSettings } from "./settings-store";
 
 describe("channels/settings-store", () => {
   beforeEach(() => {
@@ -130,5 +130,26 @@ describe("channels/settings-store", () => {
     );
 
     expect(loadChannelsSettings().toolSandbox).toBe("off");
+  });
+
+  it("normalizes per-channel tool policy and keeps unlisted users chat-only", () => {
+    saveChannelsSettings({
+      toolSandbox: "all",
+      wechat: { enabled: true, toolSandbox: "off", allowAnyUser: false, allowedUserIds: [" wx-owner ", "wx-owner", ""] },
+      feishu: { enabled: true, allowAnyUser: false, allowedUserIds: ["fs-owner"] },
+    });
+    const loaded = loadChannelsSettings();
+    expect(resolveChannelToolSandbox(loaded, "wechat")).toBe("off");
+    expect(resolveChannelToolSandbox(loaded, "feishu")).toBe("all");
+    expect(loaded.wechat.allowedUserIds).toEqual(["wx-owner"]);
+    expect(isChannelToolAuthorized(loaded, "wechat", "wx-owner", "wx-owner")).toBe(true);
+    expect(isChannelToolAuthorized(loaded, "wechat", "stranger", "stranger")).toBe(false);
+    expect(isChannelToolAuthorized(loaded, "feishu", "fs-owner", "fs-owner")).toBe(true);
+    expect(isChannelToolAuthorized(loaded, "feishu", "stranger", "stranger")).toBe(false);
+  });
+
+  it("defaults missing per-channel allowlist to backwards-compatible authorization", () => {
+    const loaded = loadChannelsSettings();
+    expect(isChannelToolAuthorized(loaded, "wechat", "any-user", "any-chat")).toBe(true);
   });
 });

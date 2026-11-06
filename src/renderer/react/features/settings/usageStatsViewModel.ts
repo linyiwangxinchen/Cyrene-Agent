@@ -196,6 +196,8 @@ export interface UsageSummary {
   cacheMiss: number;
   /** 厂商返回缓存明细的请求数；0 表示该范围内没有可用缓存数据。 */
   cacheUsageRequests: number;
+  /** 返回缓存明细的请求数 / 所有已记录请求数；没有请求覆盖数据时为 null。 */
+  cacheCoverage: number | null;
   currentStreakDays: number;
   longestStreakDays: number;
 }
@@ -266,6 +268,7 @@ export function computeSummary(days: UsageDay[], today = new Date()): UsageSumma
     cacheHit,
     cacheMiss,
     cacheUsageRequests,
+    cacheCoverage: attemptedRequests > 0 ? cacheUsageRequests / attemptedRequests : null,
     currentStreakDays,
     longestStreakDays,
   };

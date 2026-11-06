@@ -4,6 +4,7 @@ import { Card } from "../../components/ui/Card";
 // 与「工具配置」页（参数/密钥/权限配置）职责互补，这边只管开关。
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "antd";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowLeftRight,
@@ -22,6 +23,7 @@ import {
   Terminal,
   Wallet,
   Wrench,
+  Zap,
 } from "lucide-react";
 import { siGit, siNeteasecloudmusic, type SimpleIcon } from "simple-icons";
 import { useTranslation } from "../../i18n";
@@ -76,6 +78,28 @@ const CHAT_TOOL_WHITELIST = [
   "query_expense",
   "recall_history",
 ];
+
+/** 各工作模式共用的低风险推荐集；播放、写入、外发和收藏类工具留给“全部”。 */
+const RECOMMENDED_TOOL_IDS = new Set([
+  "music_search",
+  "music_get_daily_recommendations",
+  "music_get_playback_status",
+  "music_my_playlists",
+  "music_playlist_detail",
+  "weather",
+  "web_search",
+  "fetch_url",
+  "translate",
+  "exchange_rate",
+  "query_expense",
+  "recall_history",
+  "read_file",
+  "list_dir",
+  "search_text",
+  "search_code",
+  "run_verification",
+  "git_status",
+]);
 
 /** Chat 模式可见性：严格 opt-in，仅显式勾选（override.chat===true）放行；
  *  内置人格工具（chatBuiltin）默认放行——与主进程 run-capabilities 同口径，
@@ -221,6 +245,25 @@ export function ToolToggleSettingsPanel() {
     else if (tabRef.current === "chat") setTab("code");
   }, [overrides, tools]);
 
+  const applyPresetForCurrentMode = useCallback((preset: "recommended" | "all") => {
+    const available = tools.filter((tool) => !tool.deprecated && tool.enabled);
+    const allowed = preset === "all" ? undefined : RECOMMENDED_TOOL_IDS;
+    const nextOverrides: Overrides = { ...overrides };
+    for (const tool of available) {
+      if (allowed && !allowed.has(tool.id)) continue;
+      nextOverrides[tool.id] = { ...(nextOverrides[tool.id] ?? {}), [tab]: true };
+    }
+    setOverrides(nextOverrides);
+    if (tab === "chat") setChatToolsEnabled(true);
+    const payload: Record<string, unknown> = {
+      toolModeOverrides: nextOverrides,
+      ...(tab === "chat" ? { chatToolsEnabled: true } : {}),
+    };
+    void window.settings
+      ?.saveGeneral?.(payload)
+      ?.catch((err) => console.warn("[ToolToggleSettingsPanel] save preset failed:", err));
+  }, [overrides, tab, tools]);
+
   const TABS = useMemo(
     () => (chatToolsEnabled ? [...BASE_TABS, { key: "chat" as TabKey, label: "Chat" }] : BASE_TABS),
     [chatToolsEnabled],
@@ -283,6 +326,26 @@ export function ToolToggleSettingsPanel() {
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
           />
+        </div>
+
+        <div className="tool-panel__quick-actions">
+          <Button
+            type="primary"
+            size="small"
+            icon={<Zap size={14} aria-hidden="true" />}
+            disabled={loading || tools.length === 0}
+            onClick={() => applyPresetForCurrentMode("recommended")}
+          >
+            {t("toolPanel.enableRecommended")}
+          </Button>
+          <Button
+            size="small"
+            disabled={loading || tools.length === 0}
+            onClick={() => applyPresetForCurrentMode("all")}
+          >
+            {t("toolPanel.enableAll")}
+          </Button>
+          <span>{t("toolPanel.enablePresetHint", { mode: TABS.find((item) => item.key === tab)?.label })}</span>
         </div>
 
         <div className="tool-panel__tabs">

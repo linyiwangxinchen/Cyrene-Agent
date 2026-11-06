@@ -49,6 +49,7 @@ export function createDefaultRelationshipState(now = Date.now()): RelationshipSt
     sharedGoals: [],
     milestones: [],
     boundaries: [],
+    tasteNotes: [],
     paused: false,
     recordHistory: true,
     style: "natural",

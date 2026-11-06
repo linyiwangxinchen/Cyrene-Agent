@@ -25,6 +25,7 @@ import {
 } from "./orchestrator/cyrene-agent";
 import { RunSettlementGate } from "./orchestrator/run-settlement";
 import type { AguiRunAck, CyreneRunTerminalResult } from "../shared/run-terminal";
+import type { CacheDiagnostic } from "../shared/cache-diagnostic";
 import { indexConversationTurn } from "./orchestrator/tools/history-tools";
 import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
@@ -935,6 +936,10 @@ export function registerAgUiIpc(
     }, (settlement) => {
       send({ type: "CUSTOM", name: "cyrene.choice.dismiss", value: settlement, threadId, runId });
     }, { runId, revision: 1 });
+    options.onCacheDiagnostic = (diagnostic: CacheDiagnostic) => {
+      // 仅转发指纹和计数，诊断中不允许出现提示词、工具参数或输出正文。
+      send({ type: "CUSTOM", name: "cyrene.cache.diagnostic", value: diagnostic, threadId, runId });
+    };
 
     // Learn 模式：配置 Obsidian Vault 并注册工具
     if (mode === "learn" && session.workspaceBinding?.workspaceRoot) {

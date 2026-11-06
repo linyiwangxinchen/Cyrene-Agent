@@ -59,6 +59,7 @@ describe("computeSummary", () => {
     expect(summary.attemptedRequests).toBe(18);
     expect(summary.cacheHit).toBe(1200);
     expect(summary.cacheMiss).toBe(1800);
+    expect(summary.cacheCoverage).toBeCloseTo(5 / 6, 10);
     // 三天用量并列时峰值取最早出现的一天（2026-09-21/22/23 中最前）。
     expect(summary.peakDayIso).toBe("2026-09-21");
   });

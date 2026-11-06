@@ -20,7 +20,7 @@ import { indexConversationTurn } from "../orchestrator/tools/history-tools";
 import type { AgentRuntime } from "../orchestrator/agent-runtime";
 import type { TtsSynthesisService } from "../services/tts/tts-synthesis-service";
 import { buildChannelAttachmentInputs } from "./agent-input";
-import { loadChannelsSettings } from "./settings-store";
+import { isChannelToolAuthorized, loadChannelsSettings, resolveChannelToolSandbox } from "./settings-store";
 import { enforceChannelAgentPolicy, resolveChannelAgentPolicy } from "./agent-policy";
 import { listSessions, getSessionRecord } from "../chats/chats-store";
 import { getChannelConversationBindingStore } from "./conversation-binding-store";
@@ -110,7 +110,7 @@ export function createChannelsSubsystem(
     msg,
     input,
   ) => {
-    const channelInput = typeof input === "string"
+    const channelInput: ChannelAgentInput = typeof input === "string"
       ? {
         sessionId: input,
         target: { conversationId: input },
@@ -119,7 +119,7 @@ export function createChannelsSubsystem(
         userTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:user`,
         assistantTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:assistant`,
         runId: randomUUID(),
-      }
+      } as ChannelAgentInput
       : input as ChannelAgentInput;
     const channelResult: Awaited<ReturnType<DispatcherDeps["buildAndRunAgent"]>> = { text: "", sticker: null };
     const generatedImages = new Map<string, GeneratedImageAttachment>();
@@ -128,16 +128,24 @@ export function createChannelsSubsystem(
     const imageKey = (filePath: string) => process.platform === "win32"
       ? resolvePath(filePath).toLowerCase() : resolvePath(filePath);
 
-    const sandbox = loadChannelsSettings().toolSandbox;
+    const channelSettings = loadChannelsSettings();
+    const sandbox = resolveChannelToolSandbox(channelSettings, msg.channel);
+    const toolAuthorized = isChannelToolAuthorized(channelSettings, msg.channel, msg.senderId, msg.chatId);
     const policy = resolveChannelAgentPolicy(sandbox, {
       channel: msg.channel,
       chatType: msg.chatType,
     });
+    if (!toolAuthorized) {
+      policy.exposeTools = false;
+      policy.executionMode = "chat";
+      policy.permissionMode = "normal";
+      policy.bypassCompanionApproval = false;
+    }
     const allTools = toolRegistry.getEnabledTools();
     const exposedTools = policy.exposeTools ? allTools : [];
     console.log(
       "[Channels] bot run:",
-      `msg.channel=${msg.channel} sandbox=${sandbox} tools=${exposedTools.length}/${allTools.length}`,
+      `msg.channel=${msg.channel} sandbox=${sandbox} toolAuthorized=${toolAuthorized} tools=${exposedTools.length}/${allTools.length}`,
     );
 
     // Bound chats reuse the conversation's selected model; unbound chats use the default profile.
@@ -181,6 +189,7 @@ export function createChannelsSubsystem(
       } : {}),
     });
     if (channelInput.transcriptSink) options.transcriptSink = channelInput.transcriptSink;
+    if (channelInput.signal) options.signal = channelInput.signal;
     options.channelContext = {
       channel: msg.channel,
       targetId: msg.chatId,
@@ -214,13 +223,16 @@ export function createChannelsSubsystem(
     });
     let lifecycleStatus: PluginTurnStatus = "runtime_error";
     try {
-      const reply = await new Promise<string>((resolve, reject) => {
-        agent.runWithEvents(options).subscribe({
+      let reply: string;
+      try {
+        reply = await new Promise<string>((resolve, reject) => {
+          agent.runWithEvents(options).subscribe({
           next: (event) => {
             // Harness 的 tool_start 在权限检查与派发记账后产生；结果摘要不会
             // 保存工具实参，必须消费真实执行事件，不能依赖 lastResult.toolResults。
             if (event.runId === runId && event.type === "TOOL_CALL_START") {
               const started = event as ToolCallStartEvent;
+              channelInput.onProgress?.(`正在使用工具：${started.toolCallName}`);
               if (started.toolCallName === "channel_send_file") fileSendArguments.set(started.toolCallId, "");
               return;
             }
@@ -240,6 +252,10 @@ export function createChannelsSubsystem(
               } catch { /* 实参可能分块到达，等待完整 JSON。 */ }
               return;
             }
+            if (event.runId === runId && event.type === "TOOL_CALL_END") {
+              channelInput.onProgress?.("工具调用已完成，正在继续处理");
+              return;
+            }
             if (event.type !== "CUSTOM") return;
             const custom = event as CustomEvent;
             if (custom.name !== "cyrene.image_attachments") return;
@@ -255,10 +271,18 @@ export function createChannelsSubsystem(
             resolve(agent.lastResult?.reply ?? "");
           },
           error: (err) => reject(err instanceof Error ? err : new Error(String(err))),
+          });
         });
-      });
+      } catch (error) {
+        if (!channelInput.signal?.aborted) throw error;
+        lifecycleStatus = "cancelled";
+        channelResult.text = "任务已停止。";
+        return channelResult;
+      }
       lifecycleStatus = agent.lastResult?.terminal?.status ?? "success";
-      channelResult.text = reply;
+      // /stop 通过渠道轮次 signal 触发 Harness 的 cancelled 终态。
+      // 给渠道一个明确收尾，避免把空回复发送出去或让用户误以为任务仍在运行。
+      channelResult.text = channelInput.signal?.aborted ? "任务已停止。" : reply;
       // Observable 在超时终态下也会正常 complete；只有成功终态才能进入记忆、表情等成功收尾。
       const terminalStatus = agent.lastResult?.terminal?.status;
       if (agent.lastResult && (terminalStatus === undefined || terminalStatus === "success")) {
@@ -344,6 +368,11 @@ export function createChannelsSubsystem(
     loadGeneralSettings,
     observeExternalChat,
     broadcastChat,
+    isControlAllowed: (msg) => {
+      const settings = loadChannelsSettings();
+      return isChannelToolAuthorized(settings, msg.channel, msg.senderId, msg.chatId);
+    },
+    sendProgressUpdates: true,
   });
   const durableInbox = new DurableChannelInbox({
     captureContext: msg => dispatcher.captureDispatchContext(msg),

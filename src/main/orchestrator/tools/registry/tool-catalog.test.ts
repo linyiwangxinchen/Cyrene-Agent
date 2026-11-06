@@ -107,4 +107,12 @@ describe("buildToolCatalog", () => {
     expect(idxB).toBeGreaterThan(idxA);
     expect(idxC).toBeGreaterThan(idxB);
   });
+
+  it("工具注册顺序变化时仍按 id 输出稳定目录", () => {
+    const out = buildToolCatalog([
+      makeTool({ id: "zeta", description: "Z" }),
+      makeTool({ id: "alpha", description: "A" }),
+    ]);
+    expect(out.indexOf("- alpha")).toBeLessThan(out.indexOf("- zeta"));
+  });
 });

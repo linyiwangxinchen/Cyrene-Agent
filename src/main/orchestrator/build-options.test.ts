@@ -393,8 +393,9 @@ describe("build-options", () => {
     }, deps)
 
     expect(result.options.resolvedWorkspaceRoot).toBe("C:\\projects\\daily")
-    expect(result.options.toolSystemContent).toContain("可信根目录：C:\\projects\\daily")
-    expect(result.options.toolSystemContent).toContain("不得写入桌面")
+    expect(result.options.soulRuntimeContext).toContain("可信根目录：C:\\projects\\daily")
+    expect(result.options.soulRuntimeContext).toContain("不得写入桌面")
+    expect(result.options.toolSystemContent).not.toContain("可信根目录：C:\\projects\\daily")
   })
 
   it("returns the exact workspace generation used for tool options", async () => {

@@ -69,6 +69,7 @@ export async function prepareToolRuntime(input: {
       signal,
       allowPrompt: options.allowPermissionPrompt,
       bypassBasePolicy: options.permissionMode === "allow_all",
+      bypassCompanionApproval: options.bypassCompanionApproval,
       effect: resolveEffectKind(tool, args),
     })).allowed;
   };

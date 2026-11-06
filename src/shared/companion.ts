@@ -12,6 +12,8 @@ export interface RelationshipState {
   sharedGoals: readonly string[];
   milestones: readonly string[];
   boundaries: readonly string[];
+  /** 用户明确设定的昔涟兴趣与品味；不等同于用户事实，也不改变权限。 */
+  tasteNotes: readonly string[];
   repairCount: number;
   lastInteractionAt: number;
   updatedAt: number;
@@ -74,7 +76,7 @@ export interface CompanionSnapshot {
   followups?: CompanionFollowup[];
 }
 export type RelationshipPreferences = Pick<RelationshipState,
-  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "closeness" | "paused" | "recordHistory" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled">;
+  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled">;
 export type CompanionCommand = { expectedRevision: number } & (
   | { type: "preferences"; patch: Partial<RelationshipPreferences> }
   | { type: "permissions"; patch: Partial<CompanionPermissions> }

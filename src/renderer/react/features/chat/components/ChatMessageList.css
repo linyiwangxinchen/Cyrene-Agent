@@ -639,6 +639,17 @@
   font: 500 12px/1.4 var(--rb-font-sans, sans-serif);
 }
 
+.cy-run-activity__cache {
+  margin-inline-start: auto;
+  color: var(--rb-text-secondary);
+  font: 500 11px/1.4 var(--rb-font-sans, sans-serif);
+  opacity: 0.82;
+}
+
+.cy-run-activity__retry + .cy-run-activity__cache {
+  margin-inline-start: 10px;
+}
+
 .cy-model-wait__retry {
   color: var(--rb-text-secondary);
   font-size: 12px;

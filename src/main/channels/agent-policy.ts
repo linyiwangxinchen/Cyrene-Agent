@@ -7,6 +7,8 @@ export interface ChannelAgentPolicy {
   exposeTools: boolean;
   includeInteractiveTools: boolean;
   permissionMode: NonNullable<CyreneRunOptions["permissionMode"]>;
+  allowPermissionPrompt: boolean;
+  bypassCompanionApproval: boolean;
 }
 
 export function resolveChannelAgentPolicy(
@@ -20,6 +22,8 @@ export function resolveChannelAgentPolicy(
       exposeTools: false,
       includeInteractiveTools: false,
       permissionMode: "normal",
+      allowPermissionPrompt: false,
+      bypassCompanionApproval: false,
     };
   }
   if (toolSandbox === "off") {
@@ -28,6 +32,8 @@ export function resolveChannelAgentPolicy(
       exposeTools: false,
       includeInteractiveTools: false,
       permissionMode: "normal",
+      allowPermissionPrompt: false,
+      bypassCompanionApproval: false,
     };
   }
   return {
@@ -35,6 +41,8 @@ export function resolveChannelAgentPolicy(
     exposeTools: true,
     includeInteractiveTools: false,
     permissionMode: "allow_all",
+    allowPermissionPrompt: false,
+    bypassCompanionApproval: true,
   };
 }
 
@@ -48,6 +56,11 @@ export function enforceChannelAgentPolicy(
 ): void {
   options.harnessInteractiveTools = policy.includeInteractiveTools;
   options.permissionMode = policy.permissionMode;
+  options.allowPermissionPrompt = policy.allowPermissionPrompt;
+  options.bypassCompanionApproval = policy.bypassCompanionApproval;
+  // 渠道运行没有可回收的桌面审批卡；即便上游复用了带回调的 options，
+  // 也不能把审批送到 Web 窗口并让微信轮次悬挂。
+  options.requestUserClarification = undefined;
   if (policy.exposeTools) return;
   options.tools = [];
   options.toolSystemContent = "";

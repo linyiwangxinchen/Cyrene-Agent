@@ -6,6 +6,7 @@ import { resolveAsset } from "../../../../../shared/renderer-base";
 import { useCyreneAvatar } from "../../../hooks/useCyreneAvatar";
 import type { AgentRoundRecord, ChatMessage, ChatMessageChannelSource, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
 import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
+import type { CacheDiagnostic } from "../../../../../shared/cache-diagnostic";
 import type { GeneratedImageAttachment } from "../../../../../shared/generated-image";
 import type { MailDraftCardData } from "../../../../../shared/mail-draft-card";
 import type { ModelRetryStatus } from "../../../../../shared/model-retry";
@@ -92,6 +93,8 @@ export interface ChatMessageItem {
   attachments?: ChatMessageAttachment[];
   /** 上下文容量快照：运行中为每轮 preRequest 实时值，run 结束后为终态快照。 */
   contextUsage?: ContextUsageSnapshot;
+  /** 当前运行的非敏感缓存结构诊断；只用于开发/诊断展示，不进入模型上下文。 */
+  cacheDiagnostic?: CacheDiagnostic;
   /** 渠道群聊的发送者/引用等隐藏模型上下文；不直接渲染。 */
   modelContext?: string;
   channelSource?: ChatMessageChannelSource;
@@ -638,6 +641,7 @@ export function RunActivityDetail({
   processMessages: ProcessMessageRecord[];
   taskDelegations?: TaskDelegationDisplayRecord[];
   tools: ToolExecutionRecord[];
+  cacheDiagnostic?: CacheDiagnostic;
   interrupted?: boolean;
   onOpenTaskInspector?: (delegation: TaskDelegationDisplayRecord) => void;
 }) {
@@ -737,6 +741,7 @@ function RunActivityContent({
   agentRounds,
   taskDelegations,
   tools,
+  cacheDiagnostic,
   stage,
   taskPlan,
   modelRetry,
@@ -753,6 +758,7 @@ function RunActivityContent({
   agentRounds: AgentRoundRecord[];
   taskDelegations: TaskDelegationDisplayRecord[];
   tools: ToolExecutionRecord[];
+  cacheDiagnostic?: CacheDiagnostic;
   stage?: AgentRunStage;
   taskPlan?: TaskPlanPresentation;
   modelRetry?: ModelRetryStatus | null;
@@ -797,6 +803,7 @@ function RunActivityContent({
             {stage && <RunStageIndicator stage={stage} />}
         </span>
         {retryLabel && <span className="cy-run-activity__retry" role="status">{retryLabel}</span>}
+        {cacheDiagnostic && <span className="cy-run-activity__cache" title={`${t("messageList.cacheDiagnosticTitle")} · ${cacheDiagnostic.stablePromptFingerprint.slice(0, 8)}`}>{t("messageList.cacheDiagnostic", { round: cacheDiagnostic.round })}</span>}
         <svg className={`cy-run-activity__chevron${expanded ? " is-expanded" : ""}`} viewBox="0 0 16 16" aria-hidden="true">
           <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" />
         </svg>
@@ -1211,6 +1218,7 @@ function createRoles(
         agentRounds?: AgentRoundRecord[];
         taskDelegations?: TaskDelegationDisplayRecord[];
         tools?: ToolExecutionRecord[];
+        cacheDiagnostic?: CacheDiagnostic;
         runStage?: AgentRunStage;
         taskPlan?: TaskPlanPresentation;
         modelRetry?: ModelRetryStatus | null;
@@ -1229,6 +1237,7 @@ function createRoles(
           agentRounds={info.extraInfo?.agentRounds ?? []}
           taskDelegations={info.extraInfo?.taskDelegations ?? []}
           tools={info.extraInfo?.tools ?? []}
+          cacheDiagnostic={info.extraInfo?.cacheDiagnostic}
           stage={info.extraInfo?.runStage}
           taskPlan={info.extraInfo?.taskPlan}
           modelRetry={info.extraInfo?.modelRetry}
@@ -1385,6 +1394,7 @@ function convertMessage(message: ChatMessageItem, enabledStickers: readonly Enab
     processMessages: message.processMessages ?? [],
     taskDelegations: message.taskDelegations ?? [],
     tools,
+    cacheDiagnostic: message.cacheDiagnostic,
   };
   if (activity) {
     if (processing || hasProcessContent || (display && !display.continuation)) {
