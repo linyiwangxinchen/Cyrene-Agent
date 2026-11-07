@@ -794,6 +794,35 @@ describe("runChatLoop", () => {
     expect(order).toEqual(["persist", "image-event"]);
   });
 
+  it("marks the selfie artifact generated only after the image is persisted", async () => {
+    const attachment = {
+      id: "selfie-1", kind: "image" as const, name: "selfie.png", filePath: "managed/selfie.png",
+      mime: "image/png", source: "model" as const, byteLength: 20, status: "done" as const,
+    };
+    const artifact = {
+      artifactId: "xilian-artifact:event:selfie",
+      store: {
+        markArtifactGenerating: vi.fn(),
+        completeArtifact: vi.fn(),
+        failArtifact: vi.fn(),
+      },
+    };
+    await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000, imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" } },
+      adapter: new FakeAdapter(),
+      messages: [{ role: "user", content: "给我一张昔涟自拍" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      recordUsage: vi.fn(),
+      generatedImageStore: { save: vi.fn(async () => attachment), deleteConversation: vi.fn(async () => undefined), readManagedPng: vi.fn(async () => Buffer.alloc(0)) },
+      xilianSelfieArtifact: artifact,
+      streamChat: async () => ({ assistantMessage: { role: "assistant" as const, content: "" }, text: "", toolCalls: [], finishReason: "stop" as const, raw: {}, generatedImages: [{ id: "selfie-1", toolCallId: "tool-selfie", base64: "AA==", mime: "image/png" as const }] }),
+    });
+    expect(artifact.store.markArtifactGenerating).toHaveBeenCalledWith(artifact.artifactId);
+    expect(artifact.store.completeArtifact).toHaveBeenCalledWith(artifact.artifactId, expect.objectContaining({ imageModel: "gpt-image-2.5-flare", outputPath: attachment.filePath }));
+    expect(artifact.store.failArtifact).not.toHaveBeenCalled();
+  });
+
   it("shows a save error instead of an image attachment when generated image persistence fails", async () => {
     const events: string[] = [];
     const result = await runChatLoop({

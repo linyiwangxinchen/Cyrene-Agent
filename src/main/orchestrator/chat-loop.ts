@@ -56,6 +56,10 @@ export interface ChatLoopOptions {
   conversationId?: string;
   assistantTurnId?: string;
   generatedImageStore?: GeneratedImageStore;
+  xilianSelfieArtifact?: {
+    artifactId: string;
+    store: Pick<import("../proactive/xilian-world-store").XilianWorldStore, "markArtifactGenerating" | "completeArtifact" | "failArtifact">;
+  };
 }
 
 class StreamUnavailableError extends Error {
@@ -361,6 +365,24 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
       options.conversationId ?? "default",
       response.generatedImages,
     );
+    if (options.xilianSelfieArtifact) {
+      const artifact = options.xilianSelfieArtifact;
+      try {
+        if (response.generatedImages?.length && persistedImages.attachments.length > 0) {
+          artifact.store.markArtifactGenerating(artifact.artifactId);
+          artifact.store.completeArtifact(artifact.artifactId, {
+            imageModel: options.settings.imageGeneration?.model,
+            outputPath: persistedImages.attachments[0]?.filePath,
+          });
+        } else {
+          artifact.store.failArtifact(artifact.artifactId, persistedImages.failedCount > 0 ? "parse" : "parameter");
+        }
+      } catch (error) {
+        // Artifact bookkeeping is a sidecar; a successful chat/image response
+        // must remain visible even if the world file cannot be updated.
+        console.warn("[XilianWorld] 自拍 artifact 状态写入失败", error);
+      }
+    }
     if (options.signal?.aborted) throw new Error("E_SOUL_ONLY_CANCELLED");
     const visibleResponseText = stripLeakedChatTimeContext(stripToolProtocol(response.text));
     const imageSaveNotice = persistedImages.failedCount > 0

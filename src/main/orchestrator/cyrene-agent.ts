@@ -119,6 +119,11 @@ export interface CyreneRunOptions {
   assistantTurnId?: string;
   /** 写入用户数据目录的生成图片存储。 */
   generatedImageStore?: import("../chats/generated-image-store").GeneratedImageStore;
+  /** 明确请求昔涟自拍时绑定的生活事件 artifact；生成失败只更新 artifact 状态。 */
+  xilianSelfieArtifact?: {
+    artifactId: string;
+    store: Pick<import("../proactive/xilian-world-store").XilianWorldStore, "markArtifactGenerating" | "completeArtifact" | "failArtifact">;
+  };
   /** 原始消息（不含 system）。system 由 chat-loop / harness-adapter 按 promptLayers 组装，不随消息持久化。 */
   messages: ChatMessage[];
   conversationId?: string;
@@ -526,6 +531,7 @@ export class CyreneAgent extends AbstractAgent {
               conversationId: options.conversationId,
               assistantTurnId: options.assistantTurnId,
               generatedImageStore: options.generatedImageStore,
+              xilianSelfieArtifact: options.xilianSelfieArtifact,
             }));
           } else {
             const executeTool = (tc: Parameters<typeof executeToolCall>[0], runnableToolIds: Set<string>) => executeToolCall(tc, runnableToolIds, {

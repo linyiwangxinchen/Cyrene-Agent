@@ -49,7 +49,7 @@ import {
 import { buildModelContext } from "./conversation-transcript-context";
 import { getConversationTranscriptStore } from "./conversation-transcript-store";
 import { resolveChatContextTimezone } from "../chat-time-context";
-import { buildXilianLifeSnapshot, buildXilianSelfiePrompt, formatXilianLifeContext } from "../proactive/xilian-life-context";
+import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../proactive/xilian-life-context";
 import { getSharedXilianWorldStore } from "../proactive/xilian-world-store";
 import { createGeneratedImageStore } from "../chats/generated-image-store";
 import { getHarnessRunStore } from "./harness/run-store";
@@ -144,6 +144,28 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
     runReader: transcriptRunStore,
     summarize: async () => { throw new Error("TRANSCRIPT_COMPACTION_REQUIRED"); },
   });
+
+  function prepareXilianSelfieArtifact(userText: string, settings?: ModelSettingsLite): CyreneRunOptions["xilianSelfieArtifact"] {
+    if (!settings?.imageGeneration?.enabled || !isXilianSelfieRequest(userText)) return undefined;
+    try {
+      const now = Date.now();
+      const timezone = resolveChatContextTimezone(rawDeps.loadUserProfile().timezone);
+      const state = xilianWorldStore.advance({ now, timezone });
+      const timeline = xilianWorldStore.queryTimeline({ dateKey: state.worldDate, order: "desc", limit: 8 });
+      const snapshot = buildXilianLifeSnapshot({ state, timeline, now, timezone });
+      if (!snapshot.sourceEventId || snapshot.sourceEventId === "xilian:none") return undefined;
+      const artifact = xilianWorldStore.claimArtifact({
+        eventId: snapshot.sourceEventId,
+        kind: "selfie",
+        promptFingerprint: buildXilianPromptFingerprint(snapshot),
+        now,
+      });
+      return artifact ? { artifactId: artifact.id, store: xilianWorldStore } : undefined;
+    } catch (error) {
+      console.warn("[XilianWorld] 自拍 artifact 准备失败，继续使用普通生图流程", error);
+      return undefined;
+    }
+  }
 
   async function observeRuntimeState(
     settings: ModelSettingsLite,
@@ -338,12 +360,14 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
     buildOptions: async (input) => {
       const buildOptionsDeps = buildBuildOptionsDeps();
       const { options, latestUserText } = await buildAgentRunOptions(input, buildOptionsDeps);
+      const xilianSelfieArtifact = prepareXilianSelfieArtifact(latestUserText, options.settings);
       return {
         options: {
           ...options,
           onToolFinished,
           assistantTurnId: input.assistantTurnId,
           generatedImageStore,
+          ...(xilianSelfieArtifact ? { xilianSelfieArtifact } : {}),
         },
         latestUserText,
       };

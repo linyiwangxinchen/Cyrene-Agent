@@ -19,7 +19,7 @@ import type { WebSettings } from "./web-store";
 import { XILIAN_PERSONA_SPEC } from "../main/persona/persona-spec";
 import { XILIAN_IMAGE_GENERATION_PROMPT } from "../main/persona/xilian-image-prompt";
 import { createXilianWorldStore } from "../main/proactive/xilian-world-store";
-import { buildXilianLifeSnapshot, buildXilianSelfiePrompt, formatXilianLifeContext } from "../main/proactive/xilian-life-context";
+import { buildXilianLifeSnapshot, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../main/proactive/xilian-life-context";
 import type { RelationshipPreferencesPatch } from "../main/relationship/relationship-log-core";
 
 /** Source and compiled entry points both resolve shipped content independently of cwd. */
@@ -170,7 +170,7 @@ export class WebPersonaRuntime {
     const worldState = this.world.advance({ now: worldNow, timezone });
     const worldTimeline = this.world.queryTimeline({ dateKey: worldState.worldDate, order: "desc", limit: 8 });
     const worldSnapshot = buildXilianLifeSnapshot({ state: worldState, timeline: worldTimeline, now: worldNow, timezone });
-    const selfieContext = config.imageGeneration?.enabled && /自拍|照片|生图|图片|拍一张/u.test(input.prompt)
+    const selfieContext = config.imageGeneration?.enabled && isXilianSelfieRequest(input.prompt)
       ? buildXilianSelfiePrompt(worldSnapshot)
       : "";
     const summary = memoryEnabled ? await loadSummaryMemoryContext({ conversationId: session.id, userDataRoot: this.dataDir, getSessionRecord: () => session }) : undefined;

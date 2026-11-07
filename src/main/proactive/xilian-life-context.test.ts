@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultXilianWorldData } from "../../shared/xilian-world";
-import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext } from "./xilian-life-context";
+import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "./xilian-life-context";
 
 describe("xilian life context", () => {
+  it("only classifies explicit Xilian selfie requests as selfie context", () => {
+    expect(isXilianSelfieRequest("给我一张昔涟自拍")).toBe(true);
+    expect(isXilianSelfieRequest("画一只猫")).toBe(false);
+    expect(isXilianSelfieRequest("帮我生成一张风景图")).toBe(false);
+  });
+
   it("builds a traceable snapshot and selfie prompt from an event", () => {
     const now = new Date("2026-11-07T18:00:00.000Z").getTime();
     const data = createDefaultXilianWorldData("2026-11-07", now);

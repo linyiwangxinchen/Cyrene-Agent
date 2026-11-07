@@ -15,6 +15,10 @@ export interface XilianLifeContextInput {
   energy?: number;
 }
 
+export function isXilianSelfieRequest(text: string): boolean {
+  return /自拍|昔涟.{0,20}(照片|图片)|拍一张.{0,20}(昔涟|照片|图片)/u.test(text);
+}
+
 function localTime(now: number, timezone: string): string {
   const parts = getZonedDateParts(new Date(now), timezone);
   return `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`;
