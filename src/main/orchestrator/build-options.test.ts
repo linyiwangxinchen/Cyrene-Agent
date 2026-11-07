@@ -104,6 +104,23 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).toContain(`[MODE:${mode}]`);
   });
 
+  it("启用图片生成时注入昔涟稳定视觉锚点", async () => {
+    const deps = createBuildDeps();
+    deps.loadModelSettings = () => ({
+      provider: "ChatGPT", baseUrl: "https://proxy.test/v1", model: "gpt-6-astra", apiKey: "k",
+      explicitTransport: "responses", imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" },
+    });
+    const result = await buildAgentRunOptions({
+      sessionId: "xilian-image-prompt",
+      mode: "chat",
+      executionMode: "chat",
+      messages: [{ role: "user", content: "给我一张自拍" }],
+    }, deps);
+    expect(result.options.soulRuntimeContext).toContain("[昔涟图片生成约束]");
+    expect(result.options.soulRuntimeContext).toContain("粉白色长发");
+    expect(result.options.soulRuntimeContext).toContain("只保留昔涟一人");
+  });
+
   it("把全局模型重试设置冻结进聊天运行配置，旧设置默认为 5", async () => {
     const deps = createBuildDeps();
     const defaultResult = await buildAgentRunOptions({
