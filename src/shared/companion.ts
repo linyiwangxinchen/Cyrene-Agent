@@ -1,5 +1,6 @@
 /** One identity across all task modes and transports. No Electron dependency. */
 import type { BondProgressState } from "./companion-progress";
+import type { XilianTimelineEvent, XilianWorldState } from "./xilian-world";
 
 export type RelationshipStage = "new" | "familiar" | "close" | "long_term";
 export type CompanionStyle = "natural" | "gentle" | "lively" | "concise";
@@ -94,6 +95,7 @@ export type CompanionCommand = { expectedRevision: number } & (
 );
 export interface CompanionApi {
   get(): Promise<CompanionSnapshot>;
+  getWorld(): Promise<{ state: XilianWorldState; timeline: XilianTimelineEvent[] }>;
   update(command: CompanionCommand): Promise<CompanionSnapshot>;
   export(): Promise<string>;
 }

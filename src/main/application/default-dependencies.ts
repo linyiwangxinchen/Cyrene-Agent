@@ -732,7 +732,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           windowManager: shell.windowManager,
         });
         registerWikiMemoryIpc(ipc);
-        registerCompanionIpc(ipc);
+        registerCompanionIpc(ipc, undefined, services.proactive);
         registerMemoryGovernanceIpc(ipc);
         registerKnowledgeBaseIpc(ipc);
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Input, Modal, Select, Slider, Spin, Switch, Tabs, Tag } from "antd";
 import type { CompanionCommand, CompanionPermissions, CompanionSnapshot, RelationshipPreferences, CompanionFollowup } from "../../../../shared/companion";
+import { getXilianLocation, XILIAN_WORLD_ARCS, type XilianTimelineEvent, type XilianWorldState } from "../../../../shared/xilian-world";
 import "./companion-settings.css";
 
 const stages = { new: "初识", familiar: "熟悉", close: "亲密", long_term: "长期陪伴" };
@@ -11,12 +12,14 @@ const followupStatuses = { active: "等待合适时间", awaiting_reply: "已关
 const localTime = (at: number) => new Date(at - new Date(at).getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 type Command = CompanionCommand extends infer T ? T extends CompanionCommand ? Omit<T, "expectedRevision"> : never : never;
 type Tool = { id: string; name: string; risk?: string; effectKind?: string };
+type WorldView = { state: XilianWorldState; timeline: XilianTimelineEvent[] };
 const lines = (text: string) => text.split("\n").map(line => line.trim()).filter(Boolean);
 
 export function CompanionSettingsPanel() {
   const [isNarrowScreen, setIsNarrowScreen] = useState(false);
   const [activeTab, setActiveTab] = useState("relationship");
   const [snapshot, setSnapshot] = useState<CompanionSnapshot>();
+  const [world, setWorld] = useState<WorldView>();
   const [draft, setDraft] = useState<RelationshipPreferences>();
   const [permissions, setPermissions] = useState<CompanionPermissions>();
   const [tools, setTools] = useState<Tool[]>([]);
@@ -37,6 +40,8 @@ export function CompanionSettingsPanel() {
     let active = true;
     if (!window.companion) { setError("关系管理接口不可用，请更新并重启服务。"); return; }
     void window.companion.get().then(value => { if (active) accept(value); }).catch(reason => { if (active) setError(String(reason.message ?? reason)); });
+    const getWorld = window.companion.getWorld;
+    if (typeof getWorld === "function") void getWorld().then(value => { if (active) setWorld(value); }).catch(() => {});
     void window.settings?.getToolCatalog?.().then(value => { if (active && Array.isArray(value)) setTools(value); }).catch(() => {});
     const chatStore = (window as typeof window & { chatStore?: { list(): Promise<Array<{ id: string; title: string }>> } }).chatStore;
     void chatStore?.list().then(value => { if (active && Array.isArray(value)) setSessions(value); }).catch(() => {});
@@ -55,8 +60,15 @@ export function CompanionSettingsPanel() {
   }, []);
   async function reload() {
     setBusy(true); setError(""); setNotice("");
-    try { accept(await window.companion.get()); } catch (reason) { setError(String(reason)); }
+    try {
+      accept(await window.companion.get());
+      if (typeof window.companion.getWorld === "function") setWorld(await window.companion.getWorld());
+    } catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
+  }
+  async function reloadWorld() {
+    if (typeof window.companion.getWorld !== "function") { setError("当前版本没有轨迹查询接口，请重启应用。"); return; }
+    try { setWorld(await window.companion.getWorld()); } catch (reason) { setError(String(reason)); }
   }
   async function command(value: Command) {
     if (!snapshot) return false;
@@ -112,6 +124,26 @@ export function CompanionSettingsPanel() {
           <p className="cy-companion__wide">角色小记每天最多一条，并明确标记虚构；不会为它单独发送消息。关闭关系记录不影响原始聊天历史和已启用的长期记忆，长期记忆请在“记忆”中设置。</p>
           {([ ["sharedGoals", "共同目标"], ["milestones", "重要时刻"], ["boundaries", "相处边界"] ] as const).map(([key, label]) => <label className="cy-companion__wide" key={key}>{label}<Input.TextArea aria-label={label} autoSize={{ minRows: 2, maxRows: 6 }} value={draft[key].join("\n")} onChange={e => field(key, e.target.value.split("\n"))} placeholder="每行一项，最多 30 项，每项 200 字" /></label>)}
           <div className="cy-companion__actions cy-companion__wide"><Button type="primary" loading={busy} onClick={() => void command({ type: "preferences", patch: { ...draft, sharedGoals: lines(draft.sharedGoals.join("\n")), milestones: lines(draft.milestones.join("\n")), boundaries: lines(draft.boundaries.join("\n")), tasteNotes: lines(draft.tasteNotes.join("\n")) } })}>保存相处偏好</Button><Button danger disabled={busy} onClick={() => setConfirm({ type: "reset_relationship" })}>重置关系</Button></div>
+        </div> },
+        { key: "world", label: "涟界轨迹", children: <div className="cy-companion__form">
+          {!world ? <Spin /> : <>
+            <div className="cy-companion__world-status cy-companion__wide">
+              <Tag color="blue">{XILIAN_WORLD_ARCS[world.state.activeArcId]?.title ?? world.state.activeArcId}</Tag>
+              <Tag>第 {world.state.dayIndex} 天</Tag>
+              <Tag>当前地点 · {getXilianLocation(world.state.currentLocationId)?.name ?? world.state.currentLocationId}</Tag>
+              <Button size="small" disabled={busy} onClick={() => void reloadWorld()}>刷新轨迹</Button>
+            </div>
+            <div className="cy-companion__world-current cy-companion__wide">
+              <strong>{world.state.currentActivity?.activityTitle ?? "今天还没有开始记录"}</strong>
+              <span>{world.state.currentActivity?.summary ?? "世界会在聊天或主动触发时继续推进。"}</span>
+              {world.state.nextPlannedEvent && <small>下一计划：{world.state.nextPlannedEvent.activityTitle}</small>}
+            </div>
+            <div className="cy-companion__world-goals cy-companion__wide">
+              {world.state.goals.map(goal => <div key={goal.id}><strong>{goal.title}</strong><span>{goal.progress} / {goal.target} · {goal.stage === "completed" ? "已完成" : goal.stage === "paused" ? "已暂停" : "进行中"}</span><div role="progressbar" aria-label={goal.title} aria-valuemin={0} aria-valuemax={goal.target} aria-valuenow={goal.progress} style={{ height: 6, borderRadius: 999, background: "var(--rb-border-subtle, #ece8ec)", overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, goal.progress / goal.target * 100)}%`, background: "var(--rb-accent, #ff5b8a)" }} /></div></div>)}
+            </div>
+            <div className="cy-companion__wide">{world.timeline.length === 0 ? <p>今天还没有已记录的轨迹。</p> : world.timeline.slice().reverse().map(event => <article className="cy-companion__record" key={event.id}><div><Tag>{getXilianLocation(event.locationId)?.name ?? event.locationId}</Tag><Tag>{event.status === "active" ? "正在进行" : "已完成"}</Tag><time>{new Date(event.occurredAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time><p>{event.activityTitle}。{event.summary}</p><small>心情：{event.mood}</small></div></article>)}</div>
+            <p className="cy-companion__wide">这里记录的是昔涟在服务器内的虚构生活，不代表现实地点或用户行程。自拍和主动分享会从对应事件生成，不会凭空新增经历。</p>
+          </>}
         </div> },
         { key: "followups", label: "具体跟进", children: <div className="cy-companion__form">
           <p className="cy-companion__wide">把希望昔涟之后关心的一件事记在这里。到达最早时间后，还会遵守主动聊天开关、评分、勿扰和渠道设置；不是精确定时提醒。微信或飞书只跟进当前绑定会话的事项。</p>

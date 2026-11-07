@@ -249,7 +249,7 @@ export async function startHeadlessCore() {
   });
   registerMemoryUserToolIpc({ ipc, windowManager });
   registerWikiMemoryIpc(ipc);
-  registerCompanionIpc(ipc);
+  registerCompanionIpc(ipc, undefined, proactive);
   registerMemoryGovernanceIpc(ipc);
   registerKnowledgeBaseIpc(ipc);
   await registerChatsIpc(ipc, {
