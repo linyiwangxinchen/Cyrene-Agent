@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getAdapterForConfig, PROVIDER_CAPABILITIES } from "./index";
 import { generateChatWithAiSdk } from "./model-runtime";
-import { prepareModelCall } from "./model-factory";
+import { normalizeImageGenerationModel, prepareModelCall } from "./model-factory";
 import type { ChatRequest, VendorConfig } from "./types";
 import { jsonResponse, responseBody, weatherTool } from "./sdk-stream/model-fixtures";
 
@@ -93,6 +93,24 @@ describe("AI SDK 厂商策略兼容", () => {
     const imageTool = sent.tools.find((tool: any) => tool.type === "image_generation");
     expect(imageTool).toMatchObject({ type: "image_generation", model: "gpt-image-2.5-flare",
       output_format: "png", size: "auto", quality: "auto", partial_images: 0 });
+  });
+
+  it("把旧图片模型别名迁移到当前 Responses 图片模型", async () => {
+    expect(normalizeImageGenerationModel("gpt-image-2")).toBe("gpt-image-2.5-flare");
+    expect(normalizeImageGenerationModel("gpt-image-2.5-sunburst")).toBe("gpt-image-2.5-sunburst");
+    const config: VendorConfig = { provider: "ChatGPT", model: "gpt-test", explicitTransport: "responses",
+      baseUrl: "https://proxy.test/v1", apiKey: "key" };
+    let sent: any;
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse(responseBody("responses"));
+    }));
+    await generateChatWithAiSdk({ adapter: getAdapterForConfig(config), config, timeoutMs: 2000, request: {
+      model: config.model,
+      messages: [{ role: "user", content: "给我一张自拍" }],
+      imageGeneration: { enabled: true, model: "gpt-image-2" },
+    } });
+    expect(sent.tools).toContainEqual(expect.objectContaining({ type: "image_generation", model: "gpt-image-2.5-flare" }));
   });
 
   it("不在关闭或辅助请求中注册图片生成工具", async () => {

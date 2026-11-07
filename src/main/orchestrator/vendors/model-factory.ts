@@ -14,6 +14,16 @@ const STRUCTURAL_FIELDS = new Set(["model", "messages", "input", "system", "inst
 const POLICY_FIELDS = ["temperature", "top_p", "frequency_penalty", "repetition_penalty", "max_tokens",
   "max_completion_tokens", "max_output_tokens", "tool_choice", "thinking", "enable_thinking", "reasoning_effort", "reasoning", "include"];
 
+/**
+ * `gpt-image-2` was used by older local profiles. Responses image generation
+ * currently exposes the GPT Image 2.5 model IDs; normalize the old alias at
+ * the wire boundary so an existing profile does not fail with invalid_value.
+ */
+export function normalizeImageGenerationModel(model: string): string {
+  const value = model.trim();
+  return /^gpt-image-2$/i.test(value) ? "gpt-image-2.5-flare" : value;
+}
+
 /** 复用现有厂商策略；消息与工具的编解码始终交给 SDK。 */
 export function prepareModelCall(input: {
   adapter: ChatVendorAdapter; config: VendorConfig; request: ChatRequest; stream: boolean;
@@ -27,7 +37,7 @@ export function prepareModelCall(input: {
   if (imageGeneration && adapter.transport !== "responses") {
     throw new AgentRuntimeError("E_MODEL_RESPONSE_PARSE_FAILED", "图片生成当前只支持 Responses 协议");
   }
-  if (imageGeneration && !imageGeneration.model.trim()) {
+  if (imageGeneration && !normalizeImageGenerationModel(imageGeneration.model)) {
     throw new AgentRuntimeError("E_MODEL_RESPONSE_PARSE_FAILED", "图片生成模型不能为空");
   }
   if ((request.tools ?? []).some(spec => spec.name === "image_generation")) {
@@ -87,7 +97,7 @@ export function prepareModelCall(input: {
     ...(adapter.transport !== "anthropic" ? { strict: false } : {}),
   })]));
   if (imageGeneration) {
-    tools.image_generation = openai!.tools.imageGeneration({ model: imageGeneration.model.trim(), outputFormat: "png",
+    tools.image_generation = openai!.tools.imageGeneration({ model: normalizeImageGenerationModel(imageGeneration.model), outputFormat: "png",
       size: "auto", quality: "auto", partialImages: 0 });
   }
   const choice = policy.tool_choice;
