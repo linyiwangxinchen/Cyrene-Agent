@@ -5,8 +5,9 @@ import { BUILT_IN_STICKER_IDS, type StickerConfigItem, type UserStickerMeta } fr
 import { BUILT_IN_STICKER_DESCRIPTIONS, BUILT_IN_STICKER_FILES } from "../main/sticker-descriptions";
 import { buildStickerTextIndex, matchSticker } from "../main/sticker-text-matcher-core";
 import { buildStickerMatchQuery } from "../main/sticker-query";
+import type { GeneratedImageAttachment } from "../shared/generated-image";
 
-interface MediaState { enabled: Record<string, boolean>; stickers: UserStickerMeta[]; avatars: Partial<Record<"cyrene" | "user", string>> }
+interface MediaState { enabled: Record<string, boolean>; stickers: UserStickerMeta[]; avatars: Partial<Record<"cyrene" | "user", string>>; generated: Record<string, { file: string; mime: string; byteLength: number }> }
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
 /** Validate bytes as well as the claimed MIME; no executable SVG/HTML uploads. */
@@ -23,7 +24,7 @@ export function decodeImage(dataUrl: string): { body: Buffer; extension: string;
 }
 
 export class WebMediaStore {
-  private data: MediaState = { enabled: {}, stickers: [], avatars: {} };
+  private data: MediaState = { enabled: {}, stickers: [], avatars: {}, generated: {} };
   private loadPromise?: Promise<void>;
   private writeChain: Promise<void> = Promise.resolve();
   constructor(private readonly dataDir: string) {}
@@ -31,7 +32,7 @@ export class WebMediaStore {
   private get directory() { return path.join(this.dataDir, "web-media"); }
   private load(): Promise<void> {
     return this.loadPromise ??= (async () => {
-      try { const saved = JSON.parse(await readFile(this.manifest, "utf8")); this.data = { enabled: saved.enabled ?? {}, stickers: saved.stickers ?? [], avatars: saved.avatars ?? {} }; }
+      try { const saved = JSON.parse(await readFile(this.manifest, "utf8")); this.data = { enabled: saved.enabled ?? {}, stickers: saved.stickers ?? [], avatars: saved.avatars ?? {}, generated: saved.generated ?? {} }; }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     })();
   }
@@ -87,9 +88,32 @@ export class WebMediaStore {
     await this.load(); const previous = this.data.avatars[kind]; delete this.data.avatars[kind]; await this.save();
     if (previous) await unlink(path.join(this.directory, previous)).catch(() => undefined);
   }
+  async saveGeneratedImage(input: { id: string; base64: string; mime?: string }): Promise<GeneratedImageAttachment> {
+    await this.load();
+    const dataUrl = `data:${input.mime || "image/png"};base64,${input.base64}`;
+    const image = decodeImage(dataUrl);
+    if (image.mime !== "image/png") throw new Error("模型生成图片必须是 PNG");
+    const existing = this.data.generated[input.id];
+    const file = existing?.file ?? `generated-${randomUUID()}.png`;
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    if (!existing) await writeFile(path.join(this.directory, file), image.body, { mode: 0o600 });
+    this.data.generated[input.id] = { file, mime: image.mime, byteLength: image.body.byteLength };
+    await this.save();
+    return {
+      id: input.id,
+      kind: "image",
+      name: `xilian-selfie-${input.id.slice(0, 8)}.png`,
+      filePath: "",
+      previewUrl: `/api/media/files/${encodeURIComponent(file)}`,
+      mime: image.mime,
+      source: "model",
+      byteLength: image.body.byteLength,
+      status: "done",
+    };
+  }
   async readFile(file: string) {
     await this.load();
-    if (!this.data.stickers.some(item => item.file === file) && !Object.values(this.data.avatars).includes(file)) return null;
+    if (!this.data.stickers.some(item => item.file === file) && !Object.values(this.data.avatars).includes(file) && !Object.values(this.data.generated).some(item => item.file === file)) return null;
     try { return await readFile(path.join(this.directory, path.basename(file))); } catch { return null; }
   }
 }

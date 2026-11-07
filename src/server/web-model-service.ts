@@ -9,6 +9,9 @@ import { getCapabilityOrOpenAI } from "../main/orchestrator/vendors/capabilities
 import { normalizeImageGenerationModel } from "../main/orchestrator/vendors/model-factory";
 import type { WebStore } from "./web-store";
 import { WebPersonaRuntime } from "./web-persona-runtime";
+import type { WebMediaStore } from "./web-media-store";
+import type { GeneratedImageAttachment } from "../shared/generated-image";
+import { isXilianSelfieRequest } from "../main/proactive/xilian-life-context";
 import type { RelationshipChannel } from "../main/relationship/relationship-log-core";
 
 const personaRuntimes = new WeakMap<WebStore, WebPersonaRuntime>();
@@ -86,8 +89,8 @@ export async function resolveWebModel(store: WebStore, input: { sessionId?: stri
 
 export async function requestSessionModel(store: WebStore, sessionId: string, prompt: string, options: {
   signal?: AbortSignal; onDelta?: (delta: UnifiedStreamDelta) => void;
-  persona?: WebPersonaRuntime; styleId?: unknown; legacyStyle?: unknown; channel?: RelationshipChannel;
-} = {}): Promise<ChatResponse> {
+  persona?: WebPersonaRuntime; styleId?: unknown; legacyStyle?: unknown; channel?: RelationshipChannel; media?: WebMediaStore;
+} = {}): Promise<ChatResponse & { generatedAttachments?: GeneratedImageAttachment[] }> {
   const { settings, session, config } = await resolveWebModel(store, { sessionId });
   if (!session) throw new Error("对话不存在");
   const persona = options.persona ?? personaForStore(store);
@@ -99,12 +102,42 @@ export async function requestSessionModel(store: WebStore, sessionId: string, pr
     const result = await (options.onDelta ? streamChatWithAiSdk : generateChatWithAiSdk)({
       adapter: getAdapterForConfig(config), config, request, timeoutMs, signal: options.signal, onDelta: options.onDelta,
     });
-    if (!result.text.trim()) throw new Error("模型返回了空回复，请检查推理模式与输出 Token 限制");
-    if (!options.signal?.aborted && settings.config.memoryMode !== "off") {
+    if (!result.text.trim() && !result.generatedImages?.length) throw new Error("模型返回了空回复，请检查推理模式与输出 Token 限制");
+    const generatedAttachments: GeneratedImageAttachment[] = [];
+    for (const image of result.generatedImages ?? []) {
+      try {
+        if (!options.media) throw new Error("Web 图片存储不可用");
+        generatedAttachments.push(await options.media.saveGeneratedImage(image));
+      } catch (error) {
+        console.warn("[WebMedia] 生成图片保存失败", error instanceof Error ? error.message : "unknown");
+      }
+    }
+    if (isXilianSelfieRequest(prompt) && config.imageGeneration?.enabled && built.worldSnapshot) {
+      try {
+        const artifact = persona.claimXilianSelfieArtifact(built.worldSnapshot);
+        if (artifact) {
+          if (generatedAttachments.length > 0) {
+            persona.completeXilianSelfieArtifact(artifact.id, {
+              imageModel: config.imageGeneration.model,
+              outputPath: generatedAttachments[0]?.previewUrl,
+            });
+          } else {
+            persona.failXilianSelfieArtifact(artifact.id, "parse");
+          }
+        }
+      } catch (error) {
+        console.warn("[XilianWorld] Web 自拍 artifact 状态写入失败", error);
+      }
+    }
+    if (!options.signal?.aborted && result.text.trim() && settings.config.memoryMode !== "off") {
       // A persistence failure must not turn a successfully generated reply into a runtime error.
       try { await persona.recordTurn(prompt, result.text, options.channel); }
       catch { console.warn("[WebPersona] 无法保存关系线索，请检查数据目录写入权限"); }
     }
-    return result;
+    return {
+      ...result,
+      ...(generatedAttachments.length ? { generatedAttachments } : {}),
+      ...(generatedAttachments.length ? { generatedImages: undefined } : {}),
+    };
   } catch (error) { throw new Error(modelError(error, config.apiKey)); }
 }

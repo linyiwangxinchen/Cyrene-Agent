@@ -409,7 +409,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       channelSource: { channel: message.channel, chatType: message.chatType ?? "private", senderName: message.senderName },
     } as never);
     let text: string;
-    try { text = (await requestSessionModel(store, conversationId, message.text, { persona, channel: message.channel })).text; }
+    try { text = (await requestSessionModel(store, conversationId, message.text, { persona, channel: message.channel, media })).text; }
     catch (error) { text = `模型请求失败：${modelError(error)}`; }
     await store.addAssistantMessage(conversationId, { id: `channel-${Date.now()}-${randomBytes(6).toString("hex")}`, role: "model", content: text, at: Date.now() });
     const outgoing: OutgoingMessage = { channel: message.channel, chatType: message.chatType, targetId: message.chatId, threadId: message.threadId, parts: [{ kind: "text", text }] };
@@ -957,7 +957,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
           let reasoningStarted = false;
           const state = running.get(runId)!;
           try {
-            const result = await requestSessionModel(store, sessionId, text.trim(), { persona, styleId: body.styleId, legacyStyle: body.style, signal: state.controller.signal, onDelta: (delta) => {
+            const result = await requestSessionModel(store, sessionId, text.trim(), { persona, styleId: body.styleId, legacyStyle: body.style, signal: state.controller.signal, media, onDelta: (delta) => {
               if (state.cancelled) return;
               if (delta.type === "text_delta") { accumulated += delta.delta; emit({ type: "TEXT_MESSAGE_CONTENT", messageId: assistantId, delta: delta.delta }); }
               if (delta.type === "reasoning_delta") {
@@ -973,8 +973,9 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
               enabled: settings.config.stickerEnabled !== false,
               threshold: typeof settings.config.stickerSimilarityThreshold === "number" ? settings.config.stickerSimilarityThreshold : undefined,
             });
-            await store.patchMessage(sessionId, assistantId, { content: result.text, reasoning: result.thinking ?? reasoning, sticker, runSnapshot: { runId, status: "terminal", terminalStatus, updatedAt: Date.now() } });
+            await store.patchMessage(sessionId, assistantId, { content: result.text, reasoning: result.thinking ?? reasoning, sticker, ...(result.generatedAttachments?.length ? { attachments: result.generatedAttachments } : {}), runSnapshot: { runId, status: "terminal", terminalStatus, updatedAt: Date.now() } });
             emit({ type: "TEXT_MESSAGE_END", messageId: assistantId });
+            if (result.generatedAttachments?.length) emit({ type: "CUSTOM", name: "cyrene.image_attachments", value: { messageId: assistantId, attachments: result.generatedAttachments } });
             emit({ type: "CUSTOM", name: "cyrene.sticker", value: sticker });
             emit({ type: "RUN_FINISHED", status: terminalStatus, result: { status: terminalStatus, externalEffectsMayContinue: false } });
           } catch (error) {

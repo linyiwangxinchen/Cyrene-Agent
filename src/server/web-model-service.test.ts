@@ -7,11 +7,12 @@ import { WebStore } from "./web-store";
 import { modelConfig, requestSessionModel, testModel } from "./web-model-service";
 import { responseBody, streamEvents } from "../main/orchestrator/vendors/sdk-stream/model-fixtures";
 import { WebFeatureStore } from "./web-feature-store";
+import { WebMediaStore } from "./web-media-store";
 
 const cleanup: Array<() => Promise<unknown>> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
-async function fixture(transport: "openai" | "anthropic" | "responses", options: { delay?: number; status?: number } = {}) {
+async function fixture(transport: "openai" | "anthropic" | "responses", options: { delay?: number; status?: number; generatedImage?: boolean } = {}) {
   const requests: Array<{ url?: string; body: any }> = [];
   const server: Server = createServer(async (req, res) => {
     let text = ""; for await (const chunk of req) text += chunk;
@@ -23,7 +24,11 @@ async function fixture(transport: "openai" | "anthropic" | "responses", options:
       res.writeHead(200, { "content-type": "text/event-stream" });
       for (const event of streamEvents(transport, { text: "真实的模型回复" })) res.write(`event: ${event.type ?? "data"}\ndata: ${JSON.stringify(event)}\n\n`);
       if (transport === "openai") res.write("data: [DONE]\n\n"); res.end();
-    } else { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(responseBody(transport, { text: "真实的模型回复" }))); }
+    } else {
+      let payload: any = responseBody(transport, { text: options.generatedImage ? "" : "真实的模型回复" });
+      if (options.generatedImage && transport === "responses") payload = { ...payload, output: [{ id: "image-call", type: "image_generation_call", result: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] };
+      res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify(payload));
+    }
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   cleanup.push(() => new Promise<void>(resolve => { server.closeAllConnections(); server.close(() => resolve()); }));
@@ -66,6 +71,23 @@ describe("headless model service", () => {
     expect(JSON.stringify(f.requests[0].body)).toContain("昔涟图片生成约束");
     expect(JSON.stringify(f.requests[0].body)).toContain("拍摄原因");
     expect(JSON.stringify(f.requests[0].body)).toContain("正在做");
+  });
+
+  it("persists a Web selfie image and returns a browser attachment", async () => {
+    const f = await fixture("responses", { generatedImage: true });
+    await f.store.setModelProfiles([{
+      ...f.profile,
+      provider: "ChatGPT（OpenAI）",
+      model: "gpt-6-astra",
+      models: ["gpt-6-astra"],
+      explicitTransport: "responses",
+      imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" },
+    }], "chosen");
+    await f.store.updateSession(f.session.id, { model: "gpt-6-astra" });
+    const result = await requestSessionModel(f.store, f.session.id, "给我一张昔涟自拍", { media: new WebMediaStore(f.data) });
+    expect(result.text).toBe("");
+    expect(result.generatedAttachments).toHaveLength(1);
+    expect(result.generatedAttachments?.[0]).toMatchObject({ source: "model", previewUrl: expect.stringContaining("/api/media/files/") });
   });
   it.each(["openai", "anthropic", "responses"] as const)("uses the %s protocol, selected profile/model, and one copy of the user turn", async transport => {
     const f = await fixture(transport);

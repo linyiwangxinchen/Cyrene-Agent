@@ -19,7 +19,8 @@ import type { WebSettings } from "./web-store";
 import { XILIAN_PERSONA_SPEC } from "../main/persona/persona-spec";
 import { XILIAN_IMAGE_GENERATION_PROMPT } from "../main/persona/xilian-image-prompt";
 import { createXilianWorldStore } from "../main/proactive/xilian-world-store";
-import { buildXilianLifeSnapshot, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../main/proactive/xilian-life-context";
+import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../main/proactive/xilian-life-context";
+import type { XilianLifeSnapshot } from "../shared/xilian-world";
 import type { RelationshipPreferencesPatch } from "../main/relationship/relationship-log-core";
 
 /** Source and compiled entry points both resolve shipped content independently of cwd. */
@@ -107,6 +108,19 @@ export class WebPersonaRuntime {
 
   async getPersonaState() {
     return { spec: XILIAN_PERSONA_SPEC, ...(await this.relationship.getState()) };
+  }
+
+  claimXilianSelfieArtifact(snapshot: XilianLifeSnapshot, now = Date.now()) {
+    if (!snapshot.sourceEventId || snapshot.sourceEventId === "xilian:none") return null;
+    return this.world.claimArtifact({ eventId: snapshot.sourceEventId, kind: "selfie", promptFingerprint: buildXilianPromptFingerprint(snapshot), now });
+  }
+
+  completeXilianSelfieArtifact(id: string, input: { imageModel?: string; outputPath?: string; now?: number }) {
+    return this.world.completeArtifact(id, input);
+  }
+
+  failXilianSelfieArtifact(id: string, errorClass: "auth" | "parameter" | "network" | "timeout" | "parse" | "unknown", now = Date.now()) {
+    return this.world.failArtifact(id, errorClass, now);
   }
 
   async updateRelationshipPreferences(patch: RelationshipPreferencesPatch) {
@@ -201,7 +215,7 @@ export class WebPersonaRuntime {
     // Keep the shared layer composer, but place context immediately before the real current turn.
     const composed = composePromptLayers({ stablePrefix, runtimeContext, mode }, time.timestampedMessages.slice(0, -1));
     composed.messages.push(time.timestampedMessages.at(-1)!);
-    return { ...composed, sampling, styleId, mode, promptFiles: MODE_PROMPT_FILES[mode] };
+    return { ...composed, sampling, styleId, mode, promptFiles: MODE_PROMPT_FILES[mode], worldSnapshot };
   }
 
   async recordTurn(userText: string, assistantText: string, channel: RelationshipChannel = "web"): Promise<void> {

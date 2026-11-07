@@ -41,4 +41,14 @@ describe("web media", () => {
     expect(() => decodeImage("data:image/png;base64,PHNjcmlwdD4=")).toThrow();
     expect(() => decodeImage(`data:image/png;base64,${"A".repeat(12 * 1024 * 1024)}`)).toThrow();
   });
+
+  it("persists generated PNGs as private session media", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "cyrene-generated-media-")); directories.push(directory);
+    const store = new WebMediaStore(directory);
+    const attachment = await store.saveGeneratedImage({ id: "image-1", base64: image.split(",")[1]! });
+    expect(attachment).toMatchObject({ id: "image-1", source: "model", previewUrl: expect.stringContaining("/api/media/files/") });
+    expect(await store.readFile(decodeURIComponent(attachment.previewUrl!.split("/").at(-1)!))).toEqual(decodeImage(image).body);
+    const restarted = new WebMediaStore(directory);
+    expect(await restarted.readFile(decodeURIComponent(attachment.previewUrl!.split("/").at(-1)!))).toEqual(decodeImage(image).body);
+  });
 });
