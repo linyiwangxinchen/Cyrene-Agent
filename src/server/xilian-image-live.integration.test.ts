@@ -7,7 +7,10 @@ import { WebSocket } from "ws";
 import { createWebServer, type WebServerHandle } from "./index";
 
 const live = process.env.CYRENE_RUN_LIVE_IMAGE_TEST === "1";
+const liveUpstream = process.env.CYRENE_LIVE_IMAGE_UPSTREAM;
+const liveApiKey = process.env.CYRENE_LIVE_IMAGE_API_KEY;
 const LIVE_IMAGE = "给昔涟生成一张自拍图片，请实际调用图片生成工具并把图片返回到当前会话。";
+const ORDINARY_IMAGE = "请生成一张普通的海边日落风景图片，请实际调用图片生成工具并把图片返回到当前会话。";
 const resources: Array<{ close: () => Promise<void> }> = [];
 
 interface ProxyTrace {
@@ -105,19 +108,18 @@ async function json(response: Response): Promise<any> {
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
 
-const testLive = live ? it : it.skip;
+const testLive = live && liveUpstream && liveApiKey ? it : it.skip;
 
 describe("Linux Web real Xilian image request", () => {
   afterEach(async () => {
     for (const resource of resources.splice(0).reverse()) await resource.close();
   });
 
-  testLive("runs authenticated Web input through Responses image generation and persists the result", async () => {
+  testLive("runs ordinary image generation and Xilian selfie through the same isolated Responses upstream", async () => {
     // These variables are test-only inputs. The Web runtime receives its model
     // profile through /api/model-profiles and never reads the host Codex config.
-    const upstreamBase = process.env.CYRENE_LIVE_IMAGE_UPSTREAM;
-    const apiKey = process.env.CYRENE_LIVE_IMAGE_API_KEY;
-    if (!upstreamBase || !apiKey) throw new Error("缺少 CYRENE_LIVE_IMAGE_UPSTREAM 或 CYRENE_LIVE_IMAGE_API_KEY");
+    const upstreamBase = liveUpstream!;
+    const apiKey = liveApiKey!;
     const dataDir = await mkdtemp(path.join(os.tmpdir(), "cyrene-live-image-web-"));
     resources.push({ close: () => rm(dataDir, { recursive: true, force: true }) });
     const forwarder = await startForwarder(upstreamBase);
@@ -165,19 +167,23 @@ describe("Linux Web real Xilian image request", () => {
     resources.push({ close: async () => socket.terminate() });
     await new Promise<void>((resolve, reject) => { socket.once("message", () => resolve()); socket.once("error", reject); });
     socket.on("message", value => events.push(JSON.parse(String(value))));
-    const runResponse = await fetch(`${base}/api/agui/run`, { method: "POST", headers: auth, body: JSON.stringify({ sessionId: session.id, assistantTurnId: "live-assistant", currentUser: { text: LIVE_IMAGE } }) });
-    expect((await json(runResponse)).success).toBe(true);
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error(`live image timed out; trace=${JSON.stringify(forwarder.trace)}`)), 240_000);
-      const check = () => {
-        if (events.some(event => event.type === "RUN_FINISHED" || event.type === "RUN_ERROR")) { clearTimeout(timer); resolve(); return; }
-        setTimeout(check, 100);
-      };
-      check();
-    });
-    const error = events.find(event => event.type === "RUN_ERROR");
-    if (error) throw new Error(`真实 Web 生图失败：${JSON.stringify({ error, trace: forwarder.trace })}`);
-    const persisted = await json(await fetch(`${base}/api/chat/sessions/${session.id}`, { headers: { cookie } })) as { messages?: Array<{ attachments?: unknown[] }> };
-    expect(persisted.messages?.some(message => Array.isArray(message.attachments) && message.attachments.length > 0)).toBe(true);
+    for (const [index, prompt] of [ORDINARY_IMAGE, LIVE_IMAGE].entries()) {
+      const start = events.length;
+      const runResponse = await fetch(`${base}/api/agui/run`, { method: "POST", headers: auth, body: JSON.stringify({ sessionId: session.id, assistantTurnId: `live-assistant-${index}`, currentUser: { text: prompt } }) });
+      expect((await json(runResponse)).success).toBe(true);
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error(`live image timed out; trace=${JSON.stringify(forwarder.trace)}`)), 240_000);
+        const check = () => {
+          if (events.slice(start).some(event => event.type === "RUN_FINISHED" || event.type === "RUN_ERROR")) { clearTimeout(timer); resolve(); return; }
+          setTimeout(check, 100);
+        };
+        check();
+      });
+      const error = events.slice(start).find(event => event.type === "RUN_ERROR");
+      if (error) throw new Error(`真实 Web 生图失败：${JSON.stringify({ prompt, error, trace: forwarder.trace })}`);
+      const persisted = await json(await fetch(`${base}/api/chat/sessions/${session.id}`, { headers: { cookie } })) as { messages?: Array<{ id?: string; attachments?: unknown[] }> };
+      const assistant = persisted.messages?.find(message => message.id === `live-assistant-${index}`);
+      expect(assistant?.attachments?.length, `场景未产生图片附件：${prompt}`).toBeGreaterThan(0);
+    }
   }, 300_000);
 });

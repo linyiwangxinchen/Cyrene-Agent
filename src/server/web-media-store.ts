@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { BUILT_IN_STICKER_IDS, type StickerConfigItem, type UserStickerMeta } from "../shared/sticker-types";
 import { BUILT_IN_STICKER_DESCRIPTIONS, BUILT_IN_STICKER_FILES } from "../main/sticker-descriptions";
@@ -9,6 +9,8 @@ import type { GeneratedImageAttachment } from "../shared/generated-image";
 
 interface MediaState { enabled: Record<string, boolean>; stickers: UserStickerMeta[]; avatars: Partial<Record<"cyrene" | "user", string>>; generated: Record<string, { file: string; mime: string; byteLength: number }> }
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+export const WEB_GENERATED_IMAGE_MAX_BYTES = 128 * 1024 * 1024;
+export const WEB_GENERATED_IMAGE_MAX_COUNT = 200;
 
 /** Validate bytes as well as the claimed MIME; no executable SVG/HTML uploads. */
 export function decodeImage(dataUrl: string): { body: Buffer; extension: string; mime: string } {
@@ -32,8 +34,8 @@ export class WebMediaStore {
   private get directory() { return path.join(this.dataDir, "web-media"); }
   private load(): Promise<void> {
     return this.loadPromise ??= (async () => {
-      try { const saved = JSON.parse(await readFile(this.manifest, "utf8")); this.data = { enabled: saved.enabled ?? {}, stickers: saved.stickers ?? [], avatars: saved.avatars ?? {}, generated: saved.generated ?? {} }; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      try { const saved = JSON.parse(await readFile(this.manifest, "utf8")); this.data = { enabled: saved.enabled ?? {}, stickers: saved.stickers ?? [], avatars: saved.avatars ?? {}, generated: saved.generated ?? {} }; await this.cleanupOrphans(); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; await this.cleanupOrphans(); }
     })();
   }
   private save(): Promise<void> {
@@ -41,8 +43,25 @@ export class WebMediaStore {
     this.writeChain = this.writeChain.catch(() => undefined).then(async () => {
       await mkdir(this.dataDir, { recursive: true, mode: 0o700 });
       const temporary = `${this.manifest}.${randomUUID()}.tmp`;
-      await writeFile(temporary, snapshot, { mode: 0o600 }); await rename(temporary, this.manifest);
+      await writeFile(temporary, snapshot, { mode: 0o600 });
+      try { await rename(temporary, this.manifest); } finally { await unlink(temporary).catch(() => undefined); }
     }); return this.writeChain;
+  }
+  private async cleanupOrphans(): Promise<void> {
+    const referenced = new Set([
+      ...this.data.stickers.map(item => item.file),
+      ...Object.values(this.data.avatars).filter((file): file is string => typeof file === "string"),
+      ...Object.values(this.data.generated).map(item => item.file),
+    ]);
+    const entries = await readdir(this.directory, { withFileTypes: true }).catch(() => []);
+    await Promise.all(entries.filter(entry => entry.isFile() && !referenced.has(entry.name)).map(entry => unlink(path.join(this.directory, entry.name)).catch(() => undefined)));
+    let changed = false;
+    for (const [id, item] of Object.entries(this.data.generated)) {
+      if (!referenced.has(item.file)) { delete this.data.generated[id]; changed = true; continue; }
+      const info = await stat(path.join(this.directory, item.file)).catch(() => null);
+      if (!info?.isFile()) { delete this.data.generated[id]; changed = true; }
+    }
+    if (changed) await this.save();
   }
   async list(): Promise<StickerConfigItem[]> {
     await this.load();
@@ -90,15 +109,44 @@ export class WebMediaStore {
   }
   async saveGeneratedImage(input: { id: string; base64: string; mime?: string }): Promise<GeneratedImageAttachment> {
     await this.load();
+    if (!/^[A-Za-z0-9_-]{1,200}$/.test(input.id)) throw new Error("生成图片标识无效");
     const dataUrl = `data:${input.mime || "image/png"};base64,${input.base64}`;
     const image = decodeImage(dataUrl);
     if (image.mime !== "image/png") throw new Error("模型生成图片必须是 PNG");
     const existing = this.data.generated[input.id];
-    const file = existing?.file ?? `generated-${randomUUID()}.png`;
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    if (!existing) await writeFile(path.join(this.directory, file), image.body, { mode: 0o600 });
-    this.data.generated[input.id] = { file, mime: image.mime, byteLength: image.body.byteLength };
-    await this.save();
+    const currentBytes = Object.values(this.data.generated).reduce((sum, item) => sum + (Number.isFinite(item.byteLength) ? item.byteLength : 0), 0);
+    const oldBytes = existing?.byteLength ?? 0;
+    if (!existing && Object.keys(this.data.generated).length >= WEB_GENERATED_IMAGE_MAX_COUNT) throw new Error("生成图片存储配额已满");
+    if (currentBytes - oldBytes + image.body.byteLength > WEB_GENERATED_IMAGE_MAX_BYTES) throw new Error("生成图片存储配额已满");
+    let file = existing?.file ?? `generated-${randomUUID()}.png`;
+    let target = path.join(this.directory, file);
+    let createdFile = false;
+    let replacedFile = false;
+    if (existing) {
+      const current = await readFile(target).catch(() => null);
+      if (!current?.equals(image.body)) {
+        file = `generated-${randomUUID()}.png`;
+        target = path.join(this.directory, file);
+        replacedFile = true;
+      }
+    }
+    try {
+      if (replacedFile || !existing) { await writeFile(target, image.body, { flag: "wx", mode: 0o600 }); createdFile = true; }
+      this.data.generated[input.id] = { file, mime: image.mime, byteLength: image.body.byteLength };
+      try {
+        await this.save();
+      } catch (error) {
+        if (createdFile) await unlink(target).catch(() => undefined);
+        if (existing) this.data.generated[input.id] = existing;
+        else delete this.data.generated[input.id];
+        throw error;
+      }
+      if (existing && existing.file !== file) await unlink(path.join(this.directory, existing.file)).catch(() => undefined);
+    } catch (error) {
+      if (createdFile) await unlink(target).catch(() => undefined);
+      throw error;
+    }
     return {
       id: input.id,
       kind: "image",
@@ -115,5 +163,16 @@ export class WebMediaStore {
     await this.load();
     if (!this.data.stickers.some(item => item.file === file) && !Object.values(this.data.avatars).includes(file) && !Object.values(this.data.generated).some(item => item.file === file)) return null;
     try { return await readFile(path.join(this.directory, path.basename(file))); } catch { return null; }
+  }
+
+  /** Resolve a managed media name to a local path for channel adapters. */
+  async resolveFilePath(file: string): Promise<string | null> {
+    await this.load();
+    const managed = this.data.stickers.some(item => item.file === file)
+      || Object.values(this.data.avatars).includes(file)
+      || Object.values(this.data.generated).some(item => item.file === file);
+    if (!managed || !file || path.basename(file) !== file) return null;
+    const resolved = path.join(this.directory, file);
+    try { return (await stat(resolved)).isFile() ? resolved : null; } catch { return null; }
   }
 }

@@ -19,6 +19,9 @@ import {
   normalizeProactiveChatMode,
   normalizeProactiveDeliveryTarget,
   normalizeProactiveTargetScore,
+  normalizeProactiveQuietStartMinute,
+  normalizeProactiveQuietEndMinute,
+  normalizeProactiveDailyLimit,
   normalizeSegmentedOutputMode,
 } from "../../shared/preferences";
 import { normalizeCitaSettings } from "../cita/settings";
@@ -66,6 +69,9 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   proactiveChatMode: "off",
   proactiveDeliveryTarget: "local",
   proactiveTargetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
+  proactiveQuietStartMinute: 22 * 60,
+  proactiveQuietEndMinute: 8 * 60,
+  proactiveDailyLimit: 3,
   companionPluginSharingEnabled: false,
   ttsEngine: "off",
   ttsAutoRead: true,
@@ -258,6 +264,9 @@ export function normalizeGeneralSettings(
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
     proactiveTargetScore: normalizeProactiveTargetScore(input?.proactiveTargetScore),
+    proactiveQuietStartMinute: normalizeProactiveQuietStartMinute(input?.proactiveQuietStartMinute),
+    proactiveQuietEndMinute: normalizeProactiveQuietEndMinute(input?.proactiveQuietEndMinute),
+    proactiveDailyLimit: normalizeProactiveDailyLimit(input?.proactiveDailyLimit),
     companionPluginSharingEnabled: input?.companionPluginSharingEnabled === true,
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo", "mossland"].includes(input?.ttsEngine as string)
       ? input?.ttsEngine

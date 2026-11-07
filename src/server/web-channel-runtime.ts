@@ -15,16 +15,26 @@ import {
   ILinkClient,
   pollQrStatus,
   type Credentials,
+  MediaType,
+  type SendMessageItem,
   type WeixinMessage,
 } from "../main/channels/adapters/wechat/ilink-protocol-client";
+import { uploadWechatMediaFile } from "../main/channels/adapters/wechat/wechat-media-upload";
+import { describeInboundWechatMedia } from "../main/channels/adapters/wechat/inbound-media";
+import { downloadWechatMedia } from "../main/channels/adapters/wechat/wechat-media-download";
+import { normalizeLarkMessage, sendLark } from "../main/channels/adapters/feishu";
 import {
   OneBotReverseWsServer,
   resolveQqListenAuthRequirement,
   type OneBotListeningInfo,
 } from "../main/channels/adapters/qq/onebot-reverse-ws";
+import { OneBotMediaManager, versionAtLeast, ONEBOT_STREAM_MIN_VERSION } from "../main/channels/adapters/qq/onebot-media";
+import { normalizeOneBotMessage } from "../main/channels/adapters/qq/onebot-normalizer";
+import { OneBotActionClient } from "../main/channels/adapters/qq/onebot-action-client";
 import { oneBotId, type OneBotEvent, type OneBotMessageEvent } from "../main/channels/adapters/qq/onebot-types";
 import { QqBotApiClient } from "../main/channels/adapters/qqbot/qqbot-api-client";
 import { QqBotWsClient, type QqBotEventType } from "../main/channels/adapters/qqbot/qqbot-ws-client";
+import { normalizeQqBotEvent } from "../main/channels/adapters/qqbot/qqbot-adapter";
 import type {
   ChannelCapability,
   ChannelStatus,
@@ -72,6 +82,8 @@ interface PersistedState {
 }
 
 const EMPTY_STATE: PersistedState = { logs: [], externalChats: [], bindings: [] };
+const QQBOT_MEDIA_HOST_SUFFIXES = [".qq.com", ".qq.com.cn", ".qpic.cn", ".qlogo.cn"] as const;
+const QQBOT_MEDIA_TIMEOUT_MS = 15_000;
 const CAPABILITIES: Record<string, ChannelCapability> = {
   wechat: { text: true, image: true, audio: false, file: true, video: true, markdown: false, card: false, sticker: true, maxTextLength: 2048 },
   feishu: { text: true, image: true, audio: true, file: true, video: true, markdown: true, card: true, sticker: true, maxTextLength: 4000 },
@@ -109,23 +121,6 @@ function isOneBotMessage(value: unknown): value is OneBotMessageEvent {
     && Array.isArray(item.message);
 }
 
-function oneBotText(event: OneBotMessageEvent, selfId: string): string {
-  const parts: string[] = [];
-  for (const segment of event.message) {
-    if (!segment || typeof segment !== "object") continue;
-    const type = textValue((segment as { type?: unknown }).type);
-    const data = asRecord((segment as { data?: unknown }).data);
-    if (type === "text" || type === "markdown") parts.push(textValue(data.text ?? data.markdown ?? data.content));
-    else if (type === "at") {
-      const id = oneBotId(data.qq);
-      if (id && id !== selfId) parts.push(` @${id} `);
-    } else if (["image", "record", "file", "video", "mface", "face"].includes(type)) parts.push(`[${type === "record" ? "语音" : type}]`);
-    else if (type === "reply") continue;
-    else if (type) parts.push(`[未支持的消息类型:${type}]`);
-  }
-  return parts.join("").trim() || textValue(event.raw_message).trim() || "[空消息]";
-}
-
 function safeConfig(value: unknown): Record<string, unknown> { return asRecord(value); }
 
 export class WebChannelRuntime {
@@ -148,6 +143,8 @@ export class WebChannelRuntime {
   private wechatReplyContext = new Map<string, string>();
   private qq: OneBotReverseWsServer | null = null;
   private qqClient: { call<T = unknown>(action: string, params?: Record<string, unknown>): Promise<T> } | null = null;
+  private qqMedia: OneBotMediaManager | null = null;
+  private qqSupportsStream = false;
   private qqSelfId = "";
   private qqInfo: OneBotListeningInfo | null = null;
   private qqbotApi: QqBotApiClient | null = null;
@@ -217,6 +214,9 @@ export class WebChannelRuntime {
     await this.qq?.stop().catch(() => undefined);
     this.qq = null;
     this.qqClient = null;
+    this.qqMedia?.stop();
+    this.qqMedia = null;
+    this.qqSupportsStream = false;
     this.qqSelfId = "";
     this.qqInfo = null;
     await this.qqbotWs?.stop().catch(() => undefined);
@@ -369,17 +369,49 @@ export class WebChannelRuntime {
   }
 
   private async handleWechat(message: WeixinMessage): Promise<void> {
-    const incoming: IncomingMessage = { channel: "wechat", chatType: "private", messageId: message.msgId, senderId: message.fromUserId, chatId: message.fromUserId, text: message.content || "[微信消息]", at: new Date(message.createTimeMs ?? Date.now()), _raw: message };
+    const attachments = await this.downloadWechatAttachments(message);
+    const incoming: IncomingMessage = { channel: "wechat", chatType: "private", messageId: message.msgId, senderId: message.fromUserId, chatId: message.fromUserId, text: message.content || "[微信消息]", ...(attachments.length ? { attachments } : {}), at: new Date(message.createTimeMs ?? Date.now()), _raw: message };
     this.wechatReplyContext.set(message.fromUserId, message.contextToken);
     const response = await this.onMessage?.(incoming);
     if (response) await this.sendWechat(response);
+  }
+
+  private async downloadWechatAttachments(message: WeixinMessage): Promise<NonNullable<IncomingMessage["attachments"]>> {
+    const descriptors = describeInboundWechatMedia(message.items ?? []);
+    const attachments: NonNullable<IncomingMessage["attachments"]> = [];
+    const cacheDir = path.join(this.dataDir, "channels", "cache", "wechat");
+    await mkdir(cacheDir, { recursive: true, mode: 0o700 });
+    for (const descriptor of descriptors) {
+      if (descriptor.kind !== "image" && !(descriptor.kind === "file" && descriptor.analyzable)) continue;
+      if (!descriptor.media) continue;
+      try {
+        const bytes = await downloadWechatMedia(descriptor.media);
+        const safeName = path.basename(descriptor.fileName || `${Date.now()}.bin`).replace(/[^\w.\-\u4e00-\u9fff]/g, "_");
+        const filePath = path.join(cacheDir, `${message.msgId || Date.now()}-${safeName}`);
+        await writeFile(filePath, bytes, { mode: 0o600 });
+        attachments.push({ kind: descriptor.kind === "image" ? "image" : "file", filePath, caption: descriptor.fileName, mime: descriptor.kind === "image" ? "image/png" : "application/octet-stream" });
+      } catch (error) {
+        this.onEvent?.({ type: "CHANNEL_ATTACHMENT_ERROR", channel: "wechat", messageId: message.msgId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return attachments;
   }
 
   private async sendWechat(message: OutgoingMessage): Promise<void> {
     if (!this.wechat) return;
     const contextToken = this.wechatReplyContext.get(message.targetId);
     if (!contextToken) return;
-    for (const part of message.parts) if (part.kind === "text") await this.wechat.sendText(message.targetId, part.text, contextToken);
+    for (const part of message.parts) {
+      if (part.kind === "text") { await this.wechat.sendText(message.targetId, part.text, contextToken); continue; }
+      if (part.kind !== "image" || !part.filePath) continue;
+      try {
+        const media = await uploadWechatMediaFile(this.wechat, message.targetId, part.filePath, MediaType.IMAGE);
+        const item: SendMessageItem = { type: 2, image_item: { media: { encrypt_query_param: media.encrypt_query_param, aes_key: media.aes_key, encrypt_type: media.encrypt_type }, mid_size: media.ciphertextSize } };
+        await this.wechat.sendMessage(message.targetId, [item], contextToken);
+      } catch (error) {
+        this.onEvent?.({ type: "CHANNEL_ATTACHMENT_ERROR", channel: "wechat", targetId: message.targetId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
   }
 
   private async startFeishu(settings: Record<string, unknown>): Promise<void> {
@@ -390,11 +422,7 @@ export class WebChannelRuntime {
     const channel = createLarkChannel({ appId, appSecret, domain: Domain.Feishu, loggerLevel: LoggerLevel.warn, transport: "websocket" });
     channel.on("message" as EventName, async (message: NormalizedMessage) => {
       if (message.chatType !== "p2p") return;
-      let content = message.content || `[${message.rawContentType}]`;
-      if (message.rawContentType === "text") {
-        try { content = textValue((JSON.parse(message.content) as { text?: unknown }).text) || content; } catch { /* SDK may already return plain text */ }
-      }
-      const incoming: IncomingMessage = { channel: "feishu", chatType: "private", messageId: message.messageId, senderId: message.senderId, senderName: message.senderName, chatId: message.chatId, threadId: message.threadId, text: content, at: new Date(message.createTime || Date.now()), _raw: message };
+      const incoming = await normalizeLarkMessage(channel, message);
       const response = await this.onMessage?.(incoming);
       if (response) await this.sendFeishu(response);
     });
@@ -417,10 +445,8 @@ export class WebChannelRuntime {
   private async sendFeishu(message: OutgoingMessage): Promise<void> {
     if (!this.feishu) return;
     for (const part of message.parts) {
-      try {
-        if (part.kind === "text") await this.feishu.send(message.targetId, { text: part.text });
-        else if (part.kind === "card") await this.feishu.send(message.targetId, { card: { schema: "2.0", header: { title: { tag: "plain_text", content: part.title } }, elements: [{ tag: "div", text: { tag: "lark_md", content: part.markdown ?? "" } }] } } as never);
-      } catch (error) { this.state.logs.push({ at: new Date().toISOString(), dir: "error", channel: "feishu", senderId: message.targetId, chatId: message.targetId, text: error instanceof Error ? error.message : String(error) }); }
+      try { await sendLark(this.feishu, message.targetId, part); }
+      catch (error) { this.state.logs.push({ at: new Date().toISOString(), dir: "error", channel: "feishu", senderId: message.targetId, chatId: message.targetId, text: error instanceof Error ? error.message : String(error) }); }
     }
   }
 
@@ -428,7 +454,7 @@ export class WebChannelRuntime {
     if (settings.enabled === false) { this.setStatus("qq", { enabled: false, phase: "offline", message: "未启用" }); return; }
     const mode = textValue(settings.listenMode) || "auto"; const port = Number(settings.port) || 6200; const accessToken = textValue(settings.accessToken);
     this.setStatus("qq", { enabled: true, phase: "starting", message: "正在启动 OneBot 监听" });
-    const server = new OneBotReverseWsServer({ listenMode: mode as never, customHost: textValue(settings.customHost) || undefined, port, accessToken, onEvent: (event, client) => this.handleQqEvent(event, client), onClientConnected: (client, info) => this.handleQqConnected(client, info.headerSelfId), onClientDisconnected: () => { this.qqClient = null; this.qqSelfId = ""; this.setStatus("qq", { enabled: true, phase: "starting", message: "监听中，等待 NapCat 连接", detail: this.qqDetail() }); }, onError: (error) => this.setStatus("qq", { enabled: true, phase: "error", message: error.message, detail: this.qqDetail() }) });
+    const server = new OneBotReverseWsServer({ listenMode: mode as never, customHost: textValue(settings.customHost) || undefined, port, accessToken, onEvent: (event, client) => this.handleQqEvent(event, client), onClientConnected: (client, info) => this.handleQqConnected(client, info.headerSelfId), onClientDisconnected: () => { this.qqClient = null; this.qqMedia?.stop(); this.qqMedia = null; this.qqSupportsStream = false; this.qqSelfId = ""; this.setStatus("qq", { enabled: true, phase: "starting", message: "监听中，等待 NapCat 连接", detail: this.qqDetail() }); }, onError: (error) => this.setStatus("qq", { enabled: true, phase: "error", message: error.message, detail: this.qqDetail() }) });
     try { this.qqInfo = await server.start(); this.qq = server; this.setStatus("qq", { enabled: true, phase: "starting", message: "监听中，等待 NapCat 连接", detail: this.qqDetail() }); }
     catch (error) { const message = error instanceof Error ? error.message : String(error); this.setStatus("qq", { enabled: true, phase: "error", message }); }
   }
@@ -471,9 +497,9 @@ export class WebChannelRuntime {
     const users = Array.isArray(settings.allowedUserOpenids) ? settings.allowedUserOpenids.map(String) : [];
     const groups = Array.isArray(settings.allowedGroupOpenids) ? settings.allowedGroupOpenids.map(String) : [];
     if ((!group && settings.allowAnyPrivate !== true && !users.includes(senderId)) || (group && !groups.includes(chatId))) return;
-    const content = textValue(data.content).trim();
-    if (!content) return;
-    const incoming: IncomingMessage = { channel: "qqbot", chatType: group ? "group" : "private", messageId, senderId, senderName: textValue(author.username) || undefined, chatId, text: content, at: new Date(Date.parse(textValue(data.timestamp)) || Date.now()), _raw: data };
+    const incoming = normalizeQqBotEvent(type, data);
+    if (!incoming) return;
+    await this.downloadRemoteAttachments(incoming, "qqbot");
     this.qqbotReplyContext.set(chatId, { messageId, chatType: incoming.chatType!, seq: 0, at: Date.now() });
     const response = await this.onMessage?.(incoming);
     if (response) await this.sendQqBot(response);
@@ -484,10 +510,50 @@ export class WebChannelRuntime {
     const context = this.qqbotReplyContext.get(message.targetId);
     if (!context || Date.now() - context.at > (context.chatType === "group" ? 5 : 60) * 60_000) return;
     for (const part of message.parts) {
-      if (part.kind !== "text") continue;
+      const text = part.kind === "text"
+        ? part.text
+        : part.kind === "image"
+          ? `图片已生成：${part.caption || "请在 Web 会话中查看"}`
+          : logText([part]);
       context.seq += 1;
       if (context.seq > (context.chatType === "group" ? 5 : 4)) break;
-      await this.qqbotApi.sendText({ openid: message.targetId, chatType: context.chatType }, part.text, { msgId: context.messageId, msgSeq: context.seq });
+      await this.qqbotApi.sendText({ openid: message.targetId, chatType: context.chatType }, text, { msgId: context.messageId, msgSeq: context.seq });
+    }
+  }
+
+  private async downloadRemoteAttachments(message: IncomingMessage, channel: string): Promise<void> {
+    if (!message.attachments?.length) return;
+    const dir = path.join(this.dataDir, "channels", "cache", channel);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    for (const attachment of message.attachments) {
+      if (!attachment.url) continue;
+      try {
+        const mediaUrl = new URL(attachment.url);
+        if (mediaUrl.protocol !== "https:" || !QQBOT_MEDIA_HOST_SUFFIXES.some((suffix) => mediaUrl.hostname.endsWith(suffix))) throw new Error("QQ Bot 附件地址不在允许的媒体域名内");
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), QQBOT_MEDIA_TIMEOUT_MS);
+        let response: Response;
+        try { response = await fetch(mediaUrl, { redirect: "error", signal: controller.signal }); }
+        finally { clearTimeout(timeout); }
+        if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}`);
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+          if (total > 8 * 1024 * 1024) { await reader.cancel().catch(() => undefined); throw new Error("附件超过 8 MiB 限制"); }
+          chunks.push(value);
+        }
+        const extension = attachment.kind === "image" ? (attachment.mime?.split("/")[1] || "jpg") : attachment.kind === "audio" ? "wav" : attachment.kind === "video" ? "mp4" : "bin";
+        const filePath = path.join(dir, `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extension}`);
+        await writeFile(filePath, Buffer.concat(chunks), { mode: 0o600 });
+        attachment.filePath = filePath;
+        attachment.url = undefined;
+      } catch (error) {
+        this.onEvent?.({ type: "CHANNEL_ATTACHMENT_ERROR", channel, messageId: message.messageId, error: error instanceof Error ? error.message : String(error) });
+      }
     }
   }
 
@@ -495,6 +561,10 @@ export class WebChannelRuntime {
     const login = await client.call<{ user_id: string | number; nickname?: string }>("get_login_info");
     const version = await client.call<{ app_version?: string }>("get_version_info");
     this.qqClient = client; this.qqSelfId = oneBotId(login.user_id);
+    this.qqSupportsStream = versionAtLeast(version.app_version, ONEBOT_STREAM_MIN_VERSION);
+    this.qqMedia?.stop();
+    this.qqMedia = new OneBotMediaManager(() => this.qqClient as unknown as OneBotActionClient, path.join(this.dataDir, "channels", "cache", "qq"));
+    await this.qqMedia.start();
     if (!this.qqSelfId || (headerSelfId && this.qqSelfId !== headerSelfId)) throw new Error("NapCat 登录信息与 X-Self-ID 不一致");
     this.setStatus("qq", { enabled: true, phase: "running", message: "NapCat 已连接", detail: { ...this.qqDetail(), nickname: login.nickname, appVersion: version.app_version } });
   }
@@ -508,13 +578,26 @@ export class WebChannelRuntime {
     const settings = safeConfig((await this.configValue()).qq); const privateAllow = Array.isArray(settings.allowedPrivateUserIds) ? settings.allowedPrivateUserIds.map(String) : []; const groupAllow = Array.isArray(settings.allowedGroupIds) ? settings.allowedGroupIds.map(String) : [];
     if (event.message_type === "private" && !privateAllow.includes(senderId)) return;
     if (event.message_type === "group" && (!groupAllow.includes(groupId) || (settings.groupRequireMention !== false && !event.message.some((segment) => segment.type === "at" && oneBotId(segment.data.qq) === selfId)))) return;
-    const incoming: IncomingMessage = { channel: "qq", chatType: event.message_type, messageId: oneBotId(event.message_id), senderId, senderName: textValue(event.sender?.card || event.sender?.nickname) || undefined, chatId, text: oneBotText(event, selfId), at: new Date((Number(event.time) || Math.floor(Date.now() / 1000)) * 1000), _raw: event };
+    const incoming = await normalizeOneBotMessage(event, {
+      selfId,
+      client: client as unknown as OneBotActionClient,
+      media: this.qqMedia ?? new OneBotMediaManager(() => client as unknown as OneBotActionClient, path.join(this.dataDir, "channels", "cache", "qq")),
+      supportsStream: this.qqSupportsStream,
+    });
     const response = await this.onMessage?.(incoming);
     if (response) await this.sendQq(response, client);
   }
 
   private async sendQq(message: OutgoingMessage, client: { call<T = unknown>(action: string, params?: Record<string, unknown>): Promise<T> }): Promise<void> {
-    const payload = message.parts.map((part) => ({ type: "text", data: { text: part.kind === "text" ? part.text : logText([part]) } }));
+    const payload: Array<{ type: string; data: Record<string, unknown> }> = [];
+    for (const part of message.parts) {
+      if (part.kind === "text") payload.push({ type: "text", data: { text: part.text } });
+      else if (part.kind === "image" && (part.filePath || part.url)) {
+        const file = part.filePath && this.qqMedia ? await this.qqMedia.encodeOutbound(part.filePath, "image", this.qqSupportsStream) : part.url;
+        if (file) payload.push({ type: "image", data: { file } });
+      } else payload.push({ type: "text", data: { text: logText([part]) } });
+    }
+    if (!payload.length) return;
     if (message.chatType === "group") await client.call("send_group_msg", { group_id: message.targetId, message: payload });
     else await client.call("send_private_msg", { user_id: message.targetId, message: payload });
   }

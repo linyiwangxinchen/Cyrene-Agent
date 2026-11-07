@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -88,6 +88,20 @@ describe("headless model service", () => {
     expect(result.text).toBe("");
     expect(result.generatedAttachments).toHaveLength(1);
     expect(result.generatedAttachments?.[0]).toMatchObject({ source: "model", previewUrl: expect.stringContaining("/api/media/files/") });
+  });
+  it("forwards channel attachments as model context and image blocks", async () => {
+    const f = await fixture("openai");
+    const imagePath = path.join(f.data, "incoming.png");
+    await writeFile(imagePath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
+    await requestSessionModel(f.store, f.session.id, "看一下", {
+      attachments: [{ name: "说明.txt", text: "用户通过微信发送了文件：/tmp/说明.txt" }],
+      imageAttachments: [{ name: "截图.png", filePath: imagePath, mime: "image/png" }],
+    });
+    const payload = JSON.stringify(f.requests[0].body);
+    expect(payload).toContain("【本轮附件内容】");
+    expect(f.requests[0].body.messages.at(-1).content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "image_url" }),
+    ]));
   });
   it.each(["openai", "anthropic", "responses"] as const)("uses the %s protocol, selected profile/model, and one copy of the user turn", async transport => {
     const f = await fixture(transport);

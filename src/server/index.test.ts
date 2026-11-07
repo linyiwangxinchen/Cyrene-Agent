@@ -1,9 +1,9 @@
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { createWebServer, type WebServerHandle } from "./index";
+import { createWebServer, isWebCoreChannelAllowed, MAX_CORE_FILE_BYTES, resolveAuthorizedWebPath, type WebServerHandle, validateCoreDirectoryEntryCount, validateCoreFileTransferSize } from "./index";
 
 const temporaryDirectories: string[] = [];
 
@@ -39,6 +39,52 @@ async function closeFixture(handle: WebServerHandle): Promise<void> {
 }
 
 describe("legacy web data migration regression", () => {
+  it("uses a default-deny Web IPC allowlist", () => {
+    expect(isWebCoreChannelAllowed("invoke", "agui:run")).toBe(true);
+    expect(isWebCoreChannelAllowed("send", "toast:clicked")).toBe(true);
+    expect(isWebCoreChannelAllowed("invoke", "window:close")).toBe(false);
+    expect(isWebCoreChannelAllowed("invoke", "gmail:get-status")).toBe(false);
+    expect(isWebCoreChannelAllowed("invoke", "tts:upload")).toBe(false);
+    expect(isWebCoreChannelAllowed("invoke", "tts:synthesize")).toBe(true);
+    expect(isWebCoreChannelAllowed("invoke", "unknown:channel")).toBe(false);
+    expect(isWebCoreChannelAllowed("send", "agui:run")).toBe(false);
+  });
+
+  it("enforces bounded Web file responses", () => {
+    expect(() => validateCoreDirectoryEntryCount(2_000)).not.toThrow();
+    expect(() => validateCoreDirectoryEntryCount(2_001)).toThrow("CORE_DIRECTORY_TOO_LARGE");
+    expect(() => validateCoreFileTransferSize(MAX_CORE_FILE_BYTES + 1, MAX_CORE_FILE_BYTES + 1, false)).toThrow("CORE_FILE_TOO_LARGE");
+    expect(() => validateCoreFileTransferSize(MAX_CORE_FILE_BYTES + 1, 1024, true)).not.toThrow();
+    expect(() => validateCoreFileTransferSize(MAX_CORE_FILE_BYTES + 1, MAX_CORE_FILE_BYTES + 1, true)).toThrow("CORE_FILE_TOO_LARGE");
+  });
+
+  it("keeps Web file paths inside dataDir or bound workspaces", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "cyrene-web-path-data-"));
+    const workspace = await mkdtemp(path.join(os.tmpdir(), "cyrene-web-path-workspace-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "cyrene-web-path-outside-"));
+    temporaryDirectories.push(dataDir, workspace, outside);
+    await writeFile(path.join(dataDir, "ok.txt"), "ok");
+    await writeFile(path.join(workspace, "workspace.txt"), "workspace");
+    await writeFile(path.join(outside, "secret.txt"), "secret");
+
+    const resolved = await resolveAuthorizedWebPath(path.join(dataDir, "ok.txt"), dataDir, [workspace]);
+    expect(resolved.path).toBe(path.join(dataDir, "ok.txt"));
+    await expect(resolveAuthorizedWebPath(path.join(outside, "secret.txt"), dataDir, [workspace])).rejects.toThrow("CORE_PATH_FORBIDDEN");
+    await expect(resolveAuthorizedWebPath(path.join(dataDir, "..", path.basename(outside), "secret.txt"), dataDir, [workspace])).rejects.toThrow("CORE_PATH_FORBIDDEN");
+    const link = path.join(dataDir, "link");
+    let linkCreated = false;
+    try {
+      const target = path.join(dataDir, "target");
+      await mkdir(target);
+      await writeFile(path.join(target, "secret.txt"), "secret");
+      await symlink(target, link, process.platform === "win32" ? "junction" : "dir");
+      linkCreated = true;
+    } catch {
+      // Creating symlinks may be disabled on Windows CI; traversal coverage above remains portable.
+    }
+    if (linkCreated) await expect(resolveAuthorizedWebPath(path.join(link, "secret.txt"), dataDir, [workspace])).rejects.toThrow("CORE_SYMLINK_FORBIDDEN");
+  });
+
   it("resolves thinking from the chosen model profile, saves it, and emits only scoped changes", async () => {
     const fixture = await startFixture();
     let socket: WebSocket | undefined;

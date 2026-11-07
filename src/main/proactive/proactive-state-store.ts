@@ -15,6 +15,8 @@ export function defaultProactiveState(): ProactiveState {
     globalDesire: 0,
     affinity: {},
     lastFiredAt: {},
+    dailyMessageDate: undefined,
+    dailyMessageCount: 0,
   };
 }
 
@@ -56,6 +58,7 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
     candidate,
     generationEpoch: value.generationEpoch as number,
     intentAt: value.intentAt,
+    ...(typeof value.localDate === "string" && value.localDate.length <= 20 ? { localDate: value.localDate } : {}),
     text: value.text,
     source: value.source,
     ...(value.deliveryTarget === "local" || value.deliveryTarget === "wechat" || value.deliveryTarget === "feishu" ? { deliveryTarget: value.deliveryTarget } : {}),
@@ -86,6 +89,8 @@ export function loadProactiveState(): ProactiveState {
       ...legacyFields,
       affinity: { ...base.affinity, ...(raw.affinity ?? {}) },
       lastFiredAt: { ...(raw.lastFiredAt ?? {}) },
+      ...(typeof raw.dailyMessageDate === "string" && raw.dailyMessageDate.length <= 20 ? { dailyMessageDate: raw.dailyMessageDate } : {}),
+      ...(Number.isSafeInteger(raw.dailyMessageCount) && (raw.dailyMessageCount as number) >= 0 ? { dailyMessageCount: raw.dailyMessageCount as number } : {}),
       ...(proactiveCommitSequence !== undefined ? { proactiveCommitSequence } : {}),
       ...(pendingCommitIntent !== undefined ? { pendingCommitIntent } : {}),
     };

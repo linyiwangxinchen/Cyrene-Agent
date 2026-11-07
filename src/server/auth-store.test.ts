@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -52,5 +52,15 @@ describe("AuthStore", () => {
     const second = store.createSession("admin", 1000);
     store.revokeSession(second.token);
     expect(store.getSession(second.token, 1000)).toBeNull();
+  });
+
+  it("fails closed when the persisted auth record is corrupt", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "cyrene-auth-"));
+    temporaryDirectories.push(directory);
+    await writeFile(path.join(directory, "auth.json"), JSON.stringify({ version: 1, username: "admin" }));
+    const store = new AuthStore(directory);
+
+    await expect(store.isInitialized()).rejects.toThrow("AUTH_STORE_INVALID");
+    await expect(store.bootstrap("admin", "123456")).rejects.toThrow("AUTH_STORE_INVALID");
   });
 });

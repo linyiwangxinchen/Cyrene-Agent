@@ -152,6 +152,13 @@ export function createContext(
     events: {
       on(event, listener) {
         assertAcceptingResources("订阅事件");
+        // 插件事件命名空间归属必须与发布侧一致，避免跨插件窥探或注入事件。
+        if (event.startsWith("plugin:")) {
+          const owner = event.slice("plugin:".length).split(":", 1)[0];
+          if (owner !== id) {
+            throw new Error(`插件只能订阅自己的事件命名空间: ${event}`);
+          }
+        }
         // 订阅纳入资源跟踪器：插件停用时统一退订，不遗留跨生命周期监听器。
         const key = `subscription-${++resourceSeq}`;
         const unsubscribeFromBus = eventBus.on(

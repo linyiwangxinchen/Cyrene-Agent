@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Input, Modal, Select, Slider, Spin, Switch, Tabs, Tag } from "antd";
-import type { CompanionCommand, CompanionPermissions, CompanionSnapshot, RelationshipPreferences, CompanionFollowup } from "../../../../shared/companion";
+import type { CompanionCommand, CompanionPermissions, CompanionSnapshot, RelationshipPreferences, CompanionFollowup, RepairCase, CompanionCommitment } from "../../../../shared/companion";
 import "./companion-settings.css";
 
 const stages = { new: "初识", familiar: "熟悉", close: "亲密", long_term: "长期陪伴" };
 const bondChapters = { prologue: "序章", first_steps: "初步熟悉", shared_routines: "共同日常", shared_projects: "共同项目", long_term: "长期羁绊" };
 const bondMilestones = { "bond.prologue": "序章", "bond.first_steps": "初步熟悉", "bond.shared_routines": "共同日常", "bond.shared_projects": "共同项目", "bond.long_term": "长期羁绊" };
-const recordKinds = { turn: "互动线索", repair: "修复约定", diary: "虚构角色小记", preferences: "偏好变更", permissions: "能力变更", followup: "具体跟进", bond: "羁绊进度" };
+const recordKinds = { turn: "互动线索", repair: "修复约定", diary: "虚构角色小记", preferences: "偏好变更", permissions: "能力变更", followup: "具体跟进", commitment: "助手承诺", bond: "羁绊进度" };
 const followupStatuses = { active: "等待合适时间", awaiting_reply: "已关心，等待回复", completed: "已完成", paused: "已暂停", cancelled: "已取消" };
+const repairStatuses = { acknowledged: "已确认", follow_up: "待回访", resolved: "已解决", dismissed: "已忽略" };
+const commitmentStatuses = { open: "进行中", fulfilled: "已兑现", overdue: "已逾期", cancelled: "已取消" };
 const localTime = (at: number) => new Date(at - new Date(at).getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 type Command = CompanionCommand extends infer T ? T extends CompanionCommand ? Omit<T, "expectedRevision"> : never : never;
 type Tool = { id: string; name: string; risk?: string; effectKind?: string };
@@ -30,7 +32,7 @@ export function CompanionSettingsPanel() {
   function accept(value: CompanionSnapshot) {
     setSnapshot(value);
     const r = value.relationship;
-    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled });
+    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion" });
     setPermissions({ ...value.permissions });
   }
   useEffect(() => {
@@ -102,6 +104,7 @@ export function CompanionSettingsPanel() {
           <p>沿用昔涟现有的形象与语言习惯。情绪是表达线索，不代表真人感受，也不会改变办事能力。</p>
           <label>对你的称呼<Input aria-label="对你的称呼" maxLength={80} value={draft.userLabel} onChange={e => field("userLabel", e.target.value)} /></label>
           <label>表达偏好<Select aria-label="表达偏好" value={draft.style} onChange={value => field("style", value)} options={[{ value: "natural", label: "原有昔涟风格" }, { value: "lively", label: "更活泼" }, { value: "gentle", label: "更温柔" }, { value: "concise", label: "更简洁" }]} /></label>
+          <label>关系契约<Select aria-label="关系契约" value={draft.relationshipMode} onChange={value => field("relationshipMode", value)} options={[{ value: "assistant", label: "事务助手：清晰、可执行" }, { value: "friend", label: "朋友：平等、自然" }, { value: "companion", label: "陪伴者：事务与日常兼顾" }, { value: "partner", label: "亲密伴侣：以边界和同意为前提" }]} /></label>
           <label className="cy-companion__wide">相处程度 · {Math.round(draft.closeness * 100)} / 100<Slider aria-label="相处程度" min={0} max={100} value={Math.round(draft.closeness * 100)} onChange={value => field("closeness", value / 100)} /><span>由你选择，不因聊天次数或离开时间自动增减；不自动授予工具权限。</span></label>
           {snapshot.bondProgress && <div className="cy-companion__wide cy-companion__bond-progress"><strong>羁绊进度 · {bondChapters[snapshot.bondProgress.chapter]}</strong><span>{snapshot.bondProgress.score} 点；只会因明确的共同经历增加，不会因为沉默下降。</span><div role="progressbar" aria-label="羁绊进度" aria-valuemin={0} aria-valuemax={600} aria-valuenow={Math.min(600, snapshot.bondProgress.score)} style={{ height: 8, borderRadius: 999, background: "var(--rb-border-subtle, #ece8ec)", overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, snapshot.bondProgress.score / 6)}%`, background: "var(--rb-accent, #ff5b8a)" }} /></div><span>已解锁：{snapshot.bondProgress.unlockedMilestones.map(item => bondMilestones[item as keyof typeof bondMilestones] ?? item).join("、")}</span>{snapshot.bondProgress.recentAwards.length > 0 && <span>最近奖励：{snapshot.bondProgress.recentAwards.slice(-3).reverse().map(award => `+${award.delta} ${award.summary}`).join("；")}</span>}<Button size="small" danger disabled={busy} onClick={() => setConfirm({ type: "reset_bond_progress" })}>重置羁绊进度</Button></div>}
           <label className="cy-companion__switch">自然的亲昵表达<Switch aria-label="自然的亲昵表达" checked={draft.affection} onChange={value => field("affection", value)} /></label>
@@ -141,7 +144,11 @@ export function CompanionSettingsPanel() {
           <p className="cy-companion__wide">自动线索可能误判，可删除。这里管理关系派生记录；聊天原文、向量记忆、Wiki、摘要及你自行保存的导出文件仍分别在原有入口管理。</p>
           <label className="cy-companion__wide">新的修复约定<Input.TextArea aria-label="新的修复约定" value={repair} maxLength={500} onChange={e => setRepair(e.target.value)} placeholder="例如：先回应我的问题，不要替我推测情绪。" /></label>
           <div className="cy-companion__actions cy-companion__wide"><Button disabled={busy || !repair.trim()} onClick={() => void command({ type: "repair", note: repair })}>记录约定</Button><Button disabled={busy} onClick={() => void exportData()}>导出关系数据</Button><Button danger disabled={busy} onClick={() => setConfirm({ type: "clear_history" })}>清空关系记录</Button></div>
-          <div className="cy-companion__wide">{snapshot.records.length === 0 ? <p>暂无关系记录。</p> : snapshot.records.map(record => <article className="cy-companion__record" key={record.id}><div><Tag>{recordKinds[record.kind]}</Tag><time>{new Date(record.at).toLocaleString()}</time><p>{record.text}</p>{record.conversationId && <small>来源会话：{record.conversationId}{record.sourceEventId ? ` · 事件：${record.sourceEventId}` : ""}</small>}</div><Button size="small" danger disabled={busy} onClick={() => setConfirm({ type: "delete_record", id: record.id })}>删除</Button></article>)}</div>
+          <div className="cy-companion__wide">
+            {(snapshot.repairCases?.length ?? 0) > 0 && <><h3>修复事项</h3>{snapshot.repairCases!.map((item: RepairCase) => <article className="cy-companion__record" key={item.id}><div><Tag>{repairStatuses[item.status]}</Tag><time>{new Date(item.updatedAt).toLocaleString()}</time><p>{item.note}</p>{item.resolutionNote && <small>{item.resolutionNote}</small>}</div><div className="cy-companion__actions"><Button size="small" disabled={busy || item.status === "resolved"} onClick={() => void command({ type: "repair_status", id: item.id, status: "resolved", resolutionNote: "用户确认已解决" })}>标记已解决</Button><Button size="small" disabled={busy || item.status === "dismissed"} onClick={() => void command({ type: "repair_status", id: item.id, status: "dismissed" })}>忽略</Button></div></article>)}</>}
+            {(snapshot.commitments?.length ?? 0) > 0 && <><h3>助手承诺</h3>{snapshot.commitments!.map((item: CompanionCommitment) => <article className="cy-companion__record" key={item.id}><div><Tag>{commitmentStatuses[item.status]}</Tag><time>{new Date(item.updatedAt).toLocaleString()}</time><p>{item.promise}</p>{item.evidence && <small>凭据：{item.evidence}</small>}</div><div className="cy-companion__actions"><Button size="small" disabled={busy || item.status === "fulfilled"} onClick={() => void command({ type: "commitment_status", id: item.id, status: "fulfilled", evidence: "用户在设置中确认" })}>标记已兑现</Button><Button size="small" disabled={busy} onClick={() => void command({ type: "commitment_status", id: item.id, status: "cancelled" })}>取消</Button><Button size="small" danger disabled={busy} onClick={() => void command({ type: "commitment_delete", id: item.id })}>删除</Button></div></article>)}</>}
+            {snapshot.records.length === 0 && (snapshot.repairCases?.length ?? 0) === 0 && (snapshot.commitments?.length ?? 0) === 0 ? <p>暂无关系记录。</p> : snapshot.records.map(record => <article className="cy-companion__record" key={record.id}><div><Tag>{recordKinds[record.kind as keyof typeof recordKinds] ?? record.kind}</Tag><time>{new Date(record.at).toLocaleString()}</time><p>{record.text}</p>{record.conversationId && <small>来源会话：{record.conversationId}{record.sourceEventId ? ` · 事件：${record.sourceEventId}` : ""}</small>}</div><Button size="small" danger disabled={busy} onClick={() => setConfirm({ type: "delete_record", id: record.id })}>删除</Button></article>)}
+          </div>
         </div> },
       ]} />
     </>}

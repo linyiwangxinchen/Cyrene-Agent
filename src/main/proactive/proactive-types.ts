@@ -1,6 +1,12 @@
 export interface ProactiveRuntimeSnapshot {
   now: number;
   localHour: number;
+  localMinute?: number;
+  localDate?: string;
+  /** User-configured quiet window in local minutes. Omit to use legacy policy. */
+  quietStartMinute?: number;
+  quietEndMinute?: number;
+  dailyLimit?: number;
   idleSec: number;
   enabled: boolean;
   conversationBusy: boolean;
@@ -49,6 +55,7 @@ export interface ProactiveCommitIntent {
   candidate: ProactiveCandidate;
   generationEpoch: number;
   intentAt: number;
+  localDate?: string;
   text: string;
   source: "model" | "fallback";
   fallbackPayload?: unknown;
@@ -65,6 +72,9 @@ export interface ProactiveState {
   globalDesire: number;
   affinity: Record<string, number>;
   lastFiredAt: Record<string, number | null>;
+  /** Counter scoped to the user's local date, used for a durable daily budget. */
+  dailyMessageDate?: string;
+  dailyMessageCount?: number;
   /** At most one durable commit can be awaiting delivery completion. */
   pendingCommitIntent?: ProactiveCommitIntent;
   /** Monotonic durable identity source; absent in legacy state files. */
@@ -78,6 +88,8 @@ export type ProactiveBlockReason =
   | "conversation_busy"
   | "generation_busy"
   | "night_inactive"
+  | "custom_quiet_period"
+  | "daily_limit"
   | "normal_quiet_period"
   | "global_cooldown"
   | "scene_cooldown"

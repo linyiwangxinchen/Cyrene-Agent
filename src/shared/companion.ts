@@ -3,10 +3,16 @@ import type { BondProgressState } from "./companion-progress";
 import type { XilianWorldView } from "./xilian-world";
 
 export type RelationshipStage = "new" | "familiar" | "close" | "long_term";
+/**
+ * 用户选择的关系场景契约。它只约束表达方式和主动性，不会扩大工具、
+ * 文件或外部渠道权限，也不会把模拟关系当成现实关系。
+ */
+export type RelationshipMode = "assistant" | "friend" | "companion" | "partner";
 export type CompanionStyle = "natural" | "gentle" | "lively" | "concise";
 export type CapabilityPreset = "inherit" | "companion" | "basic" | "shared_life" | "full";
 export interface RelationshipState {
   id: string;
+  relationshipMode?: RelationshipMode;
   stage: RelationshipStage;
   trust: number;
   closeness: number;
@@ -50,12 +56,23 @@ export interface CompanionPermissions {
 }
 export interface CompanionRecord {
   id: string;
-  kind: "turn" | "repair" | "diary" | "preferences" | "permissions" | "followup" | "bond";
+  kind: "turn" | "repair" | "diary" | "preferences" | "permissions" | "followup" | "commitment" | "bond";
   at: number;
   text: string;
   conversationId?: string;
   runId?: string;
   sourceEventId?: string;
+}
+export type RepairCaseStatus = "acknowledged" | "follow_up" | "resolved" | "dismissed";
+export interface RepairCase {
+  id: string;
+  note: string;
+  status: RepairCaseStatus;
+  createdAt: number;
+  updatedAt: number;
+  conversationId?: string;
+  followUpAt?: number;
+  resolutionNote?: string;
 }
 export type CompanionFollowupStatus = "active" | "awaiting_reply" | "completed" | "paused" | "cancelled";
 export interface CompanionFollowup {
@@ -70,6 +87,18 @@ export interface CompanionFollowup {
   lastIntentId?: string;
   resolutionReason?: string;
 }
+/** A durable assistant promise with an auditable outcome. */
+export type CompanionCommitmentStatus = "open" | "fulfilled" | "cancelled" | "overdue";
+export interface CompanionCommitment {
+  id: string;
+  promise: string;
+  status: CompanionCommitmentStatus;
+  createdAt: number;
+  updatedAt: number;
+  conversationId?: string;
+  dueAt?: number;
+  evidence?: string;
+}
 export interface CompanionSnapshot {
   revision: number;
   relationship: RelationshipState;
@@ -79,19 +108,25 @@ export interface CompanionSnapshot {
   permissions: CompanionPermissions;
   records: CompanionRecord[];
   followups?: CompanionFollowup[];
+  repairCases?: RepairCase[];
+  commitments?: CompanionCommitment[];
 }
 export type RelationshipPreferences = Pick<RelationshipState,
-  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled">;
+  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled" | "relationshipMode">;
 export type CompanionCommand = { expectedRevision: number } & (
   | { type: "preferences"; patch: Partial<RelationshipPreferences> }
   | { type: "permissions"; patch: Partial<CompanionPermissions> }
-  | { type: "repair"; note: string }
+  | { type: "repair"; note: string; conversationId?: string; followUpAt?: number }
+  | { type: "repair_status"; id: string; status: RepairCaseStatus; resolutionNote?: string; followUpAt?: number }
   | { type: "delete_record"; id: string }
   | { type: "clear_history" }
   | { type: "reset_relationship" }
   | { type: "reset_bond_progress" }
   | { type: "followup_save"; id?: string; topic: string; conversationId: string; nextEligibleAt: number }
   | { type: "followup_status"; id: string; conversationId: string; status: Exclude<CompanionFollowupStatus, "awaiting_reply">; nextEligibleAt?: number }
+  | { type: "commitment_save"; id?: string; promise: string; conversationId?: string; dueAt?: number }
+  | { type: "commitment_status"; id: string; status: CompanionCommitmentStatus; evidence?: string }
+  | { type: "commitment_delete"; id: string }
 );
 export interface CompanionApi {
   get(): Promise<CompanionSnapshot>;

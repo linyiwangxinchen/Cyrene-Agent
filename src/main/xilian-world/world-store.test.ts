@@ -63,6 +63,7 @@ describe("XilianWorldStore", () => {
     expect(retried).toMatchObject({ id: claimed?.id, status: "planned", promptFingerprint: "retry" });
     store.markArtifactGenerating(retried!.id, 5_000);
     expect(store.completeArtifact(retried!.id, { imageModel: "gpt-image-2.5-flare", outputPath: "selfie.png", now: 6_000 })).toMatchObject({ status: "generated", imageModel: "gpt-image-2.5-flare" });
+    expect(store.worldView({ limit: 10 }).artifacts[0]).not.toHaveProperty("outputPath");
   });
 
   it("backs up corrupted data and restores a safe default world", () => {

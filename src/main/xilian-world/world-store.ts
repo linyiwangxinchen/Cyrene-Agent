@@ -233,7 +233,18 @@ function systemTimezone(): string {
 }
 
 export class XilianWorldStore {
+  private cached?: { signature: { mtimeMs: number; size: number } | null; dateKey: string; data: XilianWorldData };
+
   constructor(private readonly filePath: string, private readonly now: () => number = Date.now) {}
+
+  private fileSignature(): { mtimeMs: number; size: number } | null {
+    try {
+      const info = fs.statSync(this.filePath);
+      return info.isFile() ? { mtimeMs: info.mtimeMs, size: info.size } : null;
+    } catch {
+      return null;
+    }
+  }
 
   private backupCorruptFile(): void {
     try {
@@ -247,13 +258,22 @@ export class XilianWorldStore {
   private readData(): XilianWorldData {
     const at = this.now();
     const dateKey = getXilianDateKey(new Date(at), systemTimezone());
-    if (!fs.existsSync(this.filePath)) return createDefaultXilianWorldData(dateKey, at);
+    const signature = this.fileSignature();
+    if (this.cached && this.cached.dateKey === dateKey && this.cached.signature?.mtimeMs === signature?.mtimeMs && this.cached.signature?.size === signature?.size) return clone(this.cached.data);
+    if (!signature) {
+      const fallback = createDefaultXilianWorldData(dateKey, at);
+      this.cached = { signature: null, dateKey, data: clone(fallback) };
+      return fallback;
+    }
     try {
-      return normalizeData(JSON.parse(fs.readFileSync(this.filePath, "utf8")), dateKey, at);
+      const data = normalizeData(JSON.parse(fs.readFileSync(this.filePath, "utf8")), dateKey, at);
+      this.cached = { signature, dateKey, data: clone(data) };
+      return data;
     } catch {
       this.backupCorruptFile();
       const fallback = createDefaultXilianWorldData(dateKey, at);
       try { this.writeData(fallback); } catch { /* keep the in-memory safe default */ }
+      this.cached = { signature: this.fileSignature(), dateKey, data: clone(fallback) };
       return fallback;
     }
   }
@@ -263,6 +283,7 @@ export class XilianWorldStore {
     const temporary = `${this.filePath}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, `${JSON.stringify(data, null, 2)}\n`, "utf8");
     fs.renameSync(temporary, this.filePath);
+    this.cached = { signature: this.fileSignature(), dateKey: getXilianDateKey(new Date(this.now()), systemTimezone()), data: clone(data) };
   }
 
   private save(data: XilianWorldData): void {
@@ -336,10 +357,16 @@ export class XilianWorldStore {
   worldView(input: { dateKey?: string; limit?: number } = {}): import("../../shared/xilian-world").XilianWorldView {
     const data = this.readData();
     const dateKey = input.dateKey ?? data.state.worldDate;
+    const artifactLimit = Math.max(1, Math.min(200, Math.floor(Number.isFinite(input.limit) ? input.limit! : 50)));
     return {
       state: clone(data.state),
       timeline: this.queryTimeline({ dateKey, order: "asc", limit: input.limit ?? 50 }),
       diary: this.queryDiary({ dateKey, order: "asc", limit: input.limit ?? 50 }),
+      artifacts: data.artifacts.slice(-artifactLimit).reverse().map((artifact) => {
+        const safe = { ...artifact };
+        delete safe.outputPath;
+        return safe;
+      }),
       locations: XILIAN_LOCATIONS,
     };
   }

@@ -119,6 +119,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
     source: "model" | "fallback",
     generationEpoch: number,
     intentAt: number,
+    localDate?: string,
     intentId?: string,
   ): ProactiveCommitResult => {
     if (result.kind === "cancelled") {
@@ -136,7 +137,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
     const latestState = cloneState(deps.loadState());
     if (intentId) clearPendingIntent(latestState, intentId);
     if (latestState.proactiveEpoch === generationEpoch) {
-      markProactiveCommitted(latestState, candidate, intentAt);
+      markProactiveCommitted(latestState, candidate, intentAt, localDate);
     } else {
       // 文本已经成功写入，但用户可能在后续 TTS 等待期间发来消息。
       // 保留更新后的 Epoch/unansweredCount，只补记这次真实发送的硬冷却时间。
@@ -165,7 +166,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       deliveryTarget,
       ...(intent.deliveryContext ? { deliveryContext: intent.deliveryContext } : {}),
     });
-    return finalizeDelivery(result, intent.candidate, intent.source, intent.generationEpoch, intent.intentAt, intent.intentId);
+    return finalizeDelivery(result, intent.candidate, intent.source, intent.generationEpoch, intent.intentAt, intent.localDate, intent.intentId);
   };
 
   return {
@@ -273,7 +274,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
             intentAt: commitSnapshot.now,
             ...(frozenDeliveryTarget ? { deliveryTarget: frozenDeliveryTarget } : {}),
           });
-          finalizeDelivery(directResult, candidate, source, generationEpoch, commitSnapshot.now);
+          finalizeDelivery(directResult, candidate, source, generationEpoch, commitSnapshot.now, commitSnapshot.localDate);
           return;
         }
 
@@ -286,6 +287,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           candidate: { ...candidate },
           generationEpoch,
           intentAt: commitSnapshot.now,
+          ...(commitSnapshot.localDate ? { localDate: commitSnapshot.localDate } : {}),
           text,
           source,
           ...(fallbackPayload !== undefined ? { fallbackPayload } : {}),

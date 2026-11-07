@@ -175,6 +175,12 @@ describe("createContext", () => {
     expect(received).toEqual([{ ready: true }, { state: "ok" }]);
   });
 
+  it("拒绝订阅其他插件的事件命名空间", () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const ctx = createTestContext();
+    expect(() => ctx.events.on("plugin:other:secret", () => {})).toThrow(/只能订阅自己的事件命名空间/);
+  });
+
   it("事件退订失败不阻止其他清理回调", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const cleanup = vi.fn();

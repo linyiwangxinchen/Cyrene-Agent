@@ -7,6 +7,9 @@ import { normalizeReasoningPreference } from "../shared/reasoning";
 import { normalizeManualReasoningConfig } from "../shared/manual-reasoning";
 import { getCapabilityOrOpenAI } from "../main/orchestrator/vendors/capabilities";
 import { normalizeImageGenerationModel } from "../main/orchestrator/vendors/model-factory";
+import { validateCaptionImagePath } from "../main/chat/image-caption";
+import type { ChatMessage } from "../main/orchestrator/vendors/types";
+import { formatChannelAttachmentContext } from "../main/channels/agent-input";
 import type { WebStore } from "./web-store";
 import { WebPersonaRuntime } from "./web-persona-runtime";
 import type { WebMediaStore } from "./web-media-store";
@@ -90,13 +93,19 @@ export async function resolveWebModel(store: WebStore, input: { sessionId?: stri
 export async function requestSessionModel(store: WebStore, sessionId: string, prompt: string, options: {
   signal?: AbortSignal; onDelta?: (delta: UnifiedStreamDelta) => void;
   persona?: WebPersonaRuntime; styleId?: unknown; legacyStyle?: unknown; channel?: RelationshipChannel; media?: WebMediaStore;
+  /** Headless channel inputs are transient and must never be persisted as model history. */
+  attachments?: Array<{ name: string; text: string }>;
+  imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
 } = {}): Promise<ChatResponse & { generatedAttachments?: GeneratedImageAttachment[] }> {
   const { settings, session, config } = await resolveWebModel(store, { sessionId });
   if (!session) throw new Error("对话不存在");
   const persona = options.persona ?? personaForStore(store);
-  const built = await persona.build({ session, settings, config, prompt, styleId: options.styleId, legacyStyle: options.legacyStyle, channel: options.channel });
+  const attachmentContext = formatChannelAttachmentContext(options.attachments);
+  const modelPrompt = attachmentContext ? `${prompt}\n\n${attachmentContext}` : prompt;
+  const built = await persona.build({ session, settings, config, prompt: modelPrompt, styleId: options.styleId, legacyStyle: options.legacyStyle, channel: options.channel });
+  const messages = addWebImageAttachments(built.messages, options.imageAttachments);
   const timeoutMs = Number(settings.timeout.chatRequestTimeout ?? settings.timeout.requestTimeout) || 300_000;
-  const request = { model: config.model, messages: built.messages, promptLayers: built.metadata, ...built.sampling, stream: Boolean(options.onDelta),
+  const request = { model: config.model, messages, promptLayers: built.metadata, ...built.sampling, stream: Boolean(options.onDelta),
     ...(config.imageGeneration?.enabled ? { imageGeneration: config.imageGeneration } : {}) };
   try {
     const result = await (options.onDelta ? streamChatWithAiSdk : generateChatWithAiSdk)({
@@ -140,4 +149,30 @@ export async function requestSessionModel(store: WebStore, sessionId: string, pr
       ...(generatedAttachments.length ? { generatedImages: undefined } : {}),
     };
   } catch (error) { throw new Error(modelError(error, config.apiKey)); }
+}
+
+/** Add channel images as standard OpenAI-compatible blocks before adapter projection. */
+function addWebImageAttachments(
+  messages: ChatMessage[],
+  images: Array<{ name: string; filePath: string; mime?: string }> | undefined,
+): ChatMessage[] {
+  if (!images?.length) return messages;
+  const latestUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+  if (latestUserIndex < 0) return messages;
+  const current = messages[latestUserIndex];
+  const text = typeof current.content === "string"
+    ? current.content
+    : Array.isArray(current.content) ? current.content.filter((block) => block.type === "text").map((block) => block.text).join("\n") : "";
+  const blocks: NonNullable<ChatMessage["content"]> = [{ type: "text", text }];
+  for (const image of images) {
+    const validated = validateCaptionImagePath(image.filePath);
+    if (!validated.ok) {
+      blocks.push({ type: "text", text: `图片 ${image.name} 无法读取：${validated.error}。请诚实说明暂时无法看清这张图，不要编造图片内容。` });
+      continue;
+    }
+    blocks.push({ type: "image_url", image_url: { url: `data:${validated.mime};base64,${validated.buffer.toString("base64")}` } });
+  }
+  const next = messages.slice();
+  next[latestUserIndex] = { ...current, content: blocks };
+  return next;
 }

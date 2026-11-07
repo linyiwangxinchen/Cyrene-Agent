@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdir, readFile, readdir, stat, writeFile, realpath } from "node:fs/promises";
+import { mkdir, opendir, readFile, readdir, stat, lstat, writeFile, realpath } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
@@ -31,6 +32,7 @@ import { pipeline } from "node:stream/promises";
 import { IPC } from "../shared/ipc-channels";
 import { reviveWebBinary } from "./web-binary";
 import { receiveMomentImage, removeMomentUploads, resolveMomentUploads } from "./moment-uploads";
+import { buildChannelAttachmentInputs, formatChannelAttachmentContext } from "../main/channels/agent-input";
 
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 4317;
@@ -40,6 +42,92 @@ const AUTH_CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const AUTH_CAPTCHA_AFTER_FAILURES = 2;
 const AUTH_MAX_FAILURES = 5;
 const AUTH_LOCKOUT_MS = 60 * 1000;
+const MAX_LOGIN_CHALLENGES = 2_000;
+const MAX_ACTIVE_RUNS_PER_SESSION = 2;
+const MAX_RUNS_PER_MINUTE = 30;
+/** Web IPC is an authenticated remote boundary. Keep this list explicit and
+ * default-deny so a newly registered desktop handler is never exposed by
+ * accident. */
+export const WEB_CORE_INVOKE_CHANNELS = new Set<string>([
+  "web:audio-get", "web:audio-state", "web:browser-input", "web:browser-screenshot", "web:call-release", "web:system-theme", "web:user-activity",
+  IPC.AGUI_RUN, IPC.AGUI_CANCEL,
+  IPC.CALL_START, IPC.CALL_AUDIO_FRAME, IPC.CALL_TURN_END, IPC.CALL_TTS_DONE, IPC.CALL_STOP,
+  IPC.CHAT_INGEST_FILES, IPC.CHAT_CAPTION_IMAGE, IPC.CHAT_GET_IMAGE_PREVIEW, IPC.CHAT_SAVE_GENERATED_IMAGE, IPC.CHAT_GET_IMAGE_SEND_STRATEGY,
+  IPC.CHAT_GET_REASONING_STATE, IPC.CHAT_SET_REASONING,
+  IPC.BROWSER_PANEL_GET_STATE, IPC.BROWSER_PANEL_SET_BOUNDS, IPC.BROWSER_PANEL_NAVIGATE, IPC.BROWSER_PANEL_BACK, IPC.BROWSER_PANEL_FORWARD,
+  IPC.BROWSER_PANEL_RELOAD, IPC.BROWSER_PANEL_STOP, IPC.BROWSER_PANEL_CLEAR_COOKIES, IPC.BROWSER_PANEL_NEW_TAB,
+  IPC.BROWSER_PANEL_OPEN_IN_NEW_TAB, IPC.BROWSER_PANEL_OPEN_EXAM, IPC.BROWSER_PANEL_ACTIVATE_TAB, IPC.BROWSER_PANEL_CLOSE_TAB,
+  IPC.BROWSER_PANEL_START_ELEMENT_PICKER, IPC.BROWSER_PANEL_CANCEL_ELEMENT_PICKER,
+  IPC.CODE_GIT_STATUS, IPC.CODE_GIT_WATCH, IPC.CODE_GIT_UNWATCH, IPC.CODE_GIT_SWITCH_BRANCH, IPC.CODE_GIT_COMMIT, IPC.CODE_GIT_PUSH,
+  IPC.MOMENTS_LIST, IPC.MOMENTS_GET_POST, IPC.MOMENTS_CREATE_POST, IPC.MOMENTS_DELETE_POST, IPC.MOMENTS_CREATE_COMMENT, IPC.MOMENTS_TOGGLE_LIKE, IPC.MOMENTS_LIST_CHARACTERS,
+  IPC.SETTINGS_REQUEST_SWITCH_SECTION, IPC.SETTINGS_GET_CONFIG, IPC.SETTINGS_SAVE_CONFIG, IPC.SETTINGS_MODEL_PROFILES_LIST,
+  IPC.SETTINGS_MODEL_PROFILE_SAVE, IPC.SETTINGS_MODEL_PROFILE_DELETE, IPC.SETTINGS_MODEL_PROFILE_SET_DEFAULT, IPC.SETTINGS_TEST_CONNECTION,
+  IPC.SETTINGS_PREVIEW_REASONING, IPC.SETTINGS_TEST_VISION, IPC.SETTINGS_GET_GENERAL, IPC.SETTINGS_GET_PROACTIVE_STATUS,
+  IPC.SETTINGS_SAVE_GENERAL, IPC.SETTINGS_GET_TIMEOUT_SETTINGS, IPC.SETTINGS_SAVE_TIMEOUT_SETTINGS, IPC.UI_THEME_GET, IPC.UI_THEME_RADIUS_GET,
+  IPC.SETTINGS_PREVIEW_RUNTIME_SYNC, IPC.SETTINGS_OPEN_CUSTOM_STYLE_PROMPT,
+  IPC.MAIL_DRAFT_UPDATE, IPC.MAIL_DRAFT_DELETE, IPC.MAIL_DRAFT_SEND,
+  IPC.CHATS_LIST, IPC.CHATS_GET, IPC.TASK_SESSION_GET, IPC.CHATS_GET_PAGE, IPC.CHATS_CREATE, IPC.CTA_PRESENTATION_CHECKPOINT,
+  IPC.CHATS_COMPACT, IPC.CHATS_RENAME, IPC.CHATS_DELETE, IPC.CHATS_PENDING_ENQUEUE, IPC.CHATS_PENDING_LIST, IPC.CHATS_PENDING_REMOVE,
+  IPC.CHATS_PENDING_CLAIM, IPC.CHATS_PENDING_COMPLETE_DISPATCH, IPC.CHATS_PENDING_EDIT, IPC.CHATS_PENDING_ADJUST, IPC.CHATS_SET_PINNED,
+  IPC.CHATS_SET_MODEL_PROFILE, IPC.CHATS_SET_SESSION_MODEL, IPC.CHATS_OPEN_WORKSPACE, IPC.CHATS_MIGRATE_LEGACY,
+  IPC.CHATS_SIDEBAR_ORGANIZATION_GET, IPC.CHATS_SIDEBAR_ORGANIZATION_APPLY, IPC.CHATS_SET_ACTIVE_SESSION, IPC.CHATS_GET_ACTIVE_SESSION,
+  IPC.CHATS_SET_WORKSPACE, IPC.CHATS_GET_WORKSPACE, IPC.CHATS_CLEAR_WORKSPACE, IPC.CHATS_RECENT_PROJECTS, IPC.CHATS_VALIDATE_WORKSPACE,
+  IPC.CHATS_INIT_LEARN_WORKSPACE, IPC.REVIEW_GET, IPC.REVIEW_RESTORE, IPC.WORKSPACE_FILES_LIST, IPC.WORKSPACE_FILES_READ,
+  IPC.MODEL_CONFIG_GET, IPC.RUNTIME_STATE_GET,
+  IPC.EMBEDDING_SET_MODEL, IPC.RERANKER_SET_MODE, IPC.RERANKER_GET_STATUS, IPC.MODEL_GET_INSTALL_STATUS,
+  IPC.COMPANION_GET, IPC.COMPANION_WORLD_GET, IPC.COMPANION_UPDATE, IPC.COMPANION_EXPORT,
+  IPC.MEMORY_GOVERNANCE_EXPLAIN, IPC.MEMORY_GOVERNANCE_CHANGE, IPC.MEMORY_GOVERNANCE_EXPORT,
+  IPC.USER_GET_PROFILE, IPC.USER_SAVE_PROFILE, IPC.USER_GET_AVATAR, IPC.CYRENE_AVATAR_GET, IPC.CYRENE_AVATAR_UPLOAD, IPC.CYRENE_AVATAR_RESET,
+  IPC.MEMORY_PANEL_GET_DATA, IPC.MEMORY_PANEL_GET_SUMMARY, IPC.MEMORY_PANEL_SAVE_L0, IPC.MEMORY_PANEL_SAVE_L1,
+  IPC.MEMORY_WIKI_LIST_PAGES, IPC.MEMORY_WIKI_SEARCH, IPC.MEMORY_WIKI_READ_PAGE, IPC.MEMORY_WIKI_LIST_CONFLICTS,
+  IPC.MEMORY_WIKI_CORRECT_CLAIM, IPC.MEMORY_WIKI_DELETE_CLAIM, IPC.MEMORY_EXPORT_OBSIDIAN_VAULT,
+  IPC.OBSIDIAN_VAULT_BIND, IPC.OBSIDIAN_VAULT_UNBIND, IPC.OBSIDIAN_VAULT_GET_CONFIG, IPC.OBSIDIAN_VAULT_SET_AUTO_SYNC, IPC.OBSIDIAN_VAULT_SYNC_NOW,
+  IPC.KNOWLEDGE_GET_STATE, IPC.KNOWLEDGE_SET_ENABLED, IPC.KNOWLEDGE_LIST_WORKSPACES, IPC.KNOWLEDGE_CREATE_COLLECTION, IPC.KNOWLEDGE_DELETE_COLLECTION,
+  IPC.KNOWLEDGE_SET_COLLECTION_ENABLED, IPC.KNOWLEDGE_PICK_PATHS, IPC.KNOWLEDGE_ADD_PATHS, IPC.KNOWLEDGE_REMOVE_PATH, IPC.KNOWLEDGE_REFRESH_COLLECTION,
+  IPC.KNOWLEDGE_LIST_DOCUMENTS, IPC.KNOWLEDGE_SEARCH, IPC.KNOWLEDGE_OPEN_SOURCE,
+  IPC.MCP_ADD_SERVER, IPC.MCP_REMOVE_SERVER, IPC.MCP_LIST_SERVERS, IPC.MCP_RECONNECT_SERVER, IPC.MCP_LIST_SERVER_CONFIGS,
+  IPC.TOOL_SET_ENABLED, IPC.TOOL_GET_ENABLED, IPC.TOOL_GET_MODE_OVERRIDES, IPC.TOOL_SET_MODE_OVERRIDE, IPC.TOOL_CLEAR_MODE_OVERRIDE, IPC.TOOL_GET_CATALOG,
+  IPC.SKILL_LIST, IPC.SKILL_SET_ENABLED, IPC.SKILL_GET_MODE_OVERRIDES, IPC.SKILL_SET_MODE_OVERRIDE, IPC.SKILL_CLEAR_MODE_OVERRIDE,
+  IPC.SKILL_GET_CATALOG, IPC.SKILL_GET_SUGGESTIONS, IPC.SKILL_RESCAN,
+  IPC.SCHEDULER_LIST, IPC.SCHEDULER_ADD, IPC.SCHEDULER_UPDATE, IPC.SCHEDULER_DELETE, IPC.SCHEDULER_TOGGLE, IPC.SCHEDULER_FIRE_NOW,
+  IPC.SCHEDULER_GET_HISTORY, IPC.SCHEDULER_GET_TOOLS, IPC.TOKEN_USAGE_GET, IPC.TOKEN_USAGE_CLEAR,
+  IPC.TTS_SESSION_START, IPC.TTS_SESSION_CANCEL, IPC.TTS_CLONE, IPC.TTS_SYNTHESIZE, IPC.TTS_SYNTHESIZE_CACHED,
+  IPC.TTS_STREAM_START, IPC.TTS_SAVE_SETTINGS, IPC.TTS_LOAD_SETTINGS,
+  IPC.TTS_SYNTHESIZE_CUSTOM_CLOUD, IPC.TTS_SYNTHESIZE_CACHED_CUSTOM_CLOUD,
+  IPC.TTS_SYNTHESIZE_MOSSLAND, IPC.TTS_SYNTHESIZE_CACHED_MOSSLAND, IPC.TTS_LIST_MOSSLAND_VOICES,
+  IPC.PERMISSION_GET_LEVEL, IPC.PERMISSION_SET_LEVEL, IPC.PERMISSION_APPROVAL_RESOLVE,
+  IPC.PLAN_SET_MODE, IPC.PLAN_GET_STATE, IPC.CHOICE_RESOLVE, IPC.POP_QUIZ_RESOLVE, IPC.POP_QUIZ_SKIP,
+  IPC.LEARN_EXAM_LIST, IPC.LEARN_EXAM_GET, IPC.LEARN_EXAM_SAVE_ANSWER, IPC.LEARN_EXAM_SAVE_NAVIGATION, IPC.LEARN_EXAM_SUBMIT,
+  IPC.LEARN_EXAM_RETRY, IPC.LEARN_EXAM_MARK_GRADING_FAILED, IPC.LEARN_EXAM_PAGE_GET, IPC.LEARN_EXAM_PAGE_SAVE_ANSWER,
+  IPC.LEARN_EXAM_PAGE_SAVE_NAVIGATION, IPC.LEARN_EXAM_PAGE_SUBMIT, IPC.LEARN_EXAM_PAGE_RETRY,
+  IPC.CHANNELS_GET_CONFIG, IPC.CHANNELS_SAVE_CONFIG, IPC.CHANNELS_LIST, IPC.CHANNELS_RESTART, IPC.CHANNELS_GET_STATUS,
+  IPC.CHANNELS_WECHAT_INSTALL, IPC.CHANNELS_WECHAT_LOGIN_START, IPC.CHANNELS_WECHAT_LOGIN_CANCEL, IPC.CHANNELS_WECHAT_LOGIN_RESULT,
+  IPC.CHANNELS_WECHAT_PAIRING_LIST, IPC.CHANNELS_WECHAT_PAIRING_APPROVE, IPC.CHANNELS_WECHAT_LOGOUT, IPC.CHANNELS_WECHAT_RUNTIME_DETECT,
+  IPC.CHANNELS_WECHAT_RUNTIME_INSTALL, IPC.CHANNELS_WECHAT_RUNTIME_UPDATE, IPC.CHANNELS_FEISHU_TEST_CONNECTION, IPC.CHANNELS_FEISHU_TEST_WEBHOOK_REACHABLE,
+  IPC.CHANNELS_QQ_TEST_CONNECTION, IPC.CHANNELS_QQ_RESOLVE_AUTH_REQUIREMENT, IPC.CHANNELS_QQBOT_TEST_CONNECTION, IPC.CHANNELS_LOG_GET,
+  IPC.CHANNELS_LOG_CLEAR, IPC.CHANNELS_RECOVERY_LIST, IPC.CHANNELS_RECOVERY_RETRY, IPC.CHANNELS_RECOVERY_RESOLVE, IPC.CHANNELS_RECOVERY_CANCEL,
+  IPC.CHANNELS_CONTEXT_BINDINGS_GET, IPC.CHANNELS_CONTEXT_BIND, IPC.CHANNELS_CONTEXT_UNBIND,
+  IPC.MUSIC_GET_STATUS, IPC.MUSIC_BEGIN_LOGIN, IPC.MUSIC_CANCEL_LOGIN, IPC.MUSIC_LOGOUT, IPC.MUSIC_GET_DAILY, IPC.MUSIC_SEARCH,
+  IPC.MUSIC_PLAY_TRACK, IPC.MUSIC_PLAY_PLAYLIST, IPC.MUSIC_DETECT_PLAYER, IPC.MUSIC_GET_OPENAPI_CONFIG, IPC.MUSIC_SAVE_OPENAPI_CONFIG,
+  IPC.MUSIC_PLAYBACK_PLAY, IPC.MUSIC_PLAYBACK_PAUSE, IPC.MUSIC_PLAYBACK_TOGGLE, IPC.MUSIC_PLAYBACK_SEEK, IPC.MUSIC_PLAYBACK_VOLUME,
+  IPC.MUSIC_PLAYBACK_STOP, IPC.MUSIC_PLAYBACK_NEXT, IPC.MUSIC_PLAYBACK_PREV, IPC.MUSIC_GET_PLAYBACK_SESSION, IPC.MUSIC_PLAY_SESSION_TRACK,
+  IPC.MUSIC_SYNC_PLAYBACK_SESSION, IPC.MUSIC_GET_LYRICS, IPC.MUSIC_TOGGLE_FAVORITE, IPC.MUSIC_GET_MY_PLAYLISTS, IPC.MUSIC_GET_PLAYLIST_DETAIL,
+  IPC.MUSIC_GET_CACHED_TRACKS, IPC.MUSIC_REMOVE_CACHED_TRACK,
+  IPC.PLUGINS_LIST, IPC.PLUGINS_SET_ENABLED, IPC.PLUGINS_OPEN, IPC.PLUGINS_RESCAN, IPC.PLUGINS_IMPORT_ZIP, IPC.PLUGINS_UNINSTALL, IPC.PLUGINS_MARKET_LIST, IPC.PLUGINS_MARKET_DETAILS,
+  IPC.PLUGINS_MARKET_INSTALL, IPC.NEWS_GET, IPC.STICKERS_GET_CONFIG, IPC.STICKERS_SET_ENABLED, IPC.STICKERS_ADD, IPC.STICKERS_DELETE, IPC.STICKERS_GET_ENABLED,
+  IPC.TOAST_GET_ALL,
+]);
+export const WEB_CORE_SEND_CHANNELS = new Set<string>([
+  IPC.AGUI_RUN_PERSISTED, IPC.TOAST_CLICKED, IPC.TOAST_DISMISSED, IPC.TOAST_RESIZE,
+  IPC.CALL_OPEN, IPC.CALL_START, IPC.CALL_AUDIO_FRAME, IPC.CALL_TURN_END, IPC.CALL_TTS_DONE, IPC.CALL_STOP,
+]);
+export function isWebCoreChannelAllowed(operation: string, channel: unknown): channel is string {
+  if (typeof channel !== "string") return false;
+  return operation === "invoke" ? WEB_CORE_INVOKE_CHANNELS.has(channel) : operation === "send" && WEB_CORE_SEND_CHANNELS.has(channel);
+}
+
+export const MAX_CORE_FILE_BYTES = 64 * 1024 * 1024;
+export const MAX_CORE_DIRECTORY_ENTRIES = 2_000;
 const execFileAsync = promisify(execFile);
 
 interface LoginAttemptState {
@@ -98,7 +186,9 @@ function parseCookies(request: IncomingMessage): Record<string, string> {
     if (separator < 0) continue;
     const key = item.slice(0, separator).trim();
     const value = item.slice(separator + 1).trim();
-    if (key) result[key] = decodeURIComponent(value);
+    if (key) {
+      try { result[key] = decodeURIComponent(value); } catch { /* malformed cookie is ignored */ }
+    }
   }
   return result;
 }
@@ -170,6 +260,83 @@ function contentType(filePath: string): string {
     ".mp3": "audio/mpeg",
     ".wav": "audio/wav",
   } as Record<string, string>)[extension] ?? "application/octet-stream";
+}
+
+function pathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function corePathError(code: string): Error {
+  const error = new Error(code);
+  (error as Error & { code?: string }).code = code;
+  return error;
+}
+
+export function validateCoreDirectoryEntryCount(count: number): void {
+  if (!Number.isInteger(count) || count < 0 || count > MAX_CORE_DIRECTORY_ENTRIES) throw corePathError("CORE_DIRECTORY_TOO_LARGE");
+}
+
+export function validateCoreFileTransferSize(size: number, responseSize: number, ranged: boolean): void {
+  if (!Number.isFinite(size) || !Number.isFinite(responseSize) || size < 0 || responseSize < 0) throw corePathError("CORE_FILE_TOO_LARGE");
+  if ((size > MAX_CORE_FILE_BYTES && !ranged) || responseSize > MAX_CORE_FILE_BYTES) throw corePathError("CORE_FILE_TOO_LARGE");
+}
+
+async function readBoundedCoreDirectory(directory: string): Promise<Dirent[]> {
+  const handle = await opendir(directory);
+  const entries: Dirent[] = [];
+  try {
+    for await (const entry of handle) {
+      if (entries.length >= MAX_CORE_DIRECTORY_ENTRIES) throw corePathError("CORE_DIRECTORY_TOO_LARGE");
+      entries.push(entry);
+    }
+    return entries;
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+/**
+ * Resolve a path requested by the Web file endpoints against dataDir and all
+ * session-bound workspaces. Both the lexical path and realpath must remain in
+ * one authorized root, and every existing path component must be a real file
+ * system entry (symlinks are rejected even when they point back into a root).
+ */
+export async function resolveAuthorizedWebPath(
+  requestedPath: string | undefined,
+  dataDir: string,
+  workspaceRoots: readonly string[] = [],
+): Promise<{ path: string; root: string }> {
+  const requested = requestedPath || dataDir;
+  if (!path.isAbsolute(requested)) throw corePathError("CORE_PATH_FORBIDDEN");
+  const lexicalPath = path.resolve(requested);
+  const rootCandidates = [dataDir, ...workspaceRoots].filter((value): value is string => Boolean(value));
+  const roots: string[] = [];
+  for (const candidate of rootCandidates) {
+    const resolved = await realpath(candidate).catch(() => null);
+    if (resolved && !roots.includes(resolved)) roots.push(resolved);
+  }
+  if (!roots.length) throw corePathError("CORE_PATH_FORBIDDEN");
+  const canonicalPath = await realpath(lexicalPath).catch(() => null);
+  if (!canonicalPath) throw corePathError("CORE_PATH_NOT_FOUND");
+  for (const root of roots) {
+    if (!pathWithin(root, lexicalPath)) continue;
+    const relative = path.relative(root, lexicalPath);
+    let current = root;
+    for (const part of relative ? relative.split(path.sep) : []) {
+      current = path.join(current, part);
+      const entry = await lstat(current).catch(() => null);
+      if (entry?.isSymbolicLink()) throw corePathError("CORE_SYMLINK_FORBIDDEN");
+    }
+    if (!pathWithin(root, canonicalPath)) continue;
+    return { path: canonicalPath, root };
+  }
+  throw corePathError("CORE_PATH_FORBIDDEN");
+}
+
+async function authorizedWorkspaceRoots(store: WebStore): Promise<string[]> {
+  const sessions = await store.list();
+  return [...new Set(sessions.map(session => session.workspaceRoot).filter((root): root is string => typeof root === "string" && root.length > 0 && path.isAbsolute(root)))];
 }
 
 async function serveStatic(
@@ -367,10 +534,11 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
   const core = options.sharedCore === false ? null : new SharedCoreClient(dataDir, process.env.CYRENE_APP_ROOT || path.resolve(__dirname, "..", "..", ".."), logger);
   const probeReadiness = createReadinessProbe(() => core?.isReady() ?? Promise.resolve(false));
   const running = new Map<string, { cancelled: boolean; sessionId: string; assistantId: string; controller: AbortController }>();
+  const runHistory = new Map<string, number[]>();
   const browserStates = new Map<string, BrowserPanelState>();
   const loginAttempts = new Map<string, LoginAttemptState>();
   const loginChallenges = new Map<string, LoginChallenge>();
-  const websocketServer = new WebSocketServer({ noServer: true });
+  const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 512 * 1024, perMessageDeflate: false });
   const broadcast = (event: unknown): void => {
     const encoded = JSON.stringify(event);
     for (const socket of sockets) if (socket.readyState === socket.OPEN) socket.send(encoded);
@@ -401,18 +569,53 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       await channels.bindContext(externalSessionId, conversationId, async (id) => Boolean(await store.get(id)));
     }
     const userMessageId = `channel-${Date.now()}-${randomBytes(6).toString("hex")}`;
+    const attachmentInputs = await buildChannelAttachmentInputs(message);
+    const attachmentContext = formatChannelAttachmentContext(attachmentInputs.attachments);
+    const modelPrompt = attachmentContext ? `${message.text}\n\n${attachmentContext}` : message.text;
     await store.patchMessage(conversationId, userMessageId, {
       role: "user",
       content: message.text,
       at: message.at.getTime(),
-      modelContext: message.text,
+      modelContext: modelPrompt,
       channelSource: { channel: message.channel, chatType: message.chatType ?? "private", senderName: message.senderName },
     } as never);
-    let text: string;
-    try { text = (await requestSessionModel(store, conversationId, message.text, { persona, channel: message.channel, media })).text; }
-    catch (error) { text = `模型请求失败：${modelError(error)}`; }
-    await store.addAssistantMessage(conversationId, { id: `channel-${Date.now()}-${randomBytes(6).toString("hex")}`, role: "model", content: text, at: Date.now() });
-    const outgoing: OutgoingMessage = { channel: message.channel, chatType: message.chatType, targetId: message.chatId, threadId: message.threadId, parts: [{ kind: "text", text }] };
+    let result: Awaited<ReturnType<typeof requestSessionModel>>;
+    try {
+      result = await requestSessionModel(store, conversationId, modelPrompt, {
+        persona,
+        channel: message.channel,
+        media,
+        imageAttachments: attachmentInputs.imageAttachments,
+      });
+    } catch (error) {
+      const text = `模型请求失败：${modelError(error)}`;
+      result = {
+        text,
+        assistantMessage: { role: "assistant", content: text },
+        toolCalls: [],
+        finishReason: "error",
+        raw: null,
+      };
+    }
+    const text = result.text;
+    await store.addAssistantMessage(conversationId, {
+      id: `channel-${Date.now()}-${randomBytes(6).toString("hex")}`,
+      role: "model",
+      content: text,
+      at: Date.now(),
+      ...(result.generatedAttachments?.length ? { attachments: result.generatedAttachments } : {}),
+    });
+    const generatedParts: OutgoingMessage["parts"] = [];
+    for (const attachment of result.generatedAttachments ?? []) {
+      const preview = attachment.previewUrl ?? "";
+      const marker = "/api/media/files/";
+      if (!preview.startsWith(marker)) continue;
+      let file = "";
+      try { file = decodeURIComponent(preview.slice(marker.length)); } catch { continue; }
+      const filePath = await media.resolveFilePath(file);
+      if (filePath) generatedParts.push({ kind: "image", filePath, caption: attachment.name });
+    }
+    const outgoing: OutgoingMessage = { channel: message.channel, chatType: message.chatType, targetId: message.chatId, threadId: message.threadId, parts: [{ kind: "text", text }, ...generatedParts] };
     await channels.rememberOutgoing(outgoing);
     broadcast({ type: "CHANNEL_MESSAGE", direction: "incoming", sessionId: externalSessionId, conversationId, message: message.text, channel: message.channel });
     return outgoing;
@@ -457,6 +660,10 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
         };
         const captcha = captchaRequired ? randomCaptcha() : null;
         if (captcha) challenge.captchaAnswer = captcha.answer;
+        if (loginChallenges.size >= MAX_LOGIN_CHALLENGES) {
+          const oldest = loginChallenges.keys().next().value;
+          if (typeof oldest === "string") loginChallenges.delete(oldest);
+        }
         loginChallenges.set(challenge.id, challenge);
         writeJson(response, 200, {
           challengeId: challenge.id,
@@ -566,21 +773,31 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       }
 
       if (core && method === "GET" && url.pathname === "/api/core/files") {
-        const directory = await realpath(url.searchParams.get("path") || dataDir);
-        if (!(await stat(directory)).isDirectory()) throw new Error("请选择目录路径");
-        const entries = await readdir(directory, { withFileTypes: true });
-        writeJson(response, 200, { path: directory, entries: [{ name: "..", path: path.dirname(directory), directory: true }, ...entries.filter(entry => !entry.isSymbolicLink()).map(entry => ({ name: entry.name, path: path.join(directory, entry.name), directory: entry.isDirectory() })).sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name))] }); return;
+        const resolved = await resolveAuthorizedWebPath(url.searchParams.get("path") || undefined, dataDir, await authorizedWorkspaceRoots(store));
+        const info = await lstat(resolved.path);
+        if (!info.isDirectory()) throw corePathError("CORE_DIRECTORY_REQUIRED");
+        const entries = await readBoundedCoreDirectory(resolved.path);
+        validateCoreDirectoryEntryCount(entries.length);
+        const parent = path.dirname(resolved.path);
+        const parentEntry = pathWithin(resolved.root, parent) ? [{ name: "..", path: parent, directory: true }] : [];
+        writeJson(response, 200, {
+          path: resolved.path,
+          entries: [...parentEntry, ...entries.filter(entry => !entry.isSymbolicLink()).map(entry => ({ name: entry.name, path: path.join(resolved.path, entry.name), directory: entry.isDirectory() })).sort((a, b) => Number(b.directory) - Number(a.directory) || a.name.localeCompare(b.name))],
+        }); return;
       }
       if (core && method === "GET" && url.pathname === "/api/core/file") {
-        const file = await realpath(url.searchParams.get("path") || "");
-        if (!(await stat(file)).isFile()) throw new Error("请选择文件");
-        const size = (await stat(file)).size;
+        const resolved = await resolveAuthorizedWebPath(url.searchParams.get("path") || undefined, dataDir, await authorizedWorkspaceRoots(store));
+        const info = await lstat(resolved.path);
+        if (!info.isFile()) throw corePathError("CORE_FILE_REQUIRED");
+        const size = info.size;
         const range = /^bytes=(\d*)-(\d*)$/.exec(headerValue(request.headers.range) || "");
         let start = 0, end = size - 1;
         if (range) { start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2])); end = range[1] && range[2] ? Math.min(end, Number(range[2])) : end; }
         if (range && (start > end || start >= size)) { response.writeHead(416, { "Content-Range": `bytes */${size}` }); response.end(); return; }
-        response.writeHead(range ? 206 : 200, { "Content-Type": contentType(file), "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file))}`, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "Accept-Ranges": "bytes", "Content-Length": String(Math.max(0, end - start + 1)), ...(range ? { "Content-Range": `bytes ${start}-${end}/${size}` } : {}) });
-        await pipeline(createReadStream(file, size ? { start, end } : {}), response); return;
+        const responseSize = Math.max(0, end - start + 1);
+        validateCoreFileTransferSize(size, responseSize, Boolean(range));
+        response.writeHead(range ? 206 : 200, { "Content-Type": contentType(resolved.path), "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(resolved.path))}`, "X-Content-Type-Options": "nosniff", "Cache-Control": "no-store", "Accept-Ranges": "bytes", "Content-Length": String(responseSize), ...(range ? { "Content-Range": `bytes ${start}-${end}/${size}` } : {}) });
+        await pipeline(createReadStream(resolved.path, size ? { start, end } : {}), response); return;
       }
       if (core && method === "GET" && url.pathname === "/api/core/audio") {
         const uri = await core.request(0, "invoke", { channel: "web:audio-source", args: [url.searchParams.get("id")] });
@@ -636,8 +853,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
         const operation = url.pathname.slice("/api/core/".length);
         if (!["invoke", "send", "capabilities", "dialog"].includes(operation)) { writeJson(response, 404, { error: "CORE_OPERATION_NOT_FOUND" }); return; }
         if ((operation === "invoke" || operation === "send") && (typeof input.channel !== "string" || !Array.isArray(input.args))) throw new Error("INVALID_CORE_REQUEST");
-        // Desktop control and deferred subsystems cannot be activated by a remote client.
-        if (typeof input.channel === "string" && /^(?:window:|live2d:|app:quit|screenshot:|gmail:)/.test(input.channel)) throw new Error("DESKTOP_OR_DEFERRED_API");
+        if ((operation === "invoke" || operation === "send") && !isWebCoreChannelAllowed(operation, input.channel)) throw new Error("CORE_CHANNEL_FORBIDDEN");
         const restored = reviveWebBinary(input);
         if (restored.channel === IPC.MOMENTS_CREATE_POST) restored.args = await resolveMomentUploads(dataDir, restored.args);
         writeJson(response, 200, await core.request(client.id, operation, restored)); return;
@@ -710,11 +926,24 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       const knowledgeParts = routeParts(url.pathname, "/api/knowledge/collections/");
       if (knowledgeParts?.length === 1 && method === "DELETE") { writeJson(response, (await features.deleteCollection(knowledgeParts[0])) ? 200 : 404, { ok: true }); return; }
       if (knowledgeParts?.length === 1 && method === "PATCH") {
-        const updated = await features.updateCollection(knowledgeParts[0], await readJson(request) as never);
-        writeJson(response, updated ? 200 : 404, updated ?? { ok: false, error: "COLLECTION_NOT_FOUND" }); return;
-      }
-      if (knowledgeParts?.length === 2 && method === "PATCH") {
-        const updated = await features.updateCollection(knowledgeParts[0], await readJson(request) as never);
+        const body = await readJson(request);
+        const patch: Record<string, unknown> = {};
+        if (typeof body.name === "string") patch.name = body.name;
+        if (typeof body.scope === "string") patch.scope = body.scope;
+        if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+        if (body.paths !== undefined) {
+          if (!Array.isArray(body.paths)) throw new Error("KNOWLEDGE_PATHS_INVALID");
+          const roots = await authorizedWorkspaceRoots(store);
+          const paths: Array<Record<string, unknown>> = [];
+          for (const entry of body.paths) {
+            if (!entry || typeof entry !== "object" || typeof (entry as Record<string, unknown>).path !== "string") throw new Error("KNOWLEDGE_PATHS_INVALID");
+            const record = entry as Record<string, unknown>;
+            const resolved = await resolveAuthorizedWebPath(record.path as string, dataDir, roots);
+            paths.push({ path: resolved.path, ...(typeof record.label === "string" ? { label: record.label.slice(0, 200) } : {}), addedAt: Number(record.addedAt) || Date.now() });
+          }
+          patch.paths = paths;
+        }
+        const updated = await features.updateCollection(knowledgeParts[0], patch as never);
         writeJson(response, updated ? 200 : 404, updated ?? { ok: false, error: "COLLECTION_NOT_FOUND" }); return;
       }
       if (knowledgeParts?.length === 2 && knowledgeParts[1] === "documents" && method === "GET") {
@@ -801,7 +1030,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       }
 
       if (method === "GET" && url.pathname === "/api/settings") {
-        writeJson(response, 200, await store.getSettings());
+        writeJson(response, 200, await store.getPublicSettings());
         return;
       }
       const settingsParts = routeParts(url.pathname, "/api/settings/");
@@ -812,19 +1041,19 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
           return;
         }
         const saved = await store.patchSettings(section, await readJson(request));
-        writeJson(response, 200, saved); broadcast({ type: "SETTINGS_CHANGED" });
+        writeJson(response, 200, section === "config" ? await store.getPublicSettings() : saved); broadcast({ type: "SETTINGS_CHANGED" });
         return;
       }
       if (method === "GET" && url.pathname === "/api/model-profiles") {
         const settings = await store.getSettings();
-        writeJson(response, 200, { profiles: settings.modelProfiles, defaultModelProfileId: settings.defaultModelProfileId });
+        writeJson(response, 200, { profiles: await store.getPublicModelProfiles(), defaultModelProfileId: settings.defaultModelProfileId });
         return;
       }
       if (method === "PUT" && url.pathname === "/api/model-profiles") {
         const body = await readJson(request);
         const profiles = Array.isArray(body.profiles) ? body.profiles.filter((item): item is Record<string, unknown> => !!item && typeof item === "object") : [];
         const settings = await store.setModelProfiles(profiles, typeof body.defaultModelProfileId === "string" ? body.defaultModelProfileId : undefined);
-        writeJson(response, 200, { profiles: settings.modelProfiles, defaultModelProfileId: settings.defaultModelProfileId });
+        writeJson(response, 200, { profiles: await store.getPublicModelProfiles(), defaultModelProfileId: settings.defaultModelProfileId });
         broadcast({ type: "SETTINGS_CHANGED" });
         return;
       }
@@ -940,10 +1169,34 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
         const assistantId = stringValue(body.assistantTurnId, randomBytes(12).toString("hex"));
         const user = body.currentUser && typeof body.currentUser === "object" ? body.currentUser as Record<string, unknown> : {};
         const text = stringValue(user.text, stringValue(user.visibleContent));
-        if (!await store.get(sessionId)) { writeJson(response, 404, { success: false, error: "SESSION_NOT_FOUND" }); return; }
+        const session = await store.get(sessionId);
+        if (!session) { writeJson(response, 404, { success: false, error: "SESSION_NOT_FOUND" }); return; }
+        if (session.messages.some((message) => message.id === assistantId) || [...running.values()].some((run) => run.sessionId === sessionId && run.assistantId === assistantId)) {
+          writeJson(response, 409, { success: false, error: "ASSISTANT_TURN_ALREADY_EXISTS" });
+          return;
+        }
+        const activeRuns = [...running.values()].filter((run) => run.sessionId === sessionId).length;
+        if (activeRuns >= MAX_ACTIVE_RUNS_PER_SESSION) {
+          writeJson(response, 429, { success: false, error: "SESSION_RUN_LIMIT_REACHED" }, { "Retry-After": "5" });
+          return;
+        }
+        const now = Date.now();
+        const recentRuns = (runHistory.get(sessionId) ?? []).filter((at) => at > now - 60_000);
+        if (recentRuns.length >= MAX_RUNS_PER_MINUTE) {
+          writeJson(response, 429, { success: false, error: "RUN_RATE_LIMITED" }, { "Retry-After": "60" });
+          return;
+        }
+        recentRuns.push(now);
+        runHistory.set(sessionId, recentRuns);
         const runId = randomBytes(16).toString("hex");
-        running.set(runId, { cancelled: false, sessionId, assistantId, controller: new AbortController() });
-        await store.patchMessage(sessionId, assistantId, { role: "model", content: "", at: Date.now(), runSnapshot: { runId, status: "running", updatedAt: Date.now() } });
+        const runState = { cancelled: false, sessionId, assistantId, controller: new AbortController() };
+        try {
+          await store.patchMessage(sessionId, assistantId, { role: "model", content: "", at: Date.now(), runSnapshot: { runId, status: "running", updatedAt: Date.now() } });
+        } catch (error) {
+          running.delete(runId);
+          throw error;
+        }
+        running.set(runId, runState);
         writeJson(response, 200, { success: true, runId });
         void (async () => {
           // Give the browser time to finish the authenticated WebSocket upgrade
@@ -1016,7 +1269,9 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       writeJson(response, 404, { ok: false, error: "ROUTE_NOT_IMPLEMENTED" });
     } catch (error) {
       const code = error instanceof Error ? error.message : "REQUEST_FAILED";
-      const status = code === "REQUEST_TOO_LARGE" ? 413 : code === "E_LEARN_EXAM_PAGE_FORBIDDEN" ? 403 : 400;
+      const status = code === "REQUEST_TOO_LARGE" || code === "CORE_FILE_TOO_LARGE" || code === "CORE_DIRECTORY_TOO_LARGE" ? 413
+        : code === "E_LEARN_EXAM_PAGE_FORBIDDEN" || code === "CORE_CHANNEL_FORBIDDEN" || code === "CORE_PATH_FORBIDDEN" || code === "CORE_SYMLINK_FORBIDDEN" ? 403
+          : code === "CORE_PATH_NOT_FOUND" ? 404 : 400;
       logger.warn(`[web] request failed code=${code}`);
       if (!response.headersSent) writeJson(response, status, { ok: false, error: code }); else response.destroy();
     }
@@ -1034,22 +1289,23 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
   });
 
   server.on("upgrade", (request, socket, head) => {
-    const url = new URL(request.url || "/", "http://cyrene.local");
-    if (url.pathname !== "/ws") {
+    try {
+      const url = new URL(request.url || "/", "http://cyrene.local");
+      if (url.pathname !== "/ws") { socket.destroy(); return; }
+      const session = auth.getSession(parseCookies(request)[SESSION_COOKIE]);
+      const origin = headerValue(request.headers.origin);
+      if (origin && new URL(origin).host !== request.headers.host) { socket.destroy(); return; }
+      if (!session) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      websocketServer.handleUpgrade(request, socket, head, (websocket) => {
+        websocketServer.emit("connection", websocket, request);
+      });
+    } catch {
       socket.destroy();
-      return;
     }
-    const session = auth.getSession(parseCookies(request)[SESSION_COOKIE]);
-    const origin = headerValue(request.headers.origin);
-    if (origin && new URL(origin).host !== request.headers.host) { socket.destroy(); return; }
-    if (!session) {
-      socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
-      socket.destroy();
-      return;
-    }
-    websocketServer.handleUpgrade(request, socket, head, (websocket) => {
-      websocketServer.emit("connection", websocket, request);
-    });
   });
 
   return {

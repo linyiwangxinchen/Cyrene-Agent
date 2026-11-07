@@ -5,7 +5,7 @@
 //   2. latest.yml 的 version 与 package.json 一致，path 指向同一安装器，sha512 存在
 //   3. 安装器同名 .blockmap（差分更新指纹表）存在且非空
 //   4. win-unpacked/resources 内截图辅助程序、mpv、MinGit、skills 快照齐全
-// 用法：node scripts/verify/installer-artifacts.mjs [--expect-version x.y.z] [--artifact-name filename.exe]
+// 用法：node scripts/verify/installer-artifacts.mjs [--expect-version x.y.z] [--artifact-name filename.exe] [--config electron-builder.yml]
 //   --expect-version：标签构建时传入标签版本，校验「产物版本与标签一致」
 //   --artifact-name：验证 fork 构建配置生成的独立安装器名称
 import { createHash } from "node:crypto";
@@ -29,11 +29,11 @@ const projectRoot = path.resolve(scriptDir, "..", "..");
 const MIN_INSTALLER_BYTES = 20 * 1024 * 1024;
 
 export async function verifyInstallerArtifacts(options = {}) {
-  const { expectVersion, artifactName: artifactNameOverride } = options;
+  const { expectVersion, artifactName: artifactNameOverride, configPath } = options;
 
   const pkg = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
   const builderConfig = parseYaml(
-    await readFile(path.join(projectRoot, "electron-builder.yml"), "utf8"),
+    await readFile(path.resolve(projectRoot, configPath ?? "electron-builder.yml"), "utf8"),
   );
   const outputDir = path.join(projectRoot, builderConfig.directories?.output ?? "release");
   const artifactName = (artifactNameOverride ?? builderConfig.nsis?.artifactName ?? "Cyrene-Setup-${version}.${ext}")
@@ -110,7 +110,9 @@ if (isDirectRun) {
   const expectVersion = expectIndex !== -1 ? process.argv[expectIndex + 1] : undefined;
   const artifactIndex = process.argv.indexOf("--artifact-name");
   const artifactName = artifactIndex !== -1 ? process.argv[artifactIndex + 1] : undefined;
-  verifyInstallerArtifacts({ expectVersion, artifactName })
+  const configIndex = process.argv.indexOf("--config");
+  const configPath = configIndex !== -1 ? process.argv[configIndex + 1] : undefined;
+  verifyInstallerArtifacts({ expectVersion, artifactName, configPath })
     .then((result) => {
       console.log(
         `[installer] verified ${result.installerPath} (${result.installerSize} bytes) — v${result.version}`,

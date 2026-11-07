@@ -16,7 +16,7 @@ const desktopOnly = new Set([
 
 export function isForkSettingsSearchAvailable(id: string, state: ForkSearchAvailability): boolean {
   if (state.isWeb && desktopOnly.has(id)) return false;
-  if (["deliveryTarget", "proactiveScoreStatus", "proactiveTargetScore"].some(key => id === `settingsPage.preferences.${key}`))
+  if (["deliveryTarget", "proactiveScoreStatus", "proactiveTargetScore", "proactiveQuietHours", "proactiveDailyLimit"].some(key => id === `settingsPage.preferences.${key}`))
     return state.proactiveEnabled === true;
   if (id === "settingsPage.asr.localTitle") return state.asrEngine === "local";
   return true;
@@ -27,7 +27,7 @@ export function extendSettingsSearchIndex(items: SettingsSearchItem[]): Settings
     ...items.map(item => item.id === "section:plugins"
       ? { ...item, keywords: ["B站", "B 站", "bilibili", "小花园", "bili-garden", "魔搭", "modelscope"] }
       : item),
-    ...["proactiveScoreStatus", "proactiveTargetScore"].map(key => ({
+    ...["proactiveScoreStatus", "proactiveTargetScore", "proactiveQuietHours", "proactiveDailyLimit"].map(key => ({
       id: `settingsPage.preferences.${key}`, titleKey: `settingsPage.preferences.${key}`,
       section: "preferences" as const, category: "basic" as const,
       sectionKey: "settingsPage.preferencesLabel",

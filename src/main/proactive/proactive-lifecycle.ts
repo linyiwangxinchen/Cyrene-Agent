@@ -137,13 +137,21 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     let idleSec = Number.POSITIVE_INFINITY;
     try { idleSec = powerMonitor.getSystemIdleTime(); } catch { /* app 尚未 ready */ }
     if (lastMessageActivityAt !== null) idleSec = Math.min(idleSec, Math.max(0, Math.floor((now - lastMessageActivityAt) / 1000)));
+    const timezone = resolveChatContextTimezone(loadUserProfile().timezone);
+    const zoned = getZonedDateParts(new Date(now), timezone);
+    const settings = options.loadGeneralSettings();
     return {
       now,
       // The server's system timezone can differ from the user's timezone.
       // Policy quiet hours must use the same clock as candidate selection.
-      localHour: getZonedDateParts(new Date(now), resolveChatContextTimezone(loadUserProfile().timezone)).hour,
+      localHour: zoned.hour,
+      localMinute: zoned.minute,
+      localDate: `${zoned.year}-${String(zoned.month).padStart(2, "0")}-${String(zoned.day).padStart(2, "0")}`,
+      quietStartMinute: settings.proactiveQuietStartMinute,
+      quietEndMinute: settings.proactiveQuietEndMinute,
+      dailyLimit: settings.proactiveDailyLimit,
       idleSec,
-      enabled: options.loadGeneralSettings().proactiveChatMode === "on" && !getRelationshipStore().getControls().paused,
+      enabled: settings.proactiveChatMode === "on" && !getRelationshipStore().getControls().paused,
       conversationBusy: normalConversationBusyCount > 0,
       generationBusy: false,
       screenLocked: proactiveScreenLocked,

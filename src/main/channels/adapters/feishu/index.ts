@@ -123,7 +123,7 @@ async function downloadLarkResource(
 }
 
 /** 把飞书 NormalizedMessage → 我们的 IncomingMessage（异步，会下载附件） */
-async function normalizeLarkMessage(
+export async function normalizeLarkMessage(
   channel: LarkChannel,
   msg: NormalizedMessage,
 ): Promise<IncomingMessage> {
@@ -179,7 +179,7 @@ async function normalizeLarkMessage(
 
 /** 把我们 OutgoingMessage.parts 翻译成飞书 SendInput。飞书 send() 一次只发一个 payload，
  *  所以多 parts 时循环调用 send。 */
-async function sendLark(channel: LarkChannel, targetId: string, part: OutgoingPart): Promise<{ messageId: string } | null> {
+export async function sendLark(channel: LarkChannel, targetId: string, part: OutgoingPart): Promise<{ messageId: string } | null> {
   let result: { messageId: string } | null = null;
   switch (part.kind) {
     case "text": {

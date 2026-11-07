@@ -34,6 +34,11 @@ function isNight(hour: number): boolean {
   return hour >= 22 || hour < 8;
 }
 
+function isWithinQuietWindow(localMinute: number, start: number, end: number): boolean {
+  if (start === end) return true;
+  return start > end ? localMinute >= start || localMinute < end : localMinute >= start && localMinute < end;
+}
+
 export function canStartProactiveGeneration(
   snapshot: ProactiveRuntimeSnapshot,
   state: ProactiveState,
@@ -43,7 +48,14 @@ export function canStartProactiveGeneration(
   if (snapshot.screenLocked) return block("screen_locked");
   if (snapshot.conversationBusy) return block("conversation_busy");
   if (snapshot.generationBusy) return block("generation_busy");
+  if (snapshot.quietStartMinute !== undefined && snapshot.quietEndMinute !== undefined && snapshot.localMinute !== undefined
+    && isWithinQuietWindow(snapshot.localHour * 60 + snapshot.localMinute, snapshot.quietStartMinute, snapshot.quietEndMinute)) {
+    return block("custom_quiet_period");
+  }
   if (isNight(snapshot.localHour) && snapshot.idleSec >= NIGHT_ACTIVE_IDLE_LIMIT_SEC) return block("night_inactive");
+  if (snapshot.dailyLimit === 0) return block("daily_limit");
+  if (snapshot.dailyLimit !== undefined && snapshot.localDate && state.dailyMessageDate === snapshot.localDate
+    && (state.dailyMessageCount ?? 0) >= snapshot.dailyLimit) return block("daily_limit");
   if (state.unansweredCount >= 2) return block("unanswered_limit");
 
   if (
@@ -103,10 +115,16 @@ export function markProactiveCommitted(
   state: ProactiveState,
   candidate: ProactiveCandidate,
   now: number,
+  localDate?: string,
 ): void {
   state.unansweredCount = Math.min(2, state.unansweredCount + 1) as 0 | 1 | 2;
   state.lastProactiveAt = now;
   state.lastProactiveScene = candidate.sceneId;
   state.lastFiredAt[candidate.sceneId] = now;
   state.globalDesire = 0;
+  if (localDate) {
+    const previousDate = state.dailyMessageDate;
+    state.dailyMessageDate = localDate;
+    state.dailyMessageCount = previousDate === localDate ? (state.dailyMessageCount ?? 0) + 1 : 1;
+  }
 }

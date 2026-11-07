@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,8 +47,31 @@ describe("web media", () => {
     const store = new WebMediaStore(directory);
     const attachment = await store.saveGeneratedImage({ id: "image-1", base64: image.split(",")[1]! });
     expect(attachment).toMatchObject({ id: "image-1", source: "model", previewUrl: expect.stringContaining("/api/media/files/") });
-    expect(await store.readFile(decodeURIComponent(attachment.previewUrl!.split("/").at(-1)!))).toEqual(decodeImage(image).body);
+    const file = decodeURIComponent(attachment.previewUrl!.split("/").at(-1)!);
+    expect(await store.readFile(file)).toEqual(decodeImage(image).body);
+    expect(await store.resolveFilePath(file)).toBe(path.join(directory, "web-media", file));
+    expect(await store.resolveFilePath("../../web-data.json")).toBeNull();
     const restarted = new WebMediaStore(directory);
     expect(await restarted.readFile(decodeURIComponent(attachment.previewUrl!.split("/").at(-1)!))).toEqual(decodeImage(image).body);
+  });
+
+  it("refreshes a reused generated id when a retry returns new bytes", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "cyrene-generated-conflict-")); directories.push(directory);
+    const store = new WebMediaStore(directory);
+    const first = await store.saveGeneratedImage({ id: "same-id", base64: image.split(",")[1]! });
+    const changed = Buffer.concat([decodeImage(image).body.subarray(0, 8), Buffer.from("different-png-body")]);
+    const second = await store.saveGeneratedImage({ id: "same-id", base64: changed.toString("base64") });
+    expect(second.previewUrl).not.toBe(first.previewUrl);
+    expect(await store.readFile(decodeURIComponent(second.previewUrl!.split("/").at(-1)!))).toEqual(changed);
+    expect(await store.readFile(decodeURIComponent(first.previewUrl!.split("/").at(-1)!))).toBeNull();
+  });
+
+  it("removes unreferenced media files when the manifest is loaded", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "cyrene-media-orphan-")); directories.push(directory);
+    await mkdir(path.join(directory, "web-media"), { recursive: true });
+    const orphan = path.join(directory, "web-media", "orphan.png");
+    await writeFile(orphan, decodeImage(image).body);
+    await new WebMediaStore(directory).list();
+    await expect(access(orphan)).rejects.toThrow();
   });
 });

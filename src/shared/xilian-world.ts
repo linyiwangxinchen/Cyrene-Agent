@@ -103,6 +103,9 @@ export interface XilianLifeArtifactContext {
   errorClass?: "auth" | "parameter" | "network" | "timeout" | "parse" | "unknown";
 }
 
+/** Renderer-safe artifact metadata; generated file paths remain in the main process. */
+export type XilianWorldArtifactView = Omit<XilianLifeArtifactContext, "outputPath">;
+
 export interface XilianWorldState {
   version: 1;
   worldDate: string;
@@ -130,6 +133,8 @@ export interface XilianWorldView {
   state: XilianWorldState;
   timeline: XilianTimelineEvent[];
   diary: XilianDiaryEntry[];
+  /** Recent life artifacts and their generation state; file paths stay out of the UI contract. */
+  artifacts: XilianWorldArtifactView[];
   locations: readonly XilianLocation[];
 }
 

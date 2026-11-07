@@ -80,6 +80,7 @@ async function writeJsonAtomically(filePath: string, value: unknown): Promise<vo
 export class AuthStore {
   private readonly sessions = new Map<string, AuthSession>();
   private loaded = false;
+  private loadError: Error | undefined;
   private record: PersistedAuth | null = null;
   private bootstrapInProgress = false;
 
@@ -90,6 +91,7 @@ export class AuthStore {
   }
 
   private async load(): Promise<void> {
+    if (this.loadError) throw this.loadError;
     if (this.loaded) return;
     this.loaded = true;
     try {
@@ -97,16 +99,24 @@ export class AuthStore {
       if (
         parsed.version === AUTH_VERSION
         && typeof parsed.username === "string"
+        && USERNAME_PATTERN.test(parsed.username)
         && typeof parsed.salt === "string"
         && typeof parsed.passwordHash === "string"
+        && typeof parsed.createdAt === "string"
       ) {
+        const decoded = decodePassword(parsed);
+        if (decoded.salt.length !== 16 || decoded.hash.length !== 32) throw new Error("AUTH_STORE_INVALID");
         this.record = parsed;
+      } else {
+        throw new Error("AUTH_STORE_INVALID");
       }
     } catch (error) {
       const code = error && typeof error === "object" && "code" in error
         ? (error as { code?: string }).code
         : undefined;
-      if (code !== "ENOENT") throw error;
+      if (code === "ENOENT") return;
+      this.loadError = error instanceof Error ? error : new Error("AUTH_STORE_LOAD_FAILED");
+      throw this.loadError;
     }
   }
 

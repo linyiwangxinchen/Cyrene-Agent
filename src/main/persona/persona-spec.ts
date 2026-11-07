@@ -7,7 +7,8 @@ import { XILIAN_CHARACTER_PACK } from "../character-packs/xilian-pack";
  */
 
 import type { RelationshipState, AffectState } from "../../shared/companion";
-export type { RelationshipState, RelationshipStage, AffectState } from "../../shared/companion";
+import type { CompanionEvent } from "../../shared/companion-events";
+export type { RelationshipState, RelationshipStage, AffectState, RelationshipMode } from "../../shared/companion";
 
 export interface PersonaSpec {
   id: string;
@@ -42,6 +43,7 @@ export function clampScore(value: number): number {
 export function createDefaultRelationshipState(now = Date.now()): RelationshipState {
   return {
     id: "default",
+    relationshipMode: "companion",
     stage: "familiar",
     trust: 0.5,
     closeness: 0.35,
@@ -91,6 +93,34 @@ export function advanceRelationshipState(
   return { ...state, lastInteractionAt: now, updatedAt: now, version: state.version + 1 };
 }
 
+/** Apply a small, explainable relationship signal from a completed shared event.
+ * Closeness remains user controlled. Trust and warmth are soft presentation
+ * signals and never grant permissions or change the selected relationship mode.
+ */
+export function advanceRelationshipForEvent(
+  state: RelationshipState,
+  event: Pick<CompanionEvent, "kind">,
+  now = Date.now(),
+): RelationshipState {
+  if (state.paused) return state;
+  const delta = event.kind === "repair_acknowledged"
+    ? { trust: 0.02, warmth: 0.04 }
+    : event.kind === "followup_completed"
+      ? { trust: 0.015, warmth: 0.02 }
+      : event.kind === "goal_progressed" || event.kind === "moment_shared"
+        ? { trust: 0.01, warmth: 0.015 }
+        : event.kind === "plugin_observation" || event.kind === "music_context"
+          ? { trust: 0, warmth: 0.004 }
+          : { trust: 0, warmth: 0 };
+  return {
+    ...state,
+    trust: clampScore(state.trust + delta.trust),
+    warmth: clampScore(state.warmth + delta.warmth),
+    updatedAt: now,
+    version: state.version + (delta.trust || delta.warmth ? 1 : 0),
+  };
+}
+
 export function relationshipStage(closeness: number): RelationshipState["stage"] {
   return closeness >= 0.8 ? "long_term" : closeness >= 0.6 ? "close" : closeness >= 0.3 ? "familiar" : "new";
 }
@@ -130,6 +160,35 @@ export function advanceAffectState(state: AffectState, userMood: string, now = D
     valence: clampScore(relaxed.valence + delta.valence),
     arousal: clampScore(relaxed.arousal + delta.arousal),
     warmth: clampScore(relaxed.warmth + delta.warmth),
+    concern: clampScore(relaxed.concern + delta.concern),
+    lastTransitionAt: now,
+    version: state.version + 1,
+  };
+  return { ...next, renderedFeeling: renderFeeling(next) };
+}
+
+/** Bridge non-conversational companion events into the simulated affect layer. */
+export function advanceAffectForEvent(
+  state: AffectState,
+  event: Pick<CompanionEvent, "kind">,
+  now = Date.now(),
+): AffectState {
+  const delta = event.kind === "repair_acknowledged"
+    ? { valence: 0.03, arousal: 0.01, warmth: 0.04, curiosity: 0, concern: -0.04 }
+    : event.kind === "followup_completed"
+      ? { valence: 0.04, arousal: 0.02, warmth: 0.03, curiosity: 0.01, concern: -0.02 }
+      : event.kind === "goal_progressed" || event.kind === "moment_shared"
+        ? { valence: 0.03, arousal: 0.02, warmth: 0.025, curiosity: 0.015, concern: -0.01 }
+        : event.kind === "plugin_observation" || event.kind === "music_context" || event.kind === "idle_window"
+          ? { valence: 0.005, arousal: 0.005, warmth: 0.008, curiosity: 0.02, concern: 0 }
+          : { valence: 0, arousal: 0, warmth: 0, curiosity: 0, concern: 0 };
+  const relaxed = decayAffectState(state, now);
+  const next = {
+    ...relaxed,
+    valence: clampScore(relaxed.valence + delta.valence),
+    arousal: clampScore(relaxed.arousal + delta.arousal),
+    warmth: clampScore(relaxed.warmth + delta.warmth),
+    curiosity: clampScore(relaxed.curiosity + delta.curiosity),
     concern: clampScore(relaxed.concern + delta.concern),
     lastTransitionAt: now,
     version: state.version + 1,

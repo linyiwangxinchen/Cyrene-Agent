@@ -4,6 +4,16 @@ import type { IncomingMessage } from "./types";
 
 type AttachmentInputs = Pick<AguiRunInput, "attachments" | "imageAttachments">;
 
+/**
+ * Turn non-image channel attachments into the transient model context used by
+ * the headless Web runtime.  Keep this next to the channel mapper so every
+ * transport uses the same labels and never silently drops a file path.
+ */
+export function formatChannelAttachmentContext(attachments: AguiRunInput["attachments"]): string {
+  if (!attachments?.length) return "";
+  return `【本轮附件内容】\n${attachments.map((item) => `--- ${item.name} ---\n${item.text}`).join("\n\n")}`;
+}
+
 export interface ChannelAttachmentInputOptions {
   imageMode?: "direct" | "caption";
   captionImage?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;

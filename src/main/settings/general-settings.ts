@@ -84,6 +84,11 @@ export interface GeneralSettings {
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   /** 主动聊天候选进入模型评估前的最低评分（0-100）。 */
   proactiveTargetScore: number;
+  /** 主动消息的用户时区静默窗口，允许跨午夜。 */
+  proactiveQuietStartMinute: number;
+  proactiveQuietEndMinute: number;
+  /** 每个用户本地日最多发送的主动消息数，0 表示关闭主动消息。 */
+  proactiveDailyLimit: number;
   /** 允许已启用插件把经过宿主脱敏的观察事件交给陪伴生活队列。 */
   companionPluginSharingEnabled: boolean;
   // TTS 配置

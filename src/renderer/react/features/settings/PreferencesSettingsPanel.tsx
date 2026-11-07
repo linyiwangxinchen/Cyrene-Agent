@@ -7,6 +7,12 @@ import {
   normalizeProactiveChatMode,
   normalizeProactiveDeliveryTarget,
   normalizeProactiveTargetScore,
+  normalizeProactiveQuietStartMinute,
+  normalizeProactiveQuietEndMinute,
+  normalizeProactiveDailyLimit,
+  DEFAULT_PROACTIVE_QUIET_START_MINUTE,
+  DEFAULT_PROACTIVE_QUIET_END_MINUTE,
+  DEFAULT_PROACTIVE_DAILY_LIMIT,
   DEFAULT_PROACTIVE_TARGET_SCORE,
   type MobileMessageSegmentationMode,
   type ProactiveChatMode,
@@ -32,6 +38,9 @@ interface PreferencesValues {
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   proactiveTargetScore: number;
+  proactiveQuietStartMinute: number;
+  proactiveQuietEndMinute: number;
+  proactiveDailyLimit: number;
   companionPluginSharingEnabled: boolean;
   momentsEnabled: boolean;
   cyreneMomentsPostingEnabled: boolean;
@@ -64,6 +73,9 @@ const defaults: PreferencesValues = {
   proactiveChatMode: "off",
   proactiveDeliveryTarget: "local",
   proactiveTargetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
+  proactiveQuietStartMinute: DEFAULT_PROACTIVE_QUIET_START_MINUTE,
+  proactiveQuietEndMinute: DEFAULT_PROACTIVE_QUIET_END_MINUTE,
+  proactiveDailyLimit: DEFAULT_PROACTIVE_DAILY_LIMIT,
   companionPluginSharingEnabled: false,
   momentsEnabled: true,
   cyreneMomentsPostingEnabled: false,
@@ -87,6 +99,9 @@ function readPreferences(value: unknown): PreferencesValues {
     proactiveChatMode: normalizeProactiveChatMode(input.proactiveChatMode),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input.proactiveDeliveryTarget),
     proactiveTargetScore: normalizeProactiveTargetScore(input.proactiveTargetScore),
+    proactiveQuietStartMinute: normalizeProactiveQuietStartMinute(input.proactiveQuietStartMinute),
+    proactiveQuietEndMinute: normalizeProactiveQuietEndMinute(input.proactiveQuietEndMinute),
+    proactiveDailyLimit: normalizeProactiveDailyLimit(input.proactiveDailyLimit),
     companionPluginSharingEnabled: input.companionPluginSharingEnabled === true,
     momentsEnabled: typeof input.momentsEnabled === "boolean" ? input.momentsEnabled : defaults.momentsEnabled,
     cyreneMomentsPostingEnabled: typeof input.cyreneMomentsPostingEnabled === "boolean" ? input.cyreneMomentsPostingEnabled : defaults.cyreneMomentsPostingEnabled,
@@ -190,6 +205,9 @@ export function PreferencesSettingsPanel() {
         proactiveChatMode,
         proactiveDeliveryTarget,
         proactiveTargetScore,
+        proactiveQuietStartMinute,
+        proactiveQuietEndMinute,
+        proactiveDailyLimit,
         companionPluginSharingEnabled,
       } = values;
       await window.settings.saveGeneral({
@@ -204,6 +222,9 @@ export function PreferencesSettingsPanel() {
         proactiveChatMode,
         proactiveDeliveryTarget,
         proactiveTargetScore,
+        proactiveQuietStartMinute,
+        proactiveQuietEndMinute,
+        proactiveDailyLimit,
         companionPluginSharingEnabled,
       });
       setStatus(t("settingsPage.preferences.saved"));
@@ -252,6 +273,12 @@ export function PreferencesSettingsPanel() {
 
   const diversity = styleDraft.diversity;
   const selectableTarget = (target: ProactiveDeliveryTarget) => isProactiveDeliveryTargetSelectable(target, channels[target]);
+  const minuteToTime = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+  const timeToMinute = (value: string, fallback: number, normalize: (value: unknown) => number) => {
+    const match = /^(\d{2}):(\d{2})$/.exec(value);
+    if (!match) return fallback;
+    return normalize(Number(match[1]) * 60 + Number(match[2]));
+  };
 
   return (
     <>
@@ -321,6 +348,18 @@ export function PreferencesSettingsPanel() {
                     addonAfter={t("settingsPage.preferences.scoreUnit")}
                     onChange={(value) => update("proactiveTargetScore", normalizeProactiveTargetScore(value ?? DEFAULT_PROACTIVE_TARGET_SCORE))}
                   />
+                </div>
+                <div className="cy-settings-row">
+                  <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveQuietHours">{t("settingsPage.preferences.proactiveQuietHours")}</strong><span>{t("settingsPage.preferences.proactiveQuietHoursDescription")}</span></div>
+                  <div className="cy-settings-button-group">
+                    <SettingsInput type="time" aria-label={t("settingsPage.preferences.proactiveQuietStart")} value={minuteToTime(values.proactiveQuietStartMinute)} onChange={(event) => update("proactiveQuietStartMinute", timeToMinute(event.target.value, values.proactiveQuietStartMinute, normalizeProactiveQuietStartMinute))} />
+                    <span aria-hidden="true">–</span>
+                    <SettingsInput type="time" aria-label={t("settingsPage.preferences.proactiveQuietEnd")} value={minuteToTime(values.proactiveQuietEndMinute)} onChange={(event) => update("proactiveQuietEndMinute", timeToMinute(event.target.value, values.proactiveQuietEndMinute, normalizeProactiveQuietEndMinute))} />
+                  </div>
+                </div>
+                <div className="cy-settings-row">
+                  <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveDailyLimit">{t("settingsPage.preferences.proactiveDailyLimit")}</strong><span>{t("settingsPage.preferences.proactiveDailyLimitDescription")}</span></div>
+                  <InputNumber min={0} max={24} step={1} value={values.proactiveDailyLimit} addonAfter={t("settingsPage.preferences.messageUnit")} onChange={(value) => update("proactiveDailyLimit", normalizeProactiveDailyLimit(value ?? DEFAULT_PROACTIVE_DAILY_LIMIT))} />
                 </div>
               </>}
             </Card>

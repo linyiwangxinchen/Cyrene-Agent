@@ -36,3 +36,49 @@ it("folds original renderer checkpoint deltas into stored messages and survives 
     expect(recovered).not.toHaveProperty("delta");
   } finally { await rm(dataDir, { recursive: true, force: true }); }
 });
+
+it("recovers after a rejected snapshot write and keeps returned sessions detached", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "cyrene-store-write-chain-"));
+  try {
+    const store = new WebStore(dataDir);
+    const rejected = Promise.reject(new Error("transient"));
+    rejected.catch(() => undefined);
+    (store as unknown as { writeChain: Promise<void> }).writeChain = rejected;
+    const created = await store.create({ mode: "chat", identityId: null, title: "原始标题" });
+    created.title = "外部修改";
+    expect((await store.get(created.id))?.title).toBe("原始标题");
+    await store.rename(created.id, "持久化标题");
+    await store.setPinned(created.id, true);
+    expect(await store.get(created.id)).toMatchObject({ title: "持久化标题", pinned: true });
+    expect(await new WebStore(dataDir).get(created.id)).toMatchObject({ title: "持久化标题", pinned: true });
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+it("limits pending queue growth and deep-clones settings", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "cyrene-store-limits-"));
+  try {
+    const store = new WebStore(dataDir);
+    const session = await store.create({ mode: "chat", identityId: null });
+    for (let index = 0; index < 100; index += 1) {
+      expect((await store.enqueue(session.id, { id: `q-${index}`, rawContent: "x", visibleContent: "x" })).ok).toBe(true);
+    }
+    expect(await store.enqueue(session.id, { id: "q-overflow", rawContent: "x", visibleContent: "x" })).toEqual({ ok: false, error: "PENDING_QUEUE_LIMIT_REACHED" });
+    const settings = await store.getSettings();
+    (settings.config as Record<string, unknown>).nested = { changed: true };
+    expect((await store.getSettings()).config).not.toHaveProperty("nested");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});
+
+it("redacts model credentials while allowing blank browser edits to retain them", async () => {
+  const dataDir = await mkdtemp(path.join(os.tmpdir(), "cyrene-store-secrets-"));
+  try {
+    const store = new WebStore(dataDir);
+    await store.setModelProfiles([{ id: "p", model: "m", apiKey: "sk-secret" }], "p");
+    expect((await store.getPublicModelProfiles())[0]).toMatchObject({ apiKey: "", hasApiKey: true });
+    expect(JSON.stringify(await store.getPublicSettings())).not.toContain("sk-secret");
+    await store.setModelProfiles([{ id: "p", model: "m2", apiKey: "" }], "p");
+    expect((await store.getSettings()).modelProfiles[0]?.apiKey).toBe("sk-secret");
+    await store.setModelProfiles([{ id: "p", model: "m2", apiKey: "", clearApiKey: true }], "p");
+    expect((await store.getSettings()).modelProfiles[0]?.apiKey).toBe("");
+  } finally { await rm(dataDir, { recursive: true, force: true }); }
+});

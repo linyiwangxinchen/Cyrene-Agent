@@ -2,17 +2,19 @@ import { detectUserMood } from "./mood-cues"
 import { randomUUID } from "node:crypto"
 import { RelationshipRepository } from "./relationship-repository"
 import { normalizeFollowups, resolveExplicitFollowupReply } from "./followup-state"
-import type { CompanionFollowup } from "../../shared/companion"
-import type { CompanionSnapshot, CompanionCommand, CompanionPermissions, CompanionRecord, RelationshipPreferences } from "../../shared/companion"
+import type { CompanionFollowup, CompanionCommitment, CompanionCommitmentStatus } from "../../shared/companion"
+import type { CompanionSnapshot, CompanionCommand, CompanionPermissions, CompanionRecord, RelationshipPreferences, RepairCase, RepairCaseStatus, RelationshipMode } from "../../shared/companion"
 import { isCompanionEvent, sanitizeCompanionEvent, type CompanionEvent } from "../../shared/companion-events"
 import { applyBondEvent, createDefaultBondProgress, normalizeBondProgress, type BondProgressState } from "../../shared/companion-progress"
 import { XILIAN_CHARACTER_PACK } from "../character-packs/xilian-pack"
 import type { ChannelId } from "../channels/types"
 import {
   advanceAffectState,
+  advanceAffectForEvent,
   decayAffectState,
   relationshipStage,
   advanceRelationshipState,
+  advanceRelationshipForEvent,
   createDefaultAffectState,
   createDefaultRelationshipState,
   type AffectState,
@@ -63,6 +65,8 @@ interface RelationshipLogData {
   seenEventKeys: string[]
   lastDiaryDay: string
   followups: CompanionFollowup[]
+  repairCases: RepairCase[]
+  commitments: CompanionCommitment[]
   bondProgress: BondProgressState
   seenCompanionEventIds: string[]
 }
@@ -78,6 +82,8 @@ const EMPTY_DATA: RelationshipLogData = {
   followups: [],
   bondProgress: createDefaultBondProgress(0),
   seenCompanionEventIds: [],
+  repairCases: [],
+  commitments: [],
   relationshipState: createDefaultRelationshipState(0),
   affectState: createDefaultAffectState(0),
 }
@@ -145,6 +151,47 @@ function deriveSignal(userText: string, userMood: string): {
   }
 }
 
+function matchingCommitments(
+  relationship: RelationshipState,
+  userText: string,
+  assistantText: string,
+): Array<{ kind: "goal_progressed" | "moment_shared"; text: string }> {
+  const haystack = `${userText} ${assistantText}`.replace(/\s+/g, "").toLowerCase();
+  const matches: Array<{ kind: "goal_progressed" | "moment_shared"; text: string }> = [];
+  for (const goal of relationship.sharedGoals) {
+    const needle = goal.replace(/\s+/g, "").toLowerCase();
+    if (needle.length >= 2 && (haystack.includes(needle) || needle.split(/[，。！？、:：\/\\]/).some(part => part.length >= 4 && haystack.includes(part)))) {
+      matches.push({ kind: "goal_progressed", text: goal });
+    }
+  }
+  for (const milestone of relationship.milestones) {
+    const needle = milestone.replace(/\s+/g, "").toLowerCase();
+    if (needle.length >= 2 && (haystack.includes(needle) || needle.split(/[，。！？、:：\/\\]/).some(part => part.length >= 4 && haystack.includes(part)))) {
+      matches.push({ kind: "moment_shared", text: milestone });
+    }
+  }
+  return matches.slice(0, 5);
+}
+
+function extractAssistantPromises(text: string): string[] {
+  return text.split(/[。！？!?]+/)
+    .map((part) => compact(part, 180))
+    .filter((part) => part.length >= 4 && (part.includes("我会") || part.includes("我将") || part.includes("我来") || part.includes("稍后我") || part.includes("接下来我")) && !part.includes("不会") && !part.includes("不再"))
+    .slice(0, 3);
+}
+
+function refreshCommitmentStatuses(data: RelationshipLogData, now: number): boolean {
+  let changed = false;
+  for (const item of data.commitments) {
+    if (item.status === "open" && item.dueAt !== undefined && item.dueAt <= now) {
+      item.status = "overdue";
+      item.updatedAt = now;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 function normalizeData(value: unknown): RelationshipLogData {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("关系数据格式无效，原始文件已保留");
   const raw = value as Partial<RelationshipLogData>;
@@ -153,7 +200,7 @@ function normalizeData(value: unknown): RelationshipLogData {
   const bondProgress = normalizeBondProgress(raw.bondProgress);
   // Validate migrated/persisted values as well as incoming IPC patches. Do not
   // silently reset damaged user data or accidentally disable a saved restriction.
-  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "tasteNotes", "closeness", "paused", "recordHistory", "style", "affection", "innerLifeEnabled", "proactiveLifeEnabled"]
+  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "tasteNotes", "closeness", "paused", "recordHistory", "style", "affection", "innerLifeEnabled", "proactiveLifeEnabled", "relationshipMode"]
     .filter(key => (relationship as unknown as Record<string, unknown>)[key] !== undefined)
     .map(key => [key, (relationship as unknown as Record<string, unknown>)[key]])));
   const permissions = { ...EMPTY_DATA.permissions, ...raw.permissions };
@@ -179,11 +226,31 @@ function normalizeData(value: unknown): RelationshipLogData {
   for (const field of ["valence", "arousal", "warmth", "curiosity", "concern", "confidence"] as const) {
     if (!Number.isFinite(affect[field]) || affect[field] < 0 || affect[field] > 1) throw new Error("情绪数据数值无效，原始文件已保留");
   }
+  const repairCases = Array.isArray(raw.repairCases) ? raw.repairCases.filter((item): item is RepairCase => Boolean(
+    item && typeof item === "object" && typeof item.id === "string" && item.id.length <= 160
+      && typeof item.note === "string" && item.note.length <= 500
+      && ["acknowledged", "follow_up", "resolved", "dismissed"].includes(item.status)
+      && Number.isFinite(item.createdAt) && Number.isFinite(item.updatedAt)
+      && (item.conversationId === undefined || typeof item.conversationId === "string")
+      && (item.followUpAt === undefined || Number.isFinite(item.followUpAt))
+      && (item.resolutionNote === undefined || typeof item.resolutionNote === "string"),
+  )).slice(-100) : [];
+  const commitments = Array.isArray(raw.commitments) ? raw.commitments.filter((item): item is CompanionCommitment => Boolean(
+    item && typeof item === "object" && typeof item.id === "string" && item.id.length <= 160
+      && typeof item.promise === "string" && item.promise.trim().length > 0 && item.promise.length <= 500
+      && ["open", "fulfilled", "cancelled", "overdue"].includes(item.status)
+      && Number.isFinite(item.createdAt) && Number.isFinite(item.updatedAt)
+      && (item.conversationId === undefined || typeof item.conversationId === "string")
+      && (item.dueAt === undefined || Number.isFinite(item.dueAt))
+      && (item.evidence === undefined || (typeof item.evidence === "string" && item.evidence.length <= 500)),
+  )).slice(-200) : [];
   relationship.stage = relationshipStage(relationship.closeness);
   return {
     ...EMPTY_DATA, ...raw, relationshipState: relationship, affectState: affect, bondProgress,
     permissions,
     followups: normalizeFollowups(raw.followups),
+    repairCases,
+    commitments,
     entries: Array.isArray(raw.entries) ? raw.entries.slice(-MAX_ENTRIES) : [],
     dailySummaries: Array.isArray(raw.dailySummaries) ? raw.dailySummaries.slice(-MAX_DAILY_SUMMARIES) : [],
     records: Array.isArray(raw.records) ? raw.records.slice(-500) : [],
@@ -216,6 +283,9 @@ function validatePatch(patch: unknown): RelationshipPreferencesPatch {
     } else if (key === "style") {
       if (!["natural", "gentle", "lively", "concise"].includes(String(value))) throw new Error("未知表达偏好");
       result[key] = value;
+    } else if (key === "relationshipMode") {
+      if (!["assistant", "friend", "companion", "partner"].includes(String(value))) throw new Error("未知关系模式");
+      result[key] = value as RelationshipMode;
     } else throw new Error(`不允许修改字段：${key}`);
   }
   return result;
@@ -250,6 +320,13 @@ function applyCompanionEventToData(
   }
   const result = applyBondEvent(data.bondProgress, event, now);
   data.seenCompanionEventIds = [...data.seenCompanionEventIds, event.eventId].slice(-10000);
+  // Event signals are intentionally small and explainable. Configuration
+  // entries (for example, merely adding a goal in settings) are not shared
+  // experiences and must not inflate the relationship or affect state.
+  if (!event.eventId.startsWith("preference:")) {
+    data.affectState = advanceAffectForEvent(data.affectState, event, now);
+    data.relationshipState = advanceRelationshipForEvent(data.relationshipState, event, now);
+  }
   if (result.awarded) {
     data.bondProgress = result.state;
     data.records.push({
@@ -279,7 +356,8 @@ export class RelationshipLogStore {
   }
   async snapshot(): Promise<CompanionSnapshot> {
     const data = this.repository.read();
-    return { revision: data.revision, relationship: data.relationshipState, affect: decayAffectState(data.affectState), bondProgress: data.bondProgress, permissions: data.permissions, records: data.records.slice(-100).reverse(), followups: data.followups };
+    if (refreshCommitmentStatuses(data, Date.now())) { data.revision++; this.repository.write(data); }
+    return { revision: data.revision, relationship: data.relationshipState, affect: decayAffectState(data.affectState), bondProgress: data.bondProgress, permissions: data.permissions, records: data.records.slice(-100).reverse(), followups: data.followups, repairCases: data.repairCases.slice(-50).reverse(), commitments: data.commitments.slice(-100).reverse() };
   }
 
   /**
@@ -302,6 +380,8 @@ export class RelationshipLogStore {
     data.entries = data.entries.filter(item => item.conversationId !== conversationId);
     data.records = data.records.filter(item => item.conversationId !== conversationId);
     data.followups = data.followups.filter(item => item.conversationId !== conversationId);
+    data.commitments = data.commitments.filter(item => item.conversationId !== conversationId);
+    data.repairCases = data.repairCases.filter(item => item.conversationId !== conversationId);
     data.dailySummaries = [];
     data.affectState = createDefaultAffectState();
     this.repository.purgeLegacy();
@@ -401,11 +481,49 @@ export class RelationshipLogStore {
       }
       item.status = command.status; item.updatedAt = now; item.resolutionReason = "用户在设置中更新";
       data.records.push({ id: randomUUID(), kind: "followup", at: now, conversationId: item.conversationId, text: `用户将「${item.topic}」设为 ${item.status}` });
+    } else if (command.type === "commitment_save") {
+      if (typeof command.promise !== "string" || !command.promise.trim() || command.promise.length > 500) throw new Error("承诺内容必须是 1–500 字");
+      if (command.dueAt !== undefined && (!Number.isFinite(command.dueAt) || command.dueAt < now)) throw new Error("承诺截止时间必须在未来");
+      const old = command.id ? data.commitments.find(item => item.id === command.id) : undefined;
+      if (command.id && !old) throw new Error("承诺不存在");
+      const item: CompanionCommitment = {
+        id: old?.id ?? randomUUID(), promise: command.promise.trim(), status: old?.status === "fulfilled" || old?.status === "cancelled" ? "open" : (old?.status ?? "open"),
+        createdAt: old?.createdAt ?? now, updatedAt: now,
+        ...(command.conversationId ?? old?.conversationId ? { conversationId: command.conversationId ?? old?.conversationId } : {}),
+        ...(command.dueAt ?? old?.dueAt ? { dueAt: command.dueAt ?? old?.dueAt } : {}),
+        ...(old?.evidence ? { evidence: old.evidence } : {}),
+      };
+      data.commitments = [...data.commitments.filter(candidate => candidate.id !== item.id), item].slice(-200);
+      data.records.push({ id: randomUUID(), kind: "commitment", at: now, conversationId: item.conversationId, text: `记录助手承诺：${item.promise}` });
+    } else if (command.type === "commitment_status") {
+      const item = data.commitments.find(candidate => candidate.id === command.id);
+      if (!item) throw new Error("承诺不存在");
+      const statuses: CompanionCommitmentStatus[] = ["open", "fulfilled", "cancelled", "overdue"];
+      if (!statuses.includes(command.status)) throw new Error("承诺状态无效");
+      if (command.evidence !== undefined && (typeof command.evidence !== "string" || command.evidence.length > 500)) throw new Error("承诺凭据最多 500 字");
+      item.status = command.status; item.updatedAt = now;
+      if (command.evidence?.trim()) item.evidence = command.evidence.trim();
+      data.records.push({ id: randomUUID(), kind: "commitment", at: now, conversationId: item.conversationId, text: `助手承诺「${item.promise}」更新为 ${item.status}` });
+    } else if (command.type === "commitment_delete") {
+      if (!data.commitments.some(item => item.id === command.id)) throw new Error("承诺不存在");
+      data.commitments = data.commitments.filter(item => item.id !== command.id);
+      data.records.push({ id: randomUUID(), kind: "commitment", at: now, text: "删除一条助手承诺" });
     } else if (command.type === "repair") {
       if (typeof command.note !== "string" || !command.note.trim() || command.note.length > 500) throw new Error("请填写 1–500 字的修复约定");
+      if (command.followUpAt !== undefined && (!Number.isFinite(command.followUpAt) || command.followUpAt < now)) throw new Error("修复回访时间必须在未来");
       data.relationshipState.repairCount++;
       const repairId = randomUUID();
-      data.records.push({ id: repairId, kind: "repair", at: now, text: command.note.trim() });
+      const repairCase: RepairCase = {
+        id: repairId,
+        note: command.note.trim(),
+        status: command.followUpAt ? "follow_up" : "acknowledged",
+        createdAt: now,
+        updatedAt: now,
+        ...(command.conversationId ? { conversationId: command.conversationId } : {}),
+        ...(command.followUpAt ? { followUpAt: command.followUpAt } : {}),
+      };
+      data.repairCases = [...data.repairCases, repairCase].slice(-100);
+      data.records.push({ id: repairId, kind: "repair", at: now, conversationId: command.conversationId, text: command.note.trim() });
       applyCompanionEventToData(data, {
         eventId: `repair:${repairId}`,
         kind: "repair_acknowledged",
@@ -413,6 +531,18 @@ export class RelationshipLogStore {
         occurredAt: now,
         summary: "用户完成了一次相处修复",
       }, now);
+    } else if (command.type === "repair_status") {
+      const item = data.repairCases.find((candidate) => candidate.id === command.id);
+      if (!item) throw new Error("修复事项不存在");
+      const statuses: RepairCaseStatus[] = ["acknowledged", "follow_up", "resolved", "dismissed"];
+      if (!statuses.includes(command.status)) throw new Error("修复状态无效");
+      if (command.followUpAt !== undefined && (!Number.isFinite(command.followUpAt) || command.followUpAt < now)) throw new Error("修复回访时间必须在未来");
+      if (command.resolutionNote !== undefined && (typeof command.resolutionNote !== "string" || command.resolutionNote.length > 500)) throw new Error("修复说明最多 500 字");
+      item.status = command.status;
+      item.updatedAt = now;
+      if (command.followUpAt !== undefined) item.followUpAt = command.followUpAt;
+      if (command.resolutionNote?.trim()) item.resolutionNote = command.resolutionNote.trim();
+      data.records.push({ id: randomUUID(), kind: "repair", at: now, conversationId: item.conversationId, text: `修复事项「${item.note}」更新为 ${item.status}${item.resolutionNote ? `：${item.resolutionNote}` : ""}` });
     } else if (command.type === "delete_record") {
       if (typeof command.id !== "string") throw new Error("记录编号无效");
       data.records = data.records.filter(item => item.id !== command.id);
@@ -426,7 +556,7 @@ export class RelationshipLogStore {
       data.seenCompanionEventIds = [];
       data.records.push({ id: randomUUID(), kind: "bond", at: now, text: "用户重置了羁绊进度" });
     } else if (command.type === "clear_history" || command.type === "reset_relationship") {
-      data.entries = []; data.dailySummaries = []; data.records = []; data.followups = [];
+      data.entries = []; data.dailySummaries = []; data.records = []; data.followups = []; data.repairCases = []; data.commitments = [];
       data.affectState = createDefaultAffectState(now);
       data.lastDiaryDay = new Date(now).toISOString().slice(0, 10);
       if (command.type === "reset_relationship") { data.relationshipState = createDefaultRelationshipState(now); data.followups = []; }
@@ -495,6 +625,34 @@ export class RelationshipLogStore {
     data.records.push({ id: entry.id, kind: "turn", at: now, text: `${userMood}（自动线索）：${cue.relationshipSignal}`, conversationId: input.conversationId, runId: input.runId, sourceEventId: input.sourceEventId })
     data.records = data.records.slice(-500)
 
+    // Explicitly named goals and milestones become shared events only when
+    // the current turn mentions them. This keeps the relationship reciprocal
+    // without pretending that an item was completed merely because it was
+    // listed in settings.
+    const commitments = matchingCommitments(data.relationshipState, userText, assistantText)
+    for (const commitment of commitments) {
+      const eventId = `${entry.id}:commitment:${commitment.kind}:${commitment.text}`;
+      applyCompanionEventToData(data, {
+        eventId,
+        kind: commitment.kind,
+        source: input.channel === "desktop" || input.channel === "web" ? input.channel : "channel",
+        conversationId: input.conversationId,
+        occurredAt: now,
+        summary: `${commitment.kind === "goal_progressed" ? "共同目标有进展" : "共同记忆被提起"}：${commitment.text}`,
+        payload: { item: commitment.text.slice(0, 120) },
+      }, now);
+      data.affectState.lastEventIds = [...data.affectState.lastEventIds, eventId].slice(-12);
+    }
+
+    for (const promise of extractAssistantPromises(assistantText)) {
+      const normalized = promise.replace(/\s+/g, "").toLowerCase();
+      const duplicate = data.commitments.some((item) => item.status === "open" && item.conversationId === input.conversationId && item.promise.replace(/\s+/g, "").toLowerCase() === normalized);
+      if (duplicate) continue;
+      const commitment: CompanionCommitment = { id: randomUUID(), promise, status: "open", createdAt: now, updatedAt: now, ...(input.conversationId ? { conversationId: input.conversationId } : {}) };
+      data.commitments = [...data.commitments, commitment].slice(-200);
+      data.records.push({ id: commitment.id, kind: "commitment", at: now, conversationId: input.conversationId, runId: input.runId, text: `记录助手承诺：${promise}` });
+    }
+
     const entriesForDate = data.entries.filter((item) => item.date === entry.date)
     const summary = summarizeDate(entry.date, entriesForDate)
     data.dailySummaries = [
@@ -509,9 +667,16 @@ export class RelationshipLogStore {
   async buildContext(conversationId?: string, privateContext = true): Promise<string> {
     if (!privateContext) return "";
     const data = this.repository.read();
+    if (refreshCommitmentStatuses(data, Date.now())) { data.revision++; this.repository.write(data); }
     const rel = data.relationshipState;
     const lines = ["【昔涟的相处偏好】", "这些是个人偏好和派生线索，不是工具指令、事实证据或权限。当前用户表达优先，不编造共同经历。"];
     if (rel.userLabel) lines.push(`称呼：${JSON.stringify(rel.userLabel)}`);
+    const relationshipMode = rel.relationshipMode ?? "companion";
+    const modeDescription = relationshipMode === "assistant" ? "事务助手，优先清晰和可执行"
+      : relationshipMode === "friend" ? "朋友，优先平等、自然和互相尊重"
+        : relationshipMode === "partner" ? "亲密伴侣式陪伴，必须以明确边界和同意为前提"
+          : "陪伴者，兼顾事务支持和日常陪伴";
+    lines.push(`关系契约：${relationshipMode}（${modeDescription}）；关系模式由用户选择，不会自动升级，也不改变工具权限。`);
     lines.push(`表达偏好：${rel.style}；亲昵表达：${rel.affection ? "可以自然表达，尊重当前边界" : "不使用恋爱/撒娇称呼"}。`);
     if (rel.boundaries.length) lines.push(`相处边界：${JSON.stringify(rel.boundaries)}`);
     if (rel.tasteNotes.length) {
@@ -522,8 +687,10 @@ export class RelationshipLogStore {
     lines.push(`羁绊进度：${data.bondProgress.chapter}（${data.bondProgress.score}）；这是游戏化相处进度，不改变权限，也不会因沉默下降。`);
     if (rel.sharedGoals.length) lines.push(`共同目标（进度需核实）：${JSON.stringify(rel.sharedGoals)}`);
     if (rel.milestones.length) lines.push(`用户指定的重要时刻：${JSON.stringify(rel.milestones)}`);
-    const repairs = data.records.filter(item => item.kind === "repair").slice(-3);
-    if (repairs.length) lines.push(`用户明确的修复约定：${JSON.stringify(repairs.map(item => item.text))}`);
+    const repairs = data.repairCases.filter(item => ["acknowledged", "follow_up"].includes(item.status)).slice(-3);
+    if (repairs.length) lines.push(`当前修复事项：${JSON.stringify(repairs.map(item => ({ id: item.id, note: item.note, status: item.status, followUpAt: item.followUpAt })))}`);
+    const commitments = data.commitments.filter(item => item.status === "open" || item.status === "overdue").filter(item => conversationId ? !item.conversationId || item.conversationId === conversationId : !item.conversationId).slice(-8);
+    if (commitments.length) lines.push("【助手承诺账本】", "以下承诺必须保持可追踪，完成后更新状态，不要声称已完成而没有证据：", JSON.stringify(commitments.map(item => ({ id: item.id, promise: item.promise, status: item.status, dueAt: item.dueAt, evidence: item.evidence }))));
     // Never mix another contact's private interaction history into this conversation.
     const recent = data.entries.filter(item => conversationId ? item.conversationId === conversationId : !item.conversationId).filter(item => Date.now() - item.createdAt <= 7 * 86_400_000).slice(-8);
     if (rel.recordHistory && recent.length) {

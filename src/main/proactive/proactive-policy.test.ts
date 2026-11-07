@@ -61,6 +61,23 @@ describe("proactive hard policy", () => {
     expect(canStartProactiveGeneration(snapshot(), state, candidate()).allowed).toBe(true);
   });
 
+  it("honors the configured quiet window and daily message budget", () => {
+    const state = createDefaultProactiveState();
+    const c = candidate();
+    expect(canStartProactiveGeneration(snapshot({ localHour: 23, localMinute: 10, quietStartMinute: 22 * 60, quietEndMinute: 8 * 60 }), state, c).reason)
+      .toBe("custom_quiet_period");
+    const budgeted = { ...state, dailyMessageDate: "2026-11-08", dailyMessageCount: 2 };
+    expect(canStartProactiveGeneration(snapshot({ localDate: "2026-11-08", dailyLimit: 2 }), budgeted, c).reason)
+      .toBe("daily_limit");
+    expect(canStartProactiveGeneration(snapshot({ localDate: "2026-11-09", dailyLimit: 2 }), budgeted, c).allowed).toBe(true);
+    markProactiveCommitted(state, c, NOW, "2026-11-08");
+    markProactiveCommitted(state, c, NOW + 1, "2026-11-08");
+    expect(state.dailyMessageCount).toBe(2);
+    markProactiveCommitted(state, c, NOW + 2, "2026-11-09");
+    expect(state.dailyMessageDate).toBe("2026-11-09");
+    expect(state.dailyMessageCount).toBe(1);
+  });
+
   it("blocks inactive nights but allows a recently active night", () => {
     const state = createDefaultProactiveState();
     expect(canStartProactiveGeneration(snapshot({ localHour: 23, idleSec: 60 }), state, candidate()).reason)

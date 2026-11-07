@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { buildChannelAttachmentInputs } from "./agent-input";
+import { buildChannelAttachmentInputs, formatChannelAttachmentContext } from "./agent-input";
 import type { IncomingMessage } from "./types";
 
 describe("buildChannelAttachmentInputs", () => {
+  it("formats non-image inputs for the headless Web model without changing visible text", () => {
+    expect(formatChannelAttachmentContext([{ name: "a.txt", text: "用户通过微信发送了文件：/tmp/a.txt" }])).toBe(
+      "【本轮附件内容】\n--- a.txt ---\n用户通过微信发送了文件：/tmp/a.txt",
+    );
+    expect(formatChannelAttachmentContext(undefined)).toBe("");
+  });
+
   it("maps downloaded channel images to direct image attachments and files to context attachments", async () => {
     const msg: IncomingMessage = {
       channel: "wechat",
