@@ -15,6 +15,36 @@ interface ProxyTrace {
   response?: { status: number; body: string };
 }
 
+function summarizeUpstreamResponse(raw: string): string {
+  const lines = raw.split(/\r?\n/u).map(line => line.trim()).filter(Boolean);
+  const candidates = [...lines.filter(line => line.startsWith("data:")), raw];
+  for (const candidate of candidates) {
+    const payload = candidate.startsWith("data:") ? candidate.slice(5).trim() : candidate;
+    if (!payload || payload === "[DONE]") continue;
+    try {
+      const value = JSON.parse(payload) as Record<string, any>;
+      const response = value.response && typeof value.response === "object" ? value.response : value;
+      const error = response.error && typeof response.error === "object" ? response.error : undefined;
+      if (error || response.status === "failed" || response.status === "incomplete") {
+        return JSON.stringify({
+          type: value.type,
+          status: response.status,
+          error: error ? {
+            type: error.type,
+            code: error.code,
+            message: error.message,
+            param: error.param,
+          } : undefined,
+        });
+      }
+    } catch {
+      // The proxy may receive a partial SSE frame. Keep searching without
+      // retaining the provider response body in the trace.
+    }
+  }
+  return "stream completed";
+}
+
 async function startForwarder(upstreamBase: string): Promise<{ base: string; trace: ProxyTrace; server: Server }> {
   const trace: ProxyTrace = {};
   const server = createServer(async (request, response) => {
@@ -53,7 +83,7 @@ async function startForwarder(upstreamBase: string): Promise<{ base: string; tra
         }
       }
       response.end();
-      trace.response = { status: upstream.status, body: responseBody.slice(0, 40_000) };
+      trace.response = { status: upstream.status, body: summarizeUpstreamResponse(responseBody) };
     } catch (error) {
       response.writeHead(502, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: { message: error instanceof Error ? error.message : String(error) } }));
@@ -83,6 +113,8 @@ describe("Linux Web real Xilian image request", () => {
   });
 
   testLive("runs authenticated Web input through Responses image generation and persists the result", async () => {
+    // These variables are test-only inputs. The Web runtime receives its model
+    // profile through /api/model-profiles and never reads the host Codex config.
     const upstreamBase = process.env.CYRENE_LIVE_IMAGE_UPSTREAM;
     const apiKey = process.env.CYRENE_LIVE_IMAGE_API_KEY;
     if (!upstreamBase || !apiKey) throw new Error("缺少 CYRENE_LIVE_IMAGE_UPSTREAM 或 CYRENE_LIVE_IMAGE_API_KEY");
