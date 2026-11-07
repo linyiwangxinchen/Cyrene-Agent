@@ -209,6 +209,25 @@ function eventVisibility(kind: XilianWorldActivityKind, status: XilianTimelineEv
   return "shareable";
 }
 
+function closePastSimulatedEvents(
+  timeline: readonly XilianTimelineEvent[],
+  dateKey: string,
+): { events: XilianTimelineEvent[]; newlyCompleted: XilianTimelineEvent[] } {
+  const events: XilianTimelineEvent[] = [];
+  const newlyCompleted: XilianTimelineEvent[] = [];
+  for (const event of timeline) {
+    if (event.source !== "simulated_world" || event.dateKey >= dateKey) continue;
+    if (event.status === "active") {
+      const completed = { ...event, status: "completed" as const, visibility: event.visibility === "shared" ? "shared" as const : eventVisibility(event.activityKind, "completed") };
+      events.push(completed);
+      newlyCompleted.push(completed);
+    } else if (event.status === "planned") {
+      events.push({ ...event, status: "interrupted", visibility: event.visibility === "shared" ? "shared" : eventVisibility(event.activityKind, "interrupted") });
+    }
+  }
+  return { events, newlyCompleted };
+}
+
 function makeEvent(
   input: XilianScheduleInput,
   block: XilianTimeBlock,
@@ -295,17 +314,25 @@ function activeArcForGoals(goals: readonly XilianLifeGoal[]): XilianWorldArcId {
   return "lighting";
 }
 
-function nextPlannedEvent(input: XilianScheduleInput, block: XilianTimeBlock, parts: ZonedDateParts, signals: XilianCompanionSignals, previousEventId?: string): XilianTimelineEvent {
-  const dateKey = getXilianDateKey(new Date(input.now), input.timezone);
-  const kind = chooseActivityKind(block, signals, `${dateKey}:${input.state.dayIndex}:${block.id}:${input.state.activeArcId}`);
-  const locationId = chooseLocation(kind, `${dateKey}:${input.state.dayIndex}:${block.id}:${kind}`);
+function nextPlannedEvent(
+  input: XilianScheduleInput,
+  block: XilianTimeBlock,
+  parts: ZonedDateParts,
+  signals: XilianCompanionSignals,
+  previousEventId?: string,
+  options: { dateKey?: string; dayIndex?: number; minutesUntil?: number } = {},
+): XilianTimelineEvent {
+  const dateKey = options.dateKey ?? getXilianDateKey(new Date(input.now), input.timezone);
+  const dayIndex = options.dayIndex ?? input.state.dayIndex;
+  const kind = chooseActivityKind(block, signals, `${dateKey}:${dayIndex}:${block.id}:${input.state.activeArcId}`);
+  const locationId = chooseLocation(kind, `${dateKey}:${dayIndex}:${block.id}:${kind}`);
   const location = getXilianLocation(locationId) ?? XILIAN_LOCATIONS[0]!;
-  const scene = chooseScene(kind, `${dateKey}:${input.state.dayIndex}:${block.id}:${locationId}:${kind}`);
+  const scene = chooseScene(kind, `${dateKey}:${dayIndex}:${block.id}:${locationId}:${kind}`);
   return {
     id: `xilian:${dateKey}:${block.id}`,
     dateKey,
     slotId: block.id,
-    occurredAt: input.now + Math.max(0, block.startMinute - localMinute(parts)) * 60_000,
+    occurredAt: input.now + (options.minutesUntil ?? Math.max(0, block.startMinute - localMinute(parts))) * 60_000,
     locationId: location.id,
     activityKind: kind,
     activityTitle: scene.title,
@@ -349,8 +376,9 @@ export function reconcileXilianWorld(input: XilianScheduleInput): XilianSchedule
     nextPlannedEvent: undefined,
   };
   const existingById = new Map(input.timeline.map((event) => [event.id, event]));
-  const changedEvents: XilianTimelineEvent[] = [];
-  const newlyCompleted: XilianTimelineEvent[] = [];
+  const closedPast = closePastSimulatedEvents(input.timeline, dateKey);
+  const changedEvents: XilianTimelineEvent[] = [...closedPast.events];
+  const newlyCompleted: XilianTimelineEvent[] = [...closedPast.newlyCompleted];
   const materialized: XilianTimelineEvent[] = [];
 
   for (const block of XILIAN_TIME_BLOCKS) {
@@ -365,15 +393,19 @@ export function reconcileXilianWorld(input: XilianScheduleInput): XilianSchedule
   const currentBlock = getCurrentXilianTimeBlock(minute);
   const current = currentBlock ? materialized.find((event) => event.slotId === currentBlock.id) : undefined;
   const previous = materialized.at(-1);
-  const nextBlock = currentBlock
+  const upcomingBlock = currentBlock
     ? XILIAN_TIME_BLOCKS.find((block) => block.startMinute > currentBlock.startMinute && block.startMinute > minute)
     : XILIAN_TIME_BLOCKS.find((block) => block.startMinute > minute);
+  const nextBlock = upcomingBlock ?? (currentBlock?.id === "night" ? XILIAN_TIME_BLOCKS.find((block) => block.id === "dawn") : undefined);
+  const nextDateKey = upcomingBlock ? dateKey : nextBlock ? getXilianDateKey(new Date(input.now + 86_400_000), input.timezone) : dateKey;
+  const plannedDayIndex = upcomingBlock ? nextDayIndex : nextBlock ? nextDayIndex + 1 : nextDayIndex;
+  const minutesUntilNext = upcomingBlock ? Math.max(0, upcomingBlock.startMinute - minute) : nextBlock ? 1_440 - minute + nextBlock.startMinute : 0;
   const goals = updateGoals(input.state.goals, [...input.timeline, ...changedEvents], newlyCompleted, input.now);
   const state: XilianWorldState = {
     ...stateBase,
     currentLocationId: current?.locationId ?? previous?.locationId ?? input.state.currentLocationId,
     ...(current ? { currentActivity: current } : previous ? { currentActivity: previous } : {}),
-    ...(nextBlock ? { nextPlannedEvent: nextPlannedEvent({ ...input, state: { ...stateBase, goals } }, nextBlock, parts, signals, current?.id ?? previous?.id) } : {}),
+    ...(nextBlock ? { nextPlannedEvent: nextPlannedEvent({ ...input, state: { ...stateBase, goals } }, nextBlock, parts, signals, current?.id ?? previous?.id, { dateKey: nextDateKey, dayIndex: plannedDayIndex, minutesUntil: minutesUntilNext }) } : {}),
     goals,
     activeArcId: activeArcForGoals(goals),
     recentEventIds: [...new Set([...input.state.recentEventIds, ...materialized.map((event) => event.id)])].slice(-24),

@@ -36,6 +36,7 @@ describe("XilianWorldStore", () => {
       activityKind: "social" as const,
       activityTitle: "听到一条消息",
       summary: "一条可回放的事件",
+      diaryText: "今天和阿沅在序页城交换了消息，回来的路上买了一块栗子饼。",
       mood: "好奇",
       energyAfter: 60,
       status: "completed" as const,
@@ -45,6 +46,7 @@ describe("XilianWorldStore", () => {
     expect(store.appendEvent(event)).toEqual(event);
     expect(store.appendEvent(event)).toEqual(event);
     expect(store.queryTimeline({ from: 0, to: 2_000, order: "asc" }).filter((item) => item.id === event.id)).toHaveLength(1);
+    expect(store.queryDiary({ dateKey: "1970-01-01", order: "asc" })).toMatchObject([{ eventId: event.id, text: event.diaryText }]);
   });
 
   it("binds one selfie artifact to one event and allows retry after failure", () => {

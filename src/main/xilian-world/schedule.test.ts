@@ -40,7 +40,17 @@ describe("xilian schedule", () => {
     const second = reconcileXilianWorld({ state: first.state, timeline: first.events, now: dayTwo, timezone: "UTC" });
     expect(second.state.worldDate).toBe("2026-11-08");
     expect(second.state.dayIndex).toBe(2);
-    expect(second.events.every((event) => event.dateKey === "2026-11-08")).toBe(true);
+    expect(second.events.some((event) => event.dateKey === "2026-11-07" && event.status === "completed")).toBe(true);
+    expect(second.events.some((event) => event.dateKey === "2026-11-08")).toBe(true);
     expect(second.state.recentEventIds).toEqual(expect.arrayContaining(first.events.map((event) => event.id)));
+  });
+
+  it("keeps the next morning visible after the night block", () => {
+    const now = new Date("2026-11-07T23:30:00.000Z").getTime();
+    const initial = createDefaultXilianWorldData("2026-11-07", now);
+    const result = reconcileXilianWorld({ state: initial.state, timeline: [], now, timezone: "UTC" });
+    expect(result.state.currentActivity?.slotId).toBe("night");
+    expect(result.state.nextPlannedEvent).toMatchObject({ dateKey: "2026-11-08", slotId: "dawn", status: "planned" });
+    expect(result.state.nextPlannedEvent!.occurredAt).toBe(new Date("2026-11-08T06:00:00.000Z").getTime());
   });
 });

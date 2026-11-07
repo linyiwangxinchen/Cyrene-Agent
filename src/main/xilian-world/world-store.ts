@@ -168,6 +168,22 @@ function normalizeGoal(value: unknown, fallback: typeof XILIAN_DEFAULT_GOALS[num
   } as XilianWorldState["goals"][number];
 }
 
+function diaryEntryForEvent(event: XilianTimelineEvent): XilianDiaryEntry | null {
+  if (event.status !== "completed" || !event.diaryText) return null;
+  return {
+    id: `diary:${event.id}`,
+    eventId: event.id,
+    dateKey: event.dateKey,
+    writtenAt: event.occurredAt,
+    title: event.activityTitle,
+    text: event.diaryText,
+    mood: event.mood,
+    locationId: event.locationId,
+    visibility: event.visibility,
+    source: event.source === "user_interaction" ? "user_interaction" : "life_event",
+  };
+}
+
 function normalizeState(value: unknown, dateKey: string, now: number): XilianWorldState {
   const raw = value && typeof value === "object" && !Array.isArray(value) ? value as Partial<XilianWorldState> : {};
   const fallback = createDefaultXilianWorldData(dateKey, now).state;
@@ -273,20 +289,8 @@ export class XilianWorldStore {
     data.timeline = [...byId.values()].sort((a, b) => a.occurredAt - b.occurredAt).slice(-MAX_TIMELINE_EVENTS);
     const diaryById = new Map(data.diary.map((entry) => [entry.id, entry]));
     for (const event of result.events) {
-      if (event.status !== "completed" || !event.diaryText) continue;
-      const entry: XilianDiaryEntry = {
-        id: `diary:${event.id}`,
-        eventId: event.id,
-        dateKey: event.dateKey,
-        writtenAt: event.occurredAt,
-        title: event.activityTitle,
-        text: event.diaryText,
-        mood: event.mood,
-        locationId: event.locationId,
-        visibility: event.visibility,
-        source: "life_event",
-      };
-      diaryById.set(entry.id, entry);
+      const entry = diaryEntryForEvent(event);
+      if (entry) diaryById.set(entry.id, entry);
     }
     data.diary = [...diaryById.values()].sort((a, b) => a.writtenAt - b.writtenAt).slice(-MAX_TIMELINE_EVENTS);
     data.state = result.state;
@@ -299,6 +303,8 @@ export class XilianWorldStore {
     const existing = data.timeline.find((candidate) => candidate.id === event.id);
     if (existing) return clone(existing);
     data.timeline = [...data.timeline, clone(event)].sort((a, b) => a.occurredAt - b.occurredAt).slice(-MAX_TIMELINE_EVENTS);
+    const entry = diaryEntryForEvent(event);
+    if (entry) data.diary = [...data.diary.filter((candidate) => candidate.id !== entry.id), entry].sort((a, b) => a.writtenAt - b.writtenAt).slice(-MAX_TIMELINE_EVENTS);
     data.state = { ...data.state, recentEventIds: [...new Set([...data.state.recentEventIds, event.id])].slice(-24), revision: data.state.revision + 1 };
     this.save(data);
     return clone(event);

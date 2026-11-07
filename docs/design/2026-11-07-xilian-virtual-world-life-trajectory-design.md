@@ -353,7 +353,7 @@ Windows main / Linux headless / Web model service
 
 ### Phase 1：世界状态和事件存储
 
-- 扩展 `CompanionLifeData` 到 version 3。
+- 将独立的 `XilianWorldData` 固定为 version 2，并保留 `CompanionLifeData` 的兼容迁移边界。
 - 新增 `XilianWorldStore`，实现迁移、原子写入、事件去重和时间线查询。
 - 新增确定性日期种子和世界日推进。
 - 覆盖重启、跨日、重复事件、损坏文件和旧 version 迁移。
