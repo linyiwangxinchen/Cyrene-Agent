@@ -106,6 +106,7 @@ describe("build-options", () => {
 
   it("启用图片生成时注入昔涟稳定视觉锚点", async () => {
     const deps = createBuildDeps();
+    deps.buildXilianSelfieContext = () => "地点：星炉台；正在做：维护一盏小灯；拍摄原因：想留下完成感";
     deps.loadModelSettings = () => ({
       provider: "ChatGPT", baseUrl: "https://proxy.test/v1", model: "gpt-6-astra", apiKey: "k",
       explicitTransport: "responses", imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" },
@@ -119,6 +120,20 @@ describe("build-options", () => {
     expect(result.options.soulRuntimeContext).toContain("[昔涟图片生成约束]");
     expect(result.options.soulRuntimeContext).toContain("粉白色长发");
     expect(result.options.soulRuntimeContext).toContain("只保留昔涟一人");
+    expect(result.options.soulRuntimeContext).toContain("拍摄原因：想留下完成感");
+  });
+
+  it("把只读的虚拟生活快照放入当前轮上下文", async () => {
+    const deps = createBuildDeps();
+    deps.buildXilianLifeContext = () => "【昔涟虚拟生活快照】\n地点：星炉台\n正在做：维护一盏小灯";
+    const result = await buildAgentRunOptions({
+      sessionId: "xilian-life-context",
+      mode: "chat",
+      executionMode: "chat",
+      messages: [{ role: "user", content: "你刚才在做什么？" }],
+    }, deps);
+    expect(result.options.soulRuntimeContext).toContain("地点：星炉台");
+    expect(result.options.soulRuntimeContext).toContain("正在做：维护一盏小灯");
   });
 
   it("把全局模型重试设置冻结进聊天运行配置，旧设置默认为 5", async () => {

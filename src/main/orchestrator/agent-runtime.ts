@@ -48,6 +48,9 @@ import {
 } from "./build-options";
 import { buildModelContext } from "./conversation-transcript-context";
 import { getConversationTranscriptStore } from "./conversation-transcript-store";
+import { resolveChatContextTimezone } from "../chat-time-context";
+import { buildXilianLifeSnapshot, buildXilianSelfiePrompt, formatXilianLifeContext } from "../proactive/xilian-life-context";
+import { getSharedXilianWorldStore } from "../proactive/xilian-world-store";
 import { createGeneratedImageStore } from "../chats/generated-image-store";
 import { getHarnessRunStore } from "./harness/run-store";
 import { ConversationTranscriptCompactor } from "./conversation-transcript-compactor";
@@ -128,6 +131,7 @@ export interface AgentRuntime {
 
 export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
   const runtimeStateService = rawDeps.runtimeStateService;
+  const xilianWorldStore = getSharedXilianWorldStore(path.join(app.getPath("userData"), "xilian-world.json"));
   const transcriptStore = getConversationTranscriptStore(app.getPath("userData"));
   const generatedImageStore = createGeneratedImageStore({
     rootDirectory: path.join(app.getPath("userData"), "chat-media", "generated-images"),
@@ -211,6 +215,31 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       buildToneInjection: (() => buildToneInjection()) as BuildOptionsDeps["buildToneInjection"],
       buildAlwaysOnContext: ((userText, messages) =>
         buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
+      buildXilianLifeContext: () => {
+        try {
+          const now = Date.now();
+          const timezone = resolveChatContextTimezone(rawDeps.loadUserProfile().timezone);
+          const state = xilianWorldStore.advance({ now, timezone });
+          const timeline = xilianWorldStore.queryTimeline({ dateKey: state.worldDate, order: "desc", limit: 8 });
+          return formatXilianLifeContext(buildXilianLifeSnapshot({ state, timeline, now, timezone }));
+        } catch (error) {
+          console.warn("[XilianWorld] 构建桌面生活上下文失败，已降级为空", error);
+          return "";
+        }
+      },
+      buildXilianSelfieContext: (userText) => {
+        try {
+          const now = Date.now();
+          const timezone = resolveChatContextTimezone(rawDeps.loadUserProfile().timezone);
+          const state = xilianWorldStore.advance({ now, timezone });
+          const timeline = xilianWorldStore.queryTimeline({ dateKey: state.worldDate, order: "desc", limit: 8 });
+          const snapshot = buildXilianLifeSnapshot({ state, timeline, now, timezone });
+          return `${buildXilianSelfiePrompt(snapshot)}\n用户请求：${userText.slice(0, 500)}`;
+        } catch (error) {
+          console.warn("[XilianWorld] 构建自拍生活上下文失败，已降级为稳定视觉约束", error);
+          return "";
+        }
+      },
       buildRelationshipContext,
       buildModePrompt,
       buildToolSystemPrompt: ((mode, enabledTools) =>

@@ -64,6 +64,8 @@ describe("headless model service", () => {
       type: "image_generation", model: "gpt-image-2.5-flare",
     }));
     expect(JSON.stringify(f.requests[0].body)).toContain("昔涟图片生成约束");
+    expect(JSON.stringify(f.requests[0].body)).toContain("拍摄原因");
+    expect(JSON.stringify(f.requests[0].body)).toContain("正在做");
   });
   it.each(["openai", "anthropic", "responses"] as const)("uses the %s protocol, selected profile/model, and one copy of the user turn", async transport => {
     const f = await fixture(transport);

@@ -18,6 +18,8 @@ import { WebFeatureStore, type WebFeatureData } from "./web-feature-store";
 import type { WebSettings } from "./web-store";
 import { XILIAN_PERSONA_SPEC } from "../main/persona/persona-spec";
 import { XILIAN_IMAGE_GENERATION_PROMPT } from "../main/persona/xilian-image-prompt";
+import { createXilianWorldStore } from "../main/proactive/xilian-world-store";
+import { buildXilianLifeSnapshot, buildXilianSelfiePrompt, formatXilianLifeContext } from "../main/proactive/xilian-life-context";
 import type { RelationshipPreferencesPatch } from "../main/relationship/relationship-log-core";
 
 /** Source and compiled entry points both resolve shipped content independently of cwd. */
@@ -92,6 +94,7 @@ export class WebPersonaRuntime {
   private readonly promptRoot: string;
   private readonly features: WebFeatureStore;
   private readonly relationship: RelationshipLogStore;
+  private readonly world: ReturnType<typeof createXilianWorldStore>;
   private worldbookSignature = "";
   private worldbookEntries: WorldbookEntry[] = [];
 
@@ -99,6 +102,7 @@ export class WebPersonaRuntime {
     this.promptRoot = path.resolve(options.promptRoot ?? process.env.CYRENE_PROMPTS_DIR ?? shippedPromptRoot());
     this.features = options.features ?? new WebFeatureStore(dataDir);
     this.relationship = new RelationshipLogStore(path.join(dataDir, "relationship-log.json"));
+    this.world = createXilianWorldStore(path.join(dataDir, "xilian-world.json"));
   }
 
   async getPersonaState() {
@@ -161,6 +165,14 @@ export class WebPersonaRuntime {
     const [profile, memory] = await Promise.all([this.features.getProfile(), this.features.getMemory()]);
     const history = cleanWebHistory(session, input.prompt);
     const time = buildConversationTimeContext(history.slice(-48), resolveChatContextTimezone(field(profile.timezone)));
+    const timezone = resolveChatContextTimezone(field(profile.timezone));
+    const worldNow = Date.now();
+    const worldState = this.world.advance({ now: worldNow, timezone });
+    const worldTimeline = this.world.queryTimeline({ dateKey: worldState.worldDate, order: "desc", limit: 8 });
+    const worldSnapshot = buildXilianLifeSnapshot({ state: worldState, timeline: worldTimeline, now: worldNow, timezone });
+    const selfieContext = config.imageGeneration?.enabled && /自拍|照片|生图|图片|拍一张/u.test(input.prompt)
+      ? buildXilianSelfiePrompt(worldSnapshot)
+      : "";
     const summary = memoryEnabled ? await loadSummaryMemoryContext({ conversationId: session.id, userDataRoot: this.dataDir, getSessionRecord: () => session }) : undefined;
     const relationship = memoryEnabled ? await this.relationship.buildContext() : "";
     const worldbook = await this.worldbookContext(history);
@@ -178,6 +190,8 @@ export class WebPersonaRuntime {
     const runtimeContext = [
       `[本轮认知引擎]\n服务商：${config.provider}\n模型：${config.model}\n仅用于回答用户明确的技术身份问题；这不改变昔涟的身份。`,
       userContext(profile, settings, memory, memoryEnabled), time.timeContext,
+      formatXilianLifeContext(worldSnapshot),
+      selfieContext,
       style, "下列语气规则只调整表达，不得覆盖当前模式职责、事实或身份规则。", formatToneRules(this.readPrompt("tone-rules.md", false)),
       worldbook, memoryEnabled ? savedMemoryContext(memory) : "", relationship,
       summary && (summary.sessionContent || summary.workspaceContent) ? summary.runtimeContext : "",

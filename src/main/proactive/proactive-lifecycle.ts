@@ -36,7 +36,9 @@ import { createProactiveTrigger, getZonedDateParts, type ProactiveOpportunity, t
 import { runProactiveModel } from "./proactive-model";
 import { DEFAULT_PROACTIVE_TARGET_SCORE } from "../../shared/preferences";
 import type { ProactiveCandidate, ProactiveEvaluationStatus, ProactiveRuntimeSnapshot, ProactiveDeliveryContext } from "./proactive-types";
-import { XILIAN_CHARACTER_PACK } from "../character-packs/xilian-pack";
+import { getSharedXilianWorldStore, type XilianWorldStore } from "./xilian-world-store";
+import { buildXilianLifeSnapshot, formatXilianLifeContext } from "./xilian-life-context";
+import type { XilianTimelineEvent, XilianWorldState } from "../../shared/xilian-world";
 
 export interface ProactiveLifecycleOptions {
   loadGeneralSettings: () => GeneralSettings;
@@ -49,6 +51,8 @@ export interface ProactiveLifecycle {
   stopProactiveTrigger: () => void;
   getProactiveChatService: () => ProactiveChatService | null;
   getProactiveStatus: () => ProactiveEvaluationStatus;
+  getWorldSnapshot: (input?: { now?: number; timezone?: string }) => XilianWorldState;
+  queryWorldTimeline: (input?: { dateKey?: string; from?: number; to?: number; limit?: number; order?: "asc" | "desc" }) => XilianTimelineEvent[];
   enqueueCompanionMoment: (moment: Omit<CompanionMoment, "status">) => CompanionMoment;
   observeCompanionActivity: (kind: CompanionLifeObservationKind) => void;
   proactiveConversationLifecycle: {
@@ -64,6 +68,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   const proactiveBackoffMap = new Map<string, number>();
   const conversationJournal = options.conversationJournal;
   const lifeStore: CompanionLifeStore = createCompanionLifeStore(path.join(app.getPath("userData"), "companion-life.json"));
+  const worldStore: XilianWorldStore = getSharedXilianWorldStore(path.join(app.getPath("userData"), "xilian-world.json"));
   let normalConversationBusyCount = 0;
   let proactiveScreenLocked = false;
   let lastMessageActivityAt: number | null = null;
@@ -175,6 +180,19 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     // 用户有效时区：resolver 校验后传给 prompt，禁止未校验的 profile.timezone。
     const profile = loadUserProfile();
     const timezone = resolveChatContextTimezone(profile.timezone);
+    const worldState = worldStore.advance({
+      now: snapshot.now,
+      timezone,
+      companion: { energy: lifeState.energy, curiosity: lifeState.curiosity, boredom: lifeState.boredom },
+    });
+    const worldTimeline = worldStore.queryTimeline({ dateKey: worldState.worldDate, order: "desc", limit: 8 });
+    const worldSnapshot = buildXilianLifeSnapshot({
+      state: worldState,
+      timeline: worldTimeline,
+      now: snapshot.now,
+      timezone,
+      energy: lifeState.energy,
+    });
     return buildProactiveMessages({
       basePersona: buildProactivePersonaPrompt() + "\n\n" + await buildRelationshipContext(historyTarget?.conversationId ?? historyTarget?.sessionId ?? "proactive-local"),
       userProfile: profileContext,
@@ -187,7 +205,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       unansweredCount: state.unansweredCount,
       timezone,
       ...(moment ? { momentContext: moment.summary } : {}),
-      ...(moment ? { lifeContext: `精力 ${lifeState.energy}/100；好奇 ${lifeState.curiosity}/100；无聊 ${lifeState.boredom}/100。` } : {}),
+      ...(moment ? { lifeContext: `${formatXilianLifeContext(worldSnapshot)}\n精力 ${lifeState.energy}/100；好奇 ${lifeState.curiosity}/100；无聊 ${lifeState.boredom}/100。` } : {}),
     });
   }
 
@@ -478,11 +496,19 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           : target === "local" ? [...new Set((companion.followups ?? []).map(item => item.conversationId))] : [];
         const opportunities: ProactiveOpportunity[] = [...relationshipOpportunities(companion.relationship, ctx),
           ...ids.flatMap(id => followupOpportunities(companion.followups ?? [], companion.relationship, id, ctx))];
-        lifeStore.refreshState({ now: ctx.now, dateKey: ctx.localDate });
+        const lifeState = lifeStore.refreshState({ now: ctx.now, dateKey: ctx.localDate });
+        const timezone = resolveChatContextTimezone(loadUserProfile().timezone);
+        const worldState = worldStore.advance({
+          now: ctx.now,
+          timezone,
+          companion: { energy: lifeState.energy, curiosity: lifeState.curiosity, boredom: lifeState.boredom },
+        });
+        const worldTimeline = worldStore.queryTimeline({ dateKey: worldState.worldDate, order: "desc", limit: 8 });
+        const worldSnapshot = buildXilianLifeSnapshot({ state: worldState, timeline: worldTimeline, now: ctx.now, timezone, energy: lifeState.energy });
         lifeStore.ensureDailyFictionalMoment({
           enabled: companion.relationship.innerLifeEnabled && companion.relationship.proactiveLifeEnabled,
           conversationId: route?.available ? (route.recipient.conversationId ?? route.recipient.sessionId) : undefined,
-          summary: XILIAN_CHARACTER_PACK.idleRoutines[Math.floor(ctx.now / 86_400_000) % XILIAN_CHARACTER_PACK.idleRoutines.length]!,
+          summary: `【虚构角色小记】${worldSnapshot.currentActivity}。${worldSnapshot.mood}。${worldSnapshot.nextPlan}。这是昔涟在涟界里的生活记录，不是现实地点或真实行程。`,
           now: ctx.now,
           dateKey: ctx.localDate,
         });
@@ -534,6 +560,13 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     initializeProactiveTrigger,
     stopProactiveTrigger,
     getProactiveChatService: () => proactiveChatService,
+    getWorldSnapshot: (input = {}) => {
+      const now = input.now ?? Date.now();
+      const timezone = input.timezone ?? resolveChatContextTimezone(loadUserProfile().timezone);
+      const lifeState = lifeStore.getState({ now, dateKey: lifeDateKey(now) });
+      return worldStore.advance({ now, timezone, companion: { energy: lifeState.energy, curiosity: lifeState.curiosity, boredom: lifeState.boredom } });
+    },
+    queryWorldTimeline: (input = {}) => worldStore.queryTimeline(input),
     getProactiveStatus: () => {
       const settings = options.loadGeneralSettings();
       const route = settings.proactiveDeliveryTarget === "local" ? null : getProactiveChannelAvailability(settings.proactiveDeliveryTarget, channelManager);
