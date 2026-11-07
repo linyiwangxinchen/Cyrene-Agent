@@ -32,6 +32,7 @@ interface PreferencesValues {
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   proactiveTargetScore: number;
+  companionPluginSharingEnabled: boolean;
   momentsEnabled: boolean;
   cyreneMomentsPostingEnabled: boolean;
   cyreneMomentsReactionsEnabled: boolean;
@@ -63,6 +64,7 @@ const defaults: PreferencesValues = {
   proactiveChatMode: "off",
   proactiveDeliveryTarget: "local",
   proactiveTargetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
+  companionPluginSharingEnabled: false,
   momentsEnabled: true,
   cyreneMomentsPostingEnabled: false,
   cyreneMomentsReactionsEnabled: true,
@@ -85,6 +87,7 @@ function readPreferences(value: unknown): PreferencesValues {
     proactiveChatMode: normalizeProactiveChatMode(input.proactiveChatMode),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input.proactiveDeliveryTarget),
     proactiveTargetScore: normalizeProactiveTargetScore(input.proactiveTargetScore),
+    companionPluginSharingEnabled: input.companionPluginSharingEnabled === true,
     momentsEnabled: typeof input.momentsEnabled === "boolean" ? input.momentsEnabled : defaults.momentsEnabled,
     cyreneMomentsPostingEnabled: typeof input.cyreneMomentsPostingEnabled === "boolean" ? input.cyreneMomentsPostingEnabled : defaults.cyreneMomentsPostingEnabled,
     cyreneMomentsReactionsEnabled: typeof input.cyreneMomentsReactionsEnabled === "boolean" ? input.cyreneMomentsReactionsEnabled : defaults.cyreneMomentsReactionsEnabled,
@@ -187,6 +190,7 @@ export function PreferencesSettingsPanel() {
         proactiveChatMode,
         proactiveDeliveryTarget,
         proactiveTargetScore,
+        companionPluginSharingEnabled,
       } = values;
       await window.settings.saveGeneral({
         citaEnabled,
@@ -200,6 +204,7 @@ export function PreferencesSettingsPanel() {
         proactiveChatMode,
         proactiveDeliveryTarget,
         proactiveTargetScore,
+        companionPluginSharingEnabled,
       });
       setStatus(t("settingsPage.preferences.saved"));
     } catch {
@@ -260,7 +265,7 @@ export function PreferencesSettingsPanel() {
             <Card>
               <div className="cy-settings-row">
                 <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.mobileSegmentation">{t("settingsPage.preferences.mobileSegmentation")}</strong><span>{t("settingsPage.preferences.mobileSegmentationDescription")}</span></div>
-                <SettingsSegmented value={values.mobileMessageSegmentation} options={[{ label: t("settingsPage.preferences.off"), value: "off" }, { label: t("settingsPage.preferences.on"), value: "on" }]} onChange={(value) => update("mobileMessageSegmentation", value as MobileMessageSegmentationMode)} />
+                <SettingsSegmented value={values.mobileMessageSegmentation} options={[{ label: t("settingsPage.preferences.off"), value: "off" }, { label: t("settingsPage.preferences.on"), value: "on" }, { label: t("settingsPage.preferences.natural"), value: "natural" }]} onChange={(value) => update("mobileMessageSegmentation", value as MobileMessageSegmentationMode)} />
               </div>
               <div className="cy-settings-row">
                 <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.customStyle">{t("settingsPage.preferences.customStyle")}</strong><span>{t("settingsPage.preferences.customStyleDescription")}</span></div>
@@ -301,6 +306,10 @@ export function PreferencesSettingsPanel() {
                     {typeof proactiveStatus.unansweredCount === "number" && <span>{t("settingsPage.preferences.proactiveUnanswered", { count: proactiveStatus.unansweredCount })}</span>}
                     {proactiveStatus.lastProactiveAt && <span>{t("settingsPage.preferences.proactiveLastSent")}: {new Date(proactiveStatus.lastProactiveAt).toLocaleString()}</span>}
                   </div>
+                </div>
+                <div className="cy-settings-row">
+                  <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.companionPluginSharing">{t("settingsPage.preferences.companionPluginSharing")}</strong><span>{t("settingsPage.preferences.companionPluginSharingDescription")}</span></div>
+                  <SettingsSwitch ariaLabel={t("settingsPage.preferences.companionPluginSharing")} checked={values.companionPluginSharingEnabled} onChange={(checked) => update("companionPluginSharingEnabled", checked)} />
                 </div>
                 <div className="cy-settings-row">
                   <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveTargetScore">{t("settingsPage.preferences.proactiveTargetScore")}</strong><span>{t("settingsPage.preferences.proactiveTargetScoreDescription")}</span></div>

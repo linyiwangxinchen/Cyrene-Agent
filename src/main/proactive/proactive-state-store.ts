@@ -41,6 +41,8 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
     sceneId: value.candidate.sceneId,
     score: value.candidate.score,
     sceneCooldownMs: value.candidate.sceneCooldownMs,
+    ...(typeof value.candidate.momentId === "string" ? { momentId: value.candidate.momentId.slice(0, 200) } : {}),
+    ...(typeof value.candidate.momentSummary === "string" ? { momentSummary: value.candidate.momentSummary.slice(0, 1000) } : {}),
   };
   const context = value.deliveryContext;
   const deliveryContext: ProactiveDeliveryContext | undefined = isRecord(context) && Number.isSafeInteger(context.relationshipRevision)

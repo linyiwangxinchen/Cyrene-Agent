@@ -1,6 +1,7 @@
 import { app } from "electron"
 import path from "node:path"
 import { RelationshipLogStore as CoreStore, type RelationshipTurnInput, type RelationshipLogEntry } from "./relationship-log-core"
+import type { CompanionEvent } from "../../shared/companion-events"
 export type { RelationshipChannel, RelationshipTurnInput, RelationshipLogEntry, RelationshipDailySummary, RelationshipPreferencesPatch } from "./relationship-log-core"
 
 export class RelationshipLogStore extends CoreStore {
@@ -19,4 +20,7 @@ export function recordRelationshipTurn(input: RelationshipTurnInput): Promise<Re
 }
 export function buildRelationshipContext(conversationId?: string, privateContext = true): Promise<string> {
   return getRelationshipStore().buildContext(conversationId, privateContext)
+}
+export function recordCompanionEvent(event: CompanionEvent) {
+  return getRelationshipStore().recordCompanionEvent(event)
 }

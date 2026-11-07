@@ -169,6 +169,8 @@ import { startShell } from "./shell-bootstrap";
 import { configureNodeRequestProxy } from "../network/node-request-proxy";
 import { startCore } from "./core-bootstrap";
 import { startBackground } from "./background";
+import { normalizePluginObservation } from "../proactive/plugin-observation";
+import { recordCompanionEvent } from "../relationship/relationship-log";
 import { installUpdateShutdownFallback, type UpdateLifecycleLike } from "./electron-lifecycle";
 import type { ApplicationDependencies } from "./application";
 
@@ -652,6 +654,22 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           agentRuntime: runtime,
           // 插件启停后让调度引擎重新归一化逾期任务并重排计时器（不补跑）。
           onPluginRunningStateChange: () => scheduler.engine.refreshPluginTasks(),
+          onPluginEvent: (pluginId, event, payload) => {
+            if (!loadGeneralSettings().companionPluginSharingEnabled) return;
+            const moment = normalizePluginObservation(pluginId, event, payload);
+            if (moment) {
+              services.proactive.enqueueCompanionMoment(moment);
+              services.proactive.observeCompanionActivity("plugin_observation");
+              void recordCompanionEvent({
+                eventId: moment.id,
+                kind: "plugin_observation",
+                source: "plugin",
+                occurredAt: moment.occurredAt,
+                summary: moment.summary,
+                pluginId: moment.pluginId,
+              }).catch(error => console.warn("[Companion] 插件观察事件写入失败", error));
+            }
+          },
           // 插件面板仅由工作区设置页承载。
           getPanelHostWebContents: () => [reactChatWindow]
             .filter((window) => window && !window.isDestroyed())

@@ -2342,6 +2342,8 @@
       "openPrompt": "Open prompt",
       "proactiveChat": "Proactive chat",
       "proactiveChatDescription": "Cyrene may start a conversation at a suitable time. She avoids late-night interruptions, active chats, and repeated unanswered messages.",
+      "companionPluginSharing": "Share plugin discoveries",
+      "companionPluginSharingDescription": "Let enabled plugins offer sanitized interesting findings for Cyrene to decide whether to share. Off by default.",
       "deliveryTarget": "Send proactive messages to",
       "deliveryTargetDescription": "If a mobile channel is unavailable, the proactive message is canceled instead of being redirected locally.",
       "proactiveScoreStatus": "Latest candidate score",

@@ -66,6 +66,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   proactiveChatMode: "off",
   proactiveDeliveryTarget: "local",
   proactiveTargetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
+  companionPluginSharingEnabled: false,
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -257,6 +258,7 @@ export function normalizeGeneralSettings(
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
     proactiveTargetScore: normalizeProactiveTargetScore(input?.proactiveTargetScore),
+    companionPluginSharingEnabled: input?.companionPluginSharingEnabled === true,
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo", "mossland"].includes(input?.ttsEngine as string)
       ? input?.ttsEngine
       : "off") as GeneralSettings["ttsEngine"],

@@ -84,6 +84,8 @@ export interface GeneralSettings {
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   /** 主动聊天候选进入模型评估前的最低评分（0-100）。 */
   proactiveTargetScore: number;
+  /** 允许已启用插件把经过宿主脱敏的观察事件交给陪伴生活队列。 */
+  companionPluginSharingEnabled: boolean;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo" | "mossland";
   ttsAutoRead: boolean;

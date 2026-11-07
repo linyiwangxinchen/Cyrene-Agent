@@ -7,7 +7,7 @@ import { resolveLocalStickerPath } from "../sticker-protocol";
 import { getStickersDir, loadUserStickerManifest } from "../sticker-storage";
 import { BUILT_IN_STICKER_FILES } from "../sticker-descriptions";
 import { BUILT_IN_STICKER_IDS } from "../../shared/sticker-types";
-import { splitTextBySentenceBreaks } from "../../shared/message-segmentation";
+import { splitTextBySentenceBreaks, splitTextNaturally } from "../../shared/message-segmentation";
 import {
   normalizeMobileMessageSegmentationMode,
   type MobileMessageSegmentationMode,
@@ -80,7 +80,9 @@ export function buildTextOutgoingParts(
   mobileMessageSegmentation: MobileMessageSegmentationMode | undefined,
 ): OutgoingPart[] {
   const mode = normalizeMobileMessageSegmentationMode(mobileMessageSegmentation);
-  const texts = mode === "on" ? splitTextBySentenceBreaks(replyText) : [replyText];
+  const texts = mode === "on" ? splitTextBySentenceBreaks(replyText)
+    : mode === "natural" ? splitTextNaturally(replyText)
+      : [replyText];
   return texts.map((text) => ({ kind: "text", text }));
 }
 

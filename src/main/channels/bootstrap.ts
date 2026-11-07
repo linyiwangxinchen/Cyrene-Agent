@@ -372,7 +372,9 @@ export function createChannelsSubsystem(
       const settings = loadChannelsSettings();
       return isChannelToolAuthorized(settings, msg.channel, msg.senderId, msg.chatId);
     },
-    sendProgressUpdates: true,
+    // 渠道默认不发送“已收到，开始执行任务”的额外回执；用户需要时可用
+    // /status 查看当前阶段，用 /stop 请求取消。
+    sendProgressUpdates: false,
   });
   const durableInbox = new DurableChannelInbox({
     captureContext: msg => dispatcher.captureDispatchContext(msg),

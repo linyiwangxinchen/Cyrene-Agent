@@ -145,6 +145,7 @@ describe("channels/dispatcher", () => {
       broadcastChat: options.broadcastChat,
       isControlAllowed: options.isControlAllowed,
       sendProgressUpdates: options.sendProgressUpdates,
+      progressDelayMs: options.progressDelayMs,
     });
   }
 
@@ -182,6 +183,57 @@ describe("channels/dispatcher", () => {
 
     const after = await dispatcher.handleIncoming(makeIncoming({ text: "/status", messageId: "status-2" }));
     expect(after?.parts).toEqual([{ kind: "text", text: "当前没有正在执行的渠道任务。" }]);
+  });
+
+  it("quick channel runs do not emit a soft acknowledgement, while long runs do", async () => {
+    vi.useFakeTimers();
+    try {
+      let release!: (value: { text: string; sticker: null }) => void;
+      const pending = new Promise<{ text: string; sticker: null }>((resolve) => { release = resolve; });
+      const delivery = { send: vi.fn(async () => ({ ok: true })) } as unknown as DispatcherDeps["delivery"];
+      const dispatcher = makeDispatcher({
+        delivery,
+        sendProgressUpdates: true,
+        progressDelayMs: 1_000,
+        buildAndRunAgent: vi.fn(async () => pending),
+      });
+      const running = dispatcher.handleIncoming(makeIncoming({ text: "长任务", messageId: "slow-1" }));
+      await flushMicrotasks();
+      expect(delivery.send).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(delivery.send).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await flushMicrotasks();
+      expect(delivery.send).toHaveBeenCalledTimes(1);
+      release({ text: "完成", sticker: null });
+      await running;
+      expect(delivery.send).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not emit a soft acknowledgement when progress updates are not enabled", async () => {
+    vi.useFakeTimers();
+    try {
+      let release!: (value: { text: string; sticker: null }) => void;
+      const pending = new Promise<{ text: string; sticker: null }>((resolve) => { release = resolve; });
+      const delivery = { send: vi.fn(async () => ({ ok: true })) } as unknown as DispatcherDeps["delivery"];
+      const dispatcher = makeDispatcher({
+        delivery,
+        buildAndRunAgent: vi.fn(async () => pending),
+      });
+      const running = dispatcher.handleIncoming(makeIncoming({ text: "不发送回执", messageId: "silent-progress-1" }));
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await flushMicrotasks();
+      expect(delivery.send).not.toHaveBeenCalled();
+      release({ text: "完成", sticker: null });
+      await running;
+      expect(delivery.send).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("unknown /stop returns a bounded status and unauthorized control does not reach the agent", async () => {

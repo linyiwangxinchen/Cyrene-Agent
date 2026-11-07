@@ -22,6 +22,10 @@ export interface BuildProactiveMessagesInput {
    * 不接受未校验的 profile.timezone 字符串；调用方需先经 resolveChatContextTimezone。
    */
   timezone: string;
+  /** Sanitized virtual-life/plugin observation; never raw credentials or tool output. */
+  momentContext?: string;
+  /** Internal tone hints; the model must not expose the numeric values. */
+  lifeContext?: string;
 }
 
 export type ProactiveModelDecision =
@@ -39,6 +43,12 @@ const PROACTIVE_SYSTEM = `[proactive_system]
 不要提及系统检测、触发规则、评分、上下文、用户画像或内部状态。
 消息应当简短自然，可以关心、分享、跟进或轻轻询问，但不要连续提出多个问题。
 不要声称自己调用了工具、读取了屏幕或执行了任何外部动作。`;
+
+const MOMENT_SYSTEM = `[moment_system]
+这次候选来自一条已经筛选过的陪伴心事。可以自然分享它，或围绕它问一个轻量问题。
+不要提及队列、插件、评分或内部来源；不要把虚构角色小记说成现实经历。
+虚拟状态只用于调整语气和主动程度，不要向用户报告其中的数值或把它说成真实生理状态。
+如果这条心事和用户无关或此刻打扰感太强，请返回 silent。`;
 
 const NIGHT_SYSTEM = `[night_system]
 当前处于深夜，用户近期仍有交互活动。
@@ -128,6 +138,10 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   systemParts.push(formatHistory("主动聊天专用会话", input.proactiveHistory, input.timezone));
   if (isActiveNight(input.localNow, input.timezone, input.idleSec)) systemParts.push(NIGHT_SYSTEM);
   if (input.unansweredCount === 1) systemParts.push(FOLLOWUP_SYSTEM);
+  if (input.momentContext?.trim()) {
+    systemParts.push(MOMENT_SYSTEM, `[陪伴心事]\n${input.momentContext.trim()}`);
+    if (input.lifeContext?.trim()) systemParts.push(`[虚拟状态参考]\n${input.lifeContext.trim()}`);
+  }
 
   const trigger = `[本次主动聊天候选]
 电脑本地时间：${formatLocalTime(input.localNow, input.timezone)}（按用户设置的时区）

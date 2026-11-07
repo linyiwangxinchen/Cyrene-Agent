@@ -9,6 +9,7 @@ import type {
 } from "../shared/plugin-management";
 import { createContext, runPluginCleanup, type PluginRuntime } from "./context";
 import { createPluginEventBus, qualifyHostEvent } from "./events";
+import type { PluginEventListener } from "./api";
 import {
   clearPluginModuleCache,
   loadPlugin,
@@ -183,6 +184,11 @@ export class PluginManager {
    */
   publishHostLifecycleBarrier<T = unknown>(event: string, payload: T): Promise<void> {
     return this.eventBus.emitLifecycleBarrier(qualifyHostEvent(event), payload);
+  }
+
+  /** Host-side observation of a namespaced plugin event. */
+  onPluginEvent<T = unknown>(pluginId: string, event: string, listener: PluginEventListener<T>): () => void {
+    return this.eventBus.on(`plugin:${pluginId}:${event}`, listener as PluginEventListener);
   }
 
   /** 插件当前是否处于运行状态（已完成注册激活）。 */

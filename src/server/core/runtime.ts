@@ -95,6 +95,8 @@ import { syncPlaywrightMcp, syncFilesystemMcp } from "../../main/sync-mcp-builti
 import { syncVolcanoSearchMcp } from "../../main/settings/general-settings-lifecycle";
 import { registerHeadlessVoice } from "./voice";
 import { configureHeadlessRequestProxy } from "./network-proxy";
+import { normalizePluginObservation } from "../../main/proactive/plugin-observation";
+import { recordCompanionEvent } from "../../main/relationship/relationship-log";
 
 export async function startHeadlessCore() {
   await configureHeadlessRequestProxy();
@@ -208,7 +210,31 @@ export async function startHeadlessCore() {
   channels.initialize(); await channels.adaptersRegistered;
   const scheduler = createSchedulerSubsystem({ agentRuntime: runtime, getReactChatWindow: () => chatWindow as any, ipc, publishLifecycle: lifecycle, conversationJournal: journal, getActiveConversation: () => activeConversationRegistry.getMostRecent(), canRunTask: task => !task.ownerPluginId || Boolean(plugins?.isRunning(task.ownerPluginId)) });
   scheduler.initialize();
-  plugins = await startPluginRuntime({ llmClient, ipc, agentRuntime: runtime, schedulerStore: scheduler.store, onPluginRunningStateChange: () => scheduler.engine.refreshPluginTasks(), getPanelHostWebContents: () => webContents.getAllWebContents() as any });
+  plugins = await startPluginRuntime({
+    llmClient,
+    ipc,
+    agentRuntime: runtime,
+    schedulerStore: scheduler.store,
+    onPluginRunningStateChange: () => scheduler.engine.refreshPluginTasks(),
+    onPluginEvent: (pluginId, event, payload) => {
+      if (pluginId !== "bili-garden" || event !== "interesting-item") return;
+      if (!loadGeneralSettings().companionPluginSharingEnabled) return;
+      const moment = normalizePluginObservation(pluginId, event, payload);
+      if (moment) {
+        proactive.enqueueCompanionMoment(moment);
+        proactive.observeCompanionActivity("plugin_observation");
+        void recordCompanionEvent({
+          eventId: moment.id,
+          kind: "plugin_observation",
+          source: "plugin",
+          occurredAt: moment.occurredAt,
+          summary: moment.summary,
+          pluginId: moment.pluginId,
+        }).catch(error => console.warn("[Companion] 插件观察事件写入失败", error));
+      }
+    },
+    getPanelHostWebContents: () => webContents.getAllWebContents() as any,
+  });
   const windowManager = {
     broadcast,
     createStickerManagerWindow: async () => emitHost("host:sticker-manager"),

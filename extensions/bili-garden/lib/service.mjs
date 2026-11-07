@@ -13,11 +13,12 @@ export class GardenService {
   constructor(
     ctx,
     packageRoot,
-    { client, runtime, store, now = () => Date.now(), schedule = true } = {},
+    { client, runtime, store, now = () => Date.now(), schedule = true, onInterestingItem } = {},
   ) {
     this.ctx = ctx;
     this.packageRoot = packageRoot;
     this.now = now;
+    this.onInterestingItem = onInterestingItem;
     this.closed = false;
     this.active = null;
     this.scanBusy = false;
@@ -187,6 +188,24 @@ export class GardenService {
           { bvid, question, guardItems },
           signal,
         );
+        if (!this.closed && result?.report && this.onInterestingItem) {
+          const report = result.report;
+          for (const item of report.items ?? []) {
+            try {
+              await this.onInterestingItem({
+                eventId: `${run.id}:${item.bvid}`,
+                occurredAt: this.now(),
+                bvid: item.bvid,
+                title: item.title,
+                summary: item.summary,
+                say: report.say,
+                url: `https://www.bilibili.com/video/${item.bvid}`,
+              });
+            } catch (error) {
+              this.log(`陪伴观察事件发布失败：${error.message}`, "error");
+            }
+          }
+        }
         if (!this.closed)
           this.store.updateRun(run.id, {
             status: "success",

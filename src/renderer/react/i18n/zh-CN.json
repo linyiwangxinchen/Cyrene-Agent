@@ -2342,6 +2342,8 @@
       "openPrompt": "打开 Prompt",
       "proactiveChat": "主动聊天",
       "proactiveChatDescription": "昔涟会在合适的时间主动发起对话；深夜、正常聊天中和连续两次未回复时不会打扰。",
+      "companionPluginSharing": "分享插件发现",
+      "companionPluginSharingDescription": "允许已启用插件把经过脱敏的有趣发现交给昔涟判断是否分享；默认关闭。",
       "deliveryTarget": "主动消息发送到",
       "deliveryTargetDescription": "手机渠道不可用时，本次主动消息会取消，不会改发到本地。",
       "proactiveScoreStatus": "最近候选评分",

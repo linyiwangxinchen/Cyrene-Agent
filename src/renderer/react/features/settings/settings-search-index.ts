@@ -68,6 +68,7 @@ const sections: {
       "settingsPage.preferences.customStyle",
       "settingsPage.preferences.proactiveChat",
       "settingsPage.preferences.deliveryTarget",
+      "settingsPage.preferences.companionPluginSharing",
       "settingsPage.preferences.moments",
       "settingsPage.preferences.momentsEnabled",
       "settingsPage.preferences.momentsPosting",

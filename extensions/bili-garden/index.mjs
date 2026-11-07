@@ -12,6 +12,9 @@ export async function register(ctx) {
   const activeService = new GardenService(
     ctx,
     fileURLToPath(new URL(".", import.meta.url)),
+    {
+      onInterestingItem: (payload) => ctx.events.emit("interesting-item", payload),
+    },
   );
   service = activeService;
   ctx.onDispose(() => activeService.close());

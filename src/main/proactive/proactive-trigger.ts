@@ -52,7 +52,7 @@ export interface ProactiveTriggerContext {
 }
 
 /** 内部候选类型（额外带 reason 用于日志）。 */
-interface ProactiveOpportunity {
+export interface ProactiveOpportunity extends ProactiveCandidate {
   sceneId: string;
   score: number;
   sceneCooldownMs: number;
@@ -547,6 +547,8 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
         sceneId: selected.sceneId,
         score: selected.score,
         sceneCooldownMs: selected.sceneCooldownMs,
+        ...(selected.momentId ? { momentId: selected.momentId } : {}),
+        ...(selected.momentSummary ? { momentSummary: selected.momentSummary } : {}),
       });
     } catch (err) {
       log("evaluation_failed", { sceneId: selected.sceneId, error: err instanceof Error ? err.message : String(err) });

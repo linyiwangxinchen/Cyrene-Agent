@@ -142,8 +142,10 @@ export interface DispatcherDeps {
   }) => void;
   /** 渠道控制权限；未提供时保持历史行为，安全配置可在组合根注入。 */
   readonly isControlAllowed?: (msg: IncomingMessage) => boolean;
-  /** 是否发送“已收到，任务号为……”的后台进度回执。 */
+  /** 是否发送额外的后台进度回执；生产渠道默认关闭，/status 和 /stop 始终可用。 */
   readonly sendProgressUpdates?: boolean;
+  /** 软确认延迟；测试可缩短，生产默认 2500ms。 */
+  readonly progressDelayMs?: number;
 }
 
 interface ActiveChannelRun {
@@ -156,6 +158,8 @@ interface ActiveChannelRun {
   readonly controller: AbortController;
   stage: string;
   cancelRequested: boolean;
+  progressSent: boolean;
+  lastProgressAt: number;
 }
 
 export class ChannelDispatcher {
@@ -329,20 +333,41 @@ export class ChannelDispatcher {
       controller,
       stage: "准备模型上下文",
       cancelRequested: false,
+      progressSent: false,
+      lastProgressAt: 0,
     };
     this.activeRuns.set(activeKey, activeRun);
+    let progressTimer: ReturnType<typeof setTimeout> | undefined;
+    const sendProgress = (text: string, operation: string): void => {
+      activeRun.progressSent = true;
+      activeRun.lastProgressAt = Date.now();
+      void this.sendControlReply(msg, text, operation, target.conversationId, runId).catch((error) => {
+        console.warn(LOG, "渠道进度回复发送失败:", error);
+      });
+    };
     const updateProgress = (stage: string): void => {
       if (this.activeRuns.get(activeKey) !== activeRun) return;
       activeRun.stage = stage.slice(0, 120);
+      if (
+        this.deps.sendProgressUpdates
+        && activeRun.progressSent
+        && Date.now() - activeRun.lastProgressAt >= 10_000
+      ) {
+        sendProgress(
+          `任务 ${formatChannelRunId(runId)}：${activeRun.stage}`,
+          `channel:${runId}:progress:${activeRun.lastProgressAt}`,
+        );
+      }
     };
     if (this.deps.sendProgressUpdates) {
-      await this.sendControlReply(
-        msg,
-        `已收到，开始执行任务 ${formatChannelRunId(runId)}。发送 /status 查看进度，/stop 停止任务。`,
-        `channel:${runId}:progress:started`,
-        target.conversationId,
-        runId,
-      );
+      progressTimer = setTimeout(() => {
+        if (this.activeRuns.get(activeKey) !== activeRun || activeRun.progressSent) return;
+        sendProgress(
+          `已收到，开始执行任务 ${formatChannelRunId(runId)}。发送 /status 查看进度，/stop 停止任务。`,
+          `channel:${runId}:progress:started`,
+        );
+      }, Math.max(0, this.deps.progressDelayMs ?? 2_500));
+      progressTimer.unref?.();
     }
 
     try {
@@ -466,6 +491,7 @@ export class ChannelDispatcher {
       }
     }
     } finally {
+      if (progressTimer !== undefined) clearTimeout(progressTimer);
       if (this.activeRuns.get(activeKey) === activeRun) this.activeRuns.delete(activeKey);
     }
   }

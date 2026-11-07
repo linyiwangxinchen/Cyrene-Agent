@@ -12,6 +12,9 @@ export interface ProactiveCandidate {
   sceneId: string;
   score: number;
   sceneCooldownMs: number;
+  /** Optional durable life moment selected by the proactive trigger. */
+  momentId?: string;
+  momentSummary?: string;
 }
 
 export type ProactiveEvaluationState = "candidate" | "no_candidate" | "suppressed" | "backoff";

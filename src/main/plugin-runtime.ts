@@ -47,6 +47,8 @@ export interface PluginRuntimeDeps {
   schedulerStore: PluginRuntimeSchedulerStore;
   /** 插件启停后回调：宿主让调度引擎重排计时器（不补跑）。 */
   onPluginRunningStateChange?: (pluginId: string, running: boolean) => void;
+  /** Sanitized plugin events that may enter the host companion-life queue. */
+  onPluginEvent?: (pluginId: string, event: string, payload: unknown) => void;
   /** 面板宿主窗口查询；未提供或无匹配窗口时转发一律拒绝（fail-closed）。 */
   getPanelHostWebContents?: () => readonly Electron.WebContents[];
 }
@@ -188,6 +190,11 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
   });
   if (deps.onPluginRunningStateChange) {
     manager.onRunningStateChange(deps.onPluginRunningStateChange);
+  }
+  if (deps.onPluginEvent) {
+    manager.onPluginEvent("bili-garden", "interesting-item", (payload) => {
+      deps.onPluginEvent!("bili-garden", "interesting-item", payload);
+    });
   }
   // 设置面板统一转发通道：主进程强制 sender 必须是已登记的面板宿主窗口；
   // pluginId 语法与通道归属由路由器校验，面板无法构造跨插件通道。

@@ -2342,6 +2342,8 @@
       "openPrompt": "Prompt を開く",
       "proactiveChat": "自発チャット",
       "proactiveChatDescription": "キュレネが適切なタイミングで自分から会話を始めます。深夜、通常の会話中、または 2 回連続で返信がない場合は邪魔しません。",
+      "companionPluginSharing": "プラグインの発見を共有",
+      "companionPluginSharingDescription": "有効なプラグインが脱敏済みの興味深い情報をキュレネに渡し、共有するか判断できるようにします。既定ではオフです。",
       "deliveryTarget": "自発メッセージの送信先",
       "deliveryTargetDescription": "スマートフォン側のチャネルが利用できない場合、この自発メッセージはキャンセルされ、ローカルには切り替えて送信しません。",
       "proactiveScoreStatus": "最新候補スコア",

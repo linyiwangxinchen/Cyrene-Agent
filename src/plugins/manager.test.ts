@@ -122,6 +122,19 @@ describe("PluginManager", () => {
     expect(readFileSync(marker, "utf8")).toBe("core");
   });
 
+  it("允许宿主观察指定插件的命名空间事件", async () => {
+    const fixture = harness();
+    const manager = new PluginManager(fixture.options);
+    const seen: unknown[] = [];
+    manager.onPluginEvent("demo", "interesting-item", (payload) => seen.push(payload));
+    await manager.start();
+    const record = (manager as unknown as { contexts: Map<string, { events: { emit(event: string, payload: unknown): Promise<void> } }> }).contexts.get("demo");
+    await record?.events.emit("interesting-item", { title: "一条发现" });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(seen).toEqual([{ title: "一条发现" }]);
+    await manager.stop();
+  });
+
   it("普通宿主事件旁路发布，不等待监听器的未决 Promise", async () => {
     const h = harness();
     const marker = path.join(tmp, "slow-listener-entered");

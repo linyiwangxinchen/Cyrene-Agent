@@ -1,4 +1,6 @@
 /** One identity across all task modes and transports. No Electron dependency. */
+import type { BondProgressState } from "./companion-progress";
+
 export type RelationshipStage = "new" | "familiar" | "close" | "long_term";
 export type CompanionStyle = "natural" | "gentle" | "lively" | "concise";
 export type CapabilityPreset = "inherit" | "companion" | "basic" | "shared_life" | "full";
@@ -47,7 +49,7 @@ export interface CompanionPermissions {
 }
 export interface CompanionRecord {
   id: string;
-  kind: "turn" | "repair" | "diary" | "preferences" | "permissions" | "followup";
+  kind: "turn" | "repair" | "diary" | "preferences" | "permissions" | "followup" | "bond";
   at: number;
   text: string;
   conversationId?: string;
@@ -71,6 +73,8 @@ export interface CompanionSnapshot {
   revision: number;
   relationship: RelationshipState;
   affect: AffectState;
+  /** Game-like, monotonic progress; independent from closeness and permissions. */
+  bondProgress?: BondProgressState;
   permissions: CompanionPermissions;
   records: CompanionRecord[];
   followups?: CompanionFollowup[];
@@ -84,6 +88,7 @@ export type CompanionCommand = { expectedRevision: number } & (
   | { type: "delete_record"; id: string }
   | { type: "clear_history" }
   | { type: "reset_relationship" }
+  | { type: "reset_bond_progress" }
   | { type: "followup_save"; id?: string; topic: string; conversationId: string; nextEligibleAt: number }
   | { type: "followup_status"; id: string; conversationId: string; status: Exclude<CompanionFollowupStatus, "awaiting_reply">; nextEligibleAt?: number }
 );

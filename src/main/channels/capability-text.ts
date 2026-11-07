@@ -1,4 +1,4 @@
-import { splitTextBySentenceBreaks } from "../../shared/message-segmentation";
+import { splitTextBySentenceBreaks, splitTextNaturally } from "../../shared/message-segmentation";
 import type { MobileMessageSegmentationMode } from "../../shared/preferences";
 import type { OutgoingPart } from "./types";
 
@@ -8,7 +8,11 @@ export function buildCapabilityTextParts(
   maxTextLength: number | undefined,
   segmentation: MobileMessageSegmentationMode | "on" | "off" = "off",
 ): OutgoingPart[] {
-  const source = segmentation === "on" ? splitTextBySentenceBreaks(text) : [text.trim()].filter(Boolean);
+  const source = segmentation === "on"
+    ? splitTextBySentenceBreaks(text)
+    : segmentation === "natural"
+      ? splitTextNaturally(text)
+      : [text.trim()].filter(Boolean);
   const max = Number.isFinite(maxTextLength) && (maxTextLength ?? 0) > 0 ? Math.floor(maxTextLength!) : 0;
   return source.flatMap(value => {
     const codePoints = Array.from(value);
