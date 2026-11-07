@@ -47,6 +47,24 @@ describe("headless model service", () => {
     await requestSessionModel(f.store, f.session.id, "你好", { onDelta() {} });
     expect(f.requests[0].body.reasoning).toMatchObject({ effort: "high" });
   });
+
+  it("preserves Web image generation settings and sends the native Responses image tool", async () => {
+    const f = await fixture("responses");
+    await f.store.setModelProfiles([{
+      ...f.profile,
+      provider: "ChatGPT（OpenAI）",
+      model: "gpt-6-astra",
+      models: ["gpt-6-astra"],
+      explicitTransport: "responses",
+      imageGeneration: { enabled: true, model: "gpt-image-2" },
+    }], "chosen");
+    await f.store.updateSession(f.session.id, { model: "gpt-6-astra" });
+    await requestSessionModel(f.store, f.session.id, "给我一张昔涟自拍");
+    expect(f.requests[0].body.tools).toContainEqual(expect.objectContaining({
+      type: "image_generation", model: "gpt-image-2.5-flare",
+    }));
+    expect(JSON.stringify(f.requests[0].body)).toContain("昔涟图片生成约束");
+  });
   it.each(["openai", "anthropic", "responses"] as const)("uses the %s protocol, selected profile/model, and one copy of the user turn", async transport => {
     const f = await fixture(transport);
     const deltas: string[] = [];

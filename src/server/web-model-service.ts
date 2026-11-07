@@ -6,6 +6,7 @@ import { alignPresetApiBase } from "../shared/api-endpoint";
 import { normalizeReasoningPreference } from "../shared/reasoning";
 import { normalizeManualReasoningConfig } from "../shared/manual-reasoning";
 import { getCapabilityOrOpenAI } from "../main/orchestrator/vendors/capabilities";
+import { normalizeImageGenerationModel } from "../main/orchestrator/vendors/model-factory";
 import type { WebStore } from "./web-store";
 import { WebPersonaRuntime } from "./web-persona-runtime";
 import type { RelationshipChannel } from "../main/relationship/relationship-log-core";
@@ -26,7 +27,15 @@ export function modelConfig(input: Record<string, unknown>): VendorConfig {
   if (!baseUrl || !model) throw new Error("请配置模型服务地址和模型名称");
   const url = new URL(baseUrl);
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("模型服务地址必须是 HTTP 或 HTTPS URL");
+  const rawImageGeneration = input.imageGeneration;
+  const imageGeneration = rawImageGeneration && typeof rawImageGeneration === "object" && !Array.isArray(rawImageGeneration)
+    ? rawImageGeneration as { enabled?: unknown; model?: unknown }
+    : undefined;
+  const normalizedImageGeneration = typeof imageGeneration?.enabled === "boolean" && typeof imageGeneration.model === "string"
+    ? { enabled: imageGeneration.enabled, model: normalizeImageGenerationModel(imageGeneration.model) }
+    : undefined;
   return { provider, baseUrl, model, apiKey: String(input.apiKey ?? ""), explicitTransport,
+    ...(normalizedImageGeneration ? { imageGeneration: normalizedImageGeneration } : {}),
     ...(typeof input.responsesNative === "boolean" ? { responsesNative: input.responsesNative } : {}),
     reasoning: normalizeReasoningPreference(input.reasoning), manualReasoning: normalizeManualReasoningConfig(input.manualReasoning) };
 }
@@ -84,7 +93,8 @@ export async function requestSessionModel(store: WebStore, sessionId: string, pr
   const persona = options.persona ?? personaForStore(store);
   const built = await persona.build({ session, settings, config, prompt, styleId: options.styleId, legacyStyle: options.legacyStyle, channel: options.channel });
   const timeoutMs = Number(settings.timeout.chatRequestTimeout ?? settings.timeout.requestTimeout) || 300_000;
-  const request = { model: config.model, messages: built.messages, promptLayers: built.metadata, ...built.sampling, stream: Boolean(options.onDelta) };
+  const request = { model: config.model, messages: built.messages, promptLayers: built.metadata, ...built.sampling, stream: Boolean(options.onDelta),
+    ...(config.imageGeneration?.enabled ? { imageGeneration: config.imageGeneration } : {}) };
   try {
     const result = await (options.onDelta ? streamChatWithAiSdk : generateChatWithAiSdk)({
       adapter: getAdapterForConfig(config), config, request, timeoutMs, signal: options.signal, onDelta: options.onDelta,

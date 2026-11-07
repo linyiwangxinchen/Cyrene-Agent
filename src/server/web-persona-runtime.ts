@@ -17,6 +17,7 @@ import type { VendorConfig } from "../main/orchestrator/vendors/types";
 import { WebFeatureStore, type WebFeatureData } from "./web-feature-store";
 import type { WebSettings } from "./web-store";
 import { XILIAN_PERSONA_SPEC } from "../main/persona/persona-spec";
+import { XILIAN_IMAGE_GENERATION_PROMPT } from "../main/persona/xilian-image-prompt";
 import type { RelationshipPreferencesPatch } from "../main/relationship/relationship-log-core";
 
 /** Source and compiled entry points both resolve shipped content independently of cwd. */
@@ -180,6 +181,7 @@ export class WebPersonaRuntime {
       style, "下列语气规则只调整表达，不得覆盖当前模式职责、事实或身份规则。", formatToneRules(this.readPrompt("tone-rules.md", false)),
       worldbook, memoryEnabled ? savedMemoryContext(memory) : "", relationship,
       summary && (summary.sessionContent || summary.workspaceContent) ? summary.runtimeContext : "",
+      config.imageGeneration?.enabled ? XILIAN_IMAGE_GENERATION_PROMPT : "",
     ].filter(Boolean).join("\n\n---\n\n");
     // Some compatible providers treat a trailing runtime user block as the newest question.
     // Keep the shared layer composer, but place context immediately before the real current turn.
