@@ -58,7 +58,7 @@ export interface ChatLoopOptions {
   generatedImageStore?: GeneratedImageStore;
   xilianSelfieArtifact?: {
     artifactId: string;
-    store: Pick<import("../proactive/xilian-world-store").XilianWorldStore, "markArtifactGenerating" | "completeArtifact" | "failArtifact">;
+    store: Pick<import("../xilian-world/world-store").XilianWorldStore, "markArtifactGenerating" | "completeArtifact" | "failArtifact">;
   };
 }
 

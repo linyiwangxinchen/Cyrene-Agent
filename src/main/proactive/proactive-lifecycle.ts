@@ -36,9 +36,9 @@ import { createProactiveTrigger, getZonedDateParts, type ProactiveOpportunity, t
 import { runProactiveModel } from "./proactive-model";
 import { DEFAULT_PROACTIVE_TARGET_SCORE } from "../../shared/preferences";
 import type { ProactiveCandidate, ProactiveEvaluationStatus, ProactiveRuntimeSnapshot, ProactiveDeliveryContext } from "./proactive-types";
-import { getSharedXilianWorldStore, type XilianWorldStore } from "./xilian-world-store";
-import { buildXilianLifeSnapshot, formatXilianLifeContext } from "./xilian-life-context";
-import type { XilianTimelineEvent, XilianWorldState } from "../../shared/xilian-world";
+import { getSharedXilianWorldStore, type XilianWorldStore } from "../xilian-world/world-store";
+import { buildXilianLifeSnapshot, formatXilianLifeContext } from "../xilian-world/life-context";
+import type { XilianTimelineEvent, XilianWorldState, XilianWorldView } from "../../shared/xilian-world";
 
 export interface ProactiveLifecycleOptions {
   loadGeneralSettings: () => GeneralSettings;
@@ -53,6 +53,7 @@ export interface ProactiveLifecycle {
   getProactiveStatus: () => ProactiveEvaluationStatus;
   getWorldSnapshot: (input?: { now?: number; timezone?: string }) => XilianWorldState;
   queryWorldTimeline: (input?: { dateKey?: string; from?: number; to?: number; limit?: number; order?: "asc" | "desc" }) => XilianTimelineEvent[];
+  getWorldView: (input?: { now?: number; timezone?: string; limit?: number }) => XilianWorldView;
   enqueueCompanionMoment: (moment: Omit<CompanionMoment, "status">) => CompanionMoment;
   observeCompanionActivity: (kind: CompanionLifeObservationKind) => void;
   proactiveConversationLifecycle: {
@@ -567,6 +568,15 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       return worldStore.advance({ now, timezone, companion: { energy: lifeState.energy, curiosity: lifeState.curiosity, boredom: lifeState.boredom } });
     },
     queryWorldTimeline: (input = {}) => worldStore.queryTimeline(input),
+    getWorldView: (input = {}) => {
+      const state = ((): XilianWorldState => {
+        const now = input.now ?? Date.now();
+        const timezone = input.timezone ?? resolveChatContextTimezone(loadUserProfile().timezone);
+        const lifeState = lifeStore.getState({ now, dateKey: lifeDateKey(now) });
+        return worldStore.advance({ now, timezone, companion: { energy: lifeState.energy, curiosity: lifeState.curiosity, boredom: lifeState.boredom } });
+      })();
+      return worldStore.worldView({ dateKey: state.worldDate, limit: input.limit ?? 80 });
+    },
     getProactiveStatus: () => {
       const settings = options.loadGeneralSettings();
       const route = settings.proactiveDeliveryTarget === "local" ? null : getProactiveChannelAvailability(settings.proactiveDeliveryTarget, channelManager);

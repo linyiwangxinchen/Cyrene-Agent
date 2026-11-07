@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { XilianWorldStore } from "./xilian-world-store";
+import { XilianWorldStore } from "./world-store";
 
 describe("XilianWorldStore", () => {
   let root = "";
@@ -15,10 +15,12 @@ describe("XilianWorldStore", () => {
     const first = new XilianWorldStore(file, () => now);
     const state = first.advance({ now, timezone: "UTC", companion: { energy: 70, curiosity: 60, boredom: 20 } });
     const before = first.queryTimeline({ dateKey: "2026-11-07", order: "asc" });
+    expect(first.queryDiary({ dateKey: "2026-11-07", order: "asc" }).length).toBeGreaterThan(0);
     const restarted = new XilianWorldStore(file, () => now);
     const afterState = restarted.advance({ now, timezone: "UTC", companion: { energy: 70, curiosity: 60, boredom: 20 } });
     expect(afterState.currentActivity?.id).toBe(state.currentActivity?.id);
     expect(restarted.queryTimeline({ dateKey: "2026-11-07", order: "asc" })).toEqual(before);
+    expect(restarted.worldView({ dateKey: "2026-11-07" }).diary.length).toBeGreaterThan(0);
   });
 
   it("deduplicates custom events and supports timeline queries", () => {
@@ -68,5 +70,21 @@ describe("XilianWorldStore", () => {
     const store = new XilianWorldStore(file, () => 1_000);
     expect(store.readSnapshot().version).toBe(1);
     expect(fs.readdirSync(root).some((name) => name.startsWith("xilian-world.json.corrupt-") && name.endsWith(".json"))).toBe(true);
+  });
+
+  it("upgrades legacy generic events into concrete scenes and diary entries", () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "xilian-world-legacy-"));
+    const file = path.join(root, "xilian-world.json");
+    const now = new Date("2026-11-07T18:00:00.000Z").getTime();
+    const store = new XilianWorldStore(file, () => now);
+    store.advance({ now, timezone: "UTC" });
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as any;
+    raw.timeline = raw.timeline.map((event: any) => { delete event.detail; delete event.diaryText; delete event.outcome; return event; });
+    raw.diary = [];
+    fs.writeFileSync(file, JSON.stringify(raw), "utf8");
+    const upgraded = new XilianWorldStore(file, () => now);
+    upgraded.advance({ now, timezone: "UTC" });
+    expect(upgraded.queryTimeline({ dateKey: "2026-11-07" }).some(event => Boolean(event.detail && event.diaryText))).toBe(true);
+    expect(upgraded.queryDiary({ dateKey: "2026-11-07" }).length).toBeGreaterThan(0);
   });
 });

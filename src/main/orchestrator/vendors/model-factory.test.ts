@@ -92,7 +92,7 @@ describe("AI SDK 厂商策略兼容", () => {
 
     const imageTool = sent.tools.find((tool: any) => tool.type === "image_generation");
     expect(imageTool).toMatchObject({ type: "image_generation", model: "gpt-image-2.5-flare",
-      output_format: "png", size: "auto", quality: "auto", partial_images: 0 });
+      output_format: "png", size: "1024x1024", quality: "low", partial_images: 0 });
   });
 
   it("把旧图片模型别名迁移到当前 Responses 图片模型", async () => {
@@ -111,6 +111,22 @@ describe("AI SDK 厂商策略兼容", () => {
       imageGeneration: { enabled: true, model: "gpt-image-2" },
     } });
     expect(sent.tools).toContainEqual(expect.objectContaining({ type: "image_generation", model: "gpt-image-2.5-flare" }));
+  });
+
+  it("图片工具请求不继承主模型的推理档位", async () => {
+    const config: VendorConfig = { provider: "ChatGPT", model: "gpt-6-astra", explicitTransport: "responses",
+      baseUrl: "https://proxy.test/v1", apiKey: "key", reasoning: { mode: "on", effort: "medium" } };
+    let sent: any;
+    vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+      sent = JSON.parse(init.body);
+      return jsonResponse(responseBody("responses"));
+    }));
+    await generateChatWithAiSdk({ adapter: getAdapterForConfig(config), config, timeoutMs: 2000, request: {
+      model: config.model, messages: [{ role: "user", content: "给我一张自拍" }],
+      imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" },
+    } });
+    expect(sent.reasoning).toBeUndefined();
+    expect(sent.reasoning_effort).toBeUndefined();
   });
 
   it("不在关闭或辅助请求中注册图片生成工具", async () => {

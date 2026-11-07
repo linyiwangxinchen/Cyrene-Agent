@@ -1,0 +1,15 @@
+.cy-xilian-world { min-width: 0; }
+.cy-xilian-world__status { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-block: 12px 18px; }
+.cy-xilian-world__body, .cy-xilian-world__diary, .cy-xilian-world__places { display: grid; gap: 16px; }
+.cy-xilian-world__current { display: grid; gap: 7px; padding: 16px; border-radius: 12px; background: var(--rb-bg-secondary, #faf7fa); line-height: 1.6; }
+.cy-xilian-world__current small, .cy-xilian-world__event-meta time, .cy-xilian-world article small, .cy-xilian-world__notice { color: var(--rb-text-secondary); }
+.cy-xilian-world__goals { display: grid; gap: 12px; }
+.cy-xilian-world__goals > div { display: grid; gap: 5px; }
+.cy-xilian-world__bar { height: 6px; overflow: hidden; border-radius: 999px; background: var(--rb-border-subtle, #ece8ec); }
+.cy-xilian-world__bar i { display: block; height: 100%; border-radius: inherit; background: var(--rb-accent, #ff5b8a); }
+.cy-xilian-world__timeline, .cy-xilian-world__diary, .cy-xilian-world__places { display: grid; gap: 0; }
+.cy-xilian-world__timeline article, .cy-xilian-world__diary article, .cy-xilian-world__places article { display: grid; gap: 7px; padding: 16px 0; border-top: 1px solid var(--rb-border-default); }
+.cy-xilian-world__timeline h3, .cy-xilian-world__diary h3, .cy-xilian-world__places h3 { margin: 0; font-size: 15px; }
+.cy-xilian-world__timeline p, .cy-xilian-world__diary p, .cy-xilian-world__places p { margin: 0; white-space: pre-wrap; line-height: 1.7; }
+.cy-xilian-world__event-meta { display: flex; gap: 7px; align-items: center; flex-wrap: wrap; }
+.cy-xilian-world__notice { margin: 16px 0 0; line-height: 1.6; }

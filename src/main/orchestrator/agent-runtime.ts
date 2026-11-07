@@ -49,8 +49,8 @@ import {
 import { buildModelContext } from "./conversation-transcript-context";
 import { getConversationTranscriptStore } from "./conversation-transcript-store";
 import { resolveChatContextTimezone } from "../chat-time-context";
-import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../proactive/xilian-life-context";
-import { getSharedXilianWorldStore } from "../proactive/xilian-world-store";
+import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../xilian-world/life-context";
+import { getSharedXilianWorldStore } from "../xilian-world/world-store";
 import { createGeneratedImageStore } from "../chats/generated-image-store";
 import { getHarnessRunStore } from "./harness/run-store";
 import { ConversationTranscriptCompactor } from "./conversation-transcript-compactor";

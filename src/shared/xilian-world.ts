@@ -22,6 +22,7 @@ export type XilianTimelineVisibility = "private" | "shareable" | "shared";
 export type XilianTimelineSource = "simulated_world" | "plugin_observation" | "user_interaction";
 export type XilianLifeArtifactKind = "selfie" | "note" | "song" | "question";
 export type XilianLifeArtifactStatus = "planned" | "generating" | "generated" | "failed";
+export type XilianDiarySource = "life_event" | "user_interaction";
 
 export interface XilianLocation {
   id: string;
@@ -61,6 +62,11 @@ export interface XilianTimelineEvent {
   activityKind: XilianWorldActivityKind;
   activityTitle: string;
   summary: string;
+  detail?: string;
+  outcome?: string;
+  diaryText?: string;
+  participants?: string[];
+  memoryTags?: string[];
   mood: string;
   energyAfter: number;
   goalId?: string;
@@ -69,6 +75,19 @@ export interface XilianTimelineEvent {
   source: XilianTimelineSource;
   previousEventId?: string;
   nextEventId?: string;
+}
+
+export interface XilianDiaryEntry {
+  id: string;
+  eventId: string;
+  dateKey: string;
+  writtenAt: number;
+  title: string;
+  text: string;
+  mood: string;
+  locationId: string;
+  visibility: XilianTimelineVisibility;
+  source: XilianDiarySource;
 }
 
 export interface XilianLifeArtifactContext {
@@ -99,11 +118,19 @@ export interface XilianWorldState {
 }
 
 export interface XilianWorldData {
-  version: 1;
+  version: 2;
   state: XilianWorldState;
   timeline: XilianTimelineEvent[];
+  diary: XilianDiaryEntry[];
   artifacts: XilianLifeArtifactContext[];
   revision: number;
+}
+
+export interface XilianWorldView {
+  state: XilianWorldState;
+  timeline: XilianTimelineEvent[];
+  diary: XilianDiaryEntry[];
+  locations: readonly XilianLocation[];
 }
 
 export interface XilianLifeSnapshot {
@@ -220,5 +247,5 @@ export function createDefaultXilianWorldState(dateKey: string, now: number): Xil
 }
 
 export function createDefaultXilianWorldData(dateKey: string, now: number): XilianWorldData {
-  return { version: 1, state: createDefaultXilianWorldState(dateKey, now), timeline: [], artifacts: [], revision: 1 };
+  return { version: 2, state: createDefaultXilianWorldState(dateKey, now), timeline: [], diary: [], artifacts: [], revision: 1 };
 }

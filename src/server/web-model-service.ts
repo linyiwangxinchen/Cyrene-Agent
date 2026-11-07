@@ -11,7 +11,7 @@ import type { WebStore } from "./web-store";
 import { WebPersonaRuntime } from "./web-persona-runtime";
 import type { WebMediaStore } from "./web-media-store";
 import type { GeneratedImageAttachment } from "../shared/generated-image";
-import { isXilianSelfieRequest } from "../main/proactive/xilian-life-context";
+import { isXilianSelfieRequest } from "../main/xilian-world/life-context";
 import type { RelationshipChannel } from "../main/relationship/relationship-log-core";
 
 const personaRuntimes = new WeakMap<WebStore, WebPersonaRuntime>();

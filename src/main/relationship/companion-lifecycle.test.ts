@@ -103,12 +103,13 @@ describe("companion lifecycle and transport", () => {
     registerCompanionIpc({ handle: (id, fn) => { handlers.set(id, fn); }, on() {}, dispose() {}, removeHandler() {} }, store, {
       getWorldSnapshot: () => ({ worldDate: "2026-11-07" } as any),
       queryWorldTimeline: () => [],
+      getWorldView: () => ({ state: { worldDate: "2026-11-07" }, timeline: [], diary: [], locations: [] } as any),
     });
     const snapshot = await handlers.get(IPC.COMPANION_GET)!() as Awaited<ReturnType<typeof store.snapshot>>;
     await handlers.get(IPC.COMPANION_UPDATE)!({}, { type: "repair", expectedRevision: snapshot.revision, note: "先回答问题，再关心情绪" });
     expect(await new RelationshipLogStore(file).buildContext("a")).toContain("先回答问题");
     expect(JSON.parse(await handlers.get(IPC.COMPANION_EXPORT)!() as string).format).toBe("cyrene.relationship.v1");
-    expect(await handlers.get(IPC.COMPANION_WORLD_GET)!()).toEqual({ state: { worldDate: "2026-11-07" }, timeline: [] });
+    expect(await handlers.get(IPC.COMPANION_WORLD_GET)!()).toEqual({ state: { worldDate: "2026-11-07" }, timeline: [], diary: [], locations: [] });
     await expect(Promise.resolve(handlers.get(IPC.COMPANION_UPDATE)!({}, { type: "repair", note: "missing revision" }))).rejects.toThrow();
   });
 });

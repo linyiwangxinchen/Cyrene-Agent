@@ -18,8 +18,8 @@ import { WebFeatureStore, type WebFeatureData } from "./web-feature-store";
 import type { WebSettings } from "./web-store";
 import { XILIAN_PERSONA_SPEC } from "../main/persona/persona-spec";
 import { XILIAN_IMAGE_GENERATION_PROMPT } from "../main/persona/xilian-image-prompt";
-import { createXilianWorldStore } from "../main/proactive/xilian-world-store";
-import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../main/proactive/xilian-life-context";
+import { createXilianWorldStore } from "../main/xilian-world/world-store";
+import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../main/xilian-world/life-context";
 import type { XilianLifeSnapshot } from "../shared/xilian-world";
 import type { RelationshipPreferencesPatch } from "../main/relationship/relationship-log-core";
 

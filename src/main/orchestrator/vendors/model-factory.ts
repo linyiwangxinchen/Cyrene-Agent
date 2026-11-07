@@ -50,6 +50,13 @@ export function prepareModelCall(input: {
   const policyHttp = adapter.buildRequest({ ...request, messages: [], stream: input.stream }, config);
   const policy = JSON.parse(policyHttp.body) as Record<string, unknown>;
   const controls = Object.fromEntries(Object.entries(policy).filter(([key]) => !STRUCTURAL_FIELDS.has(key)));
+  if (imageGeneration) {
+    // Image-capable relays may map the main model's reasoning effort to an
+    // image `complexity` field. GPT Image 2.5 relays commonly reject values
+    // such as `medium`; image generation has its own quality control, so do
+    // not inherit the conversation reasoning knob into this tool call.
+    for (const key of ["reasoning", "reasoning_effort", "thinking", "enable_thinking"]) delete controls[key];
+  }
   const delegate = input.onStreamActivity ? createStreamActivityFetch(input.onStreamActivity, fetch) : fetch;
   const compatibilityFetch: typeof fetch = async (url, init) => {
     const original = new Request(url, init);
@@ -98,7 +105,10 @@ export function prepareModelCall(input: {
   })]));
   if (imageGeneration) {
     tools.image_generation = openai!.tools.imageGeneration({ model: normalizeImageGenerationModel(imageGeneration.model), outputFormat: "png",
-      size: "auto", quality: "auto", partialImages: 0 });
+      // Some OpenAI-compatible Responses gateways reject the documented
+      // `auto` enum even though the upstream API accepts it. Use a concrete
+      // baseline that works for both the official API and configured relays.
+      size: "1024x1024", quality: "low", partialImages: 0 });
   }
   const choice = policy.tool_choice;
   const named = typeof choice === "object" && choice !== null

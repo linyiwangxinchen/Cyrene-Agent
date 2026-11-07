@@ -1,4 +1,5 @@
 import { CompanionSettingsPanel } from "./CompanionSettingsPanel";
+import { XilianWorldPanel } from "./XilianWorldPanel";
 import { useEffect, useState } from "react";
 import { Alert, Button, Input, Modal, Radio, Spin } from "antd";
 import { BookOpen, Heart, Images } from "lucide-react";
@@ -153,6 +154,7 @@ export function CyreneSettingsPanel() {
     <h1 data-settings-search-loading={loading}>{t("settingsPage.cyrene.title")}</h1>
     <p className="cy-settings-intro">{t("settingsPage.cyrene.description")}</p>
     <CompanionSettingsPanel />
+    <XilianWorldPanel />
     {notice && <Alert className="cy-settings-alert" showIcon type={notice.type} title={notice.text} closable onClose={() => setNotice(null)} />}
     {loading ? <div className="cy-settings-loading"><Spin /></div> : <>
       <section className="cy-settings-section"><div className="cy-settings-section__heading"><h2 data-settings-search-id="settingsPage.cyrene.runtimeTitle"><Heart size={18} />{t("settingsPage.cyrene.runtimeTitle")}</h2><p>{t("settingsPage.cyrene.runtimeDescription")}</p></div>

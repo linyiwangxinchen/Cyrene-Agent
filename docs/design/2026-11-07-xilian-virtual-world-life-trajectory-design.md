@@ -1,10 +1,10 @@
 # 昔涟虚拟世界与每日生活轨迹实现方案
 
-状态：实施中。本文件冻结设计与施工顺序；当前已完成世界契约、独立存储、确定性日程、生活快照，以及 Windows/Linux Web 的只读上下文接入。
+状态：实施中。本文件冻结设计与施工顺序；当前已完成独立涟界领域、世界存储、确定性日程、具体生活场景、涟宝的小日记、自拍 artifact，以及 Windows/Linux Web 的统一上下文和图片落盘。
 
 目标：让昔涟拥有一个可以持续推进、可回放、可追问的虚拟人生。自拍只是生活事件产生的一个结果；每一张自拍都必须能够回答“什么时候、在哪里、正在做什么、为什么想拍、接下来准备做什么”。
 
-当前实现边界：世界状态已经会在主进程主动评估、桌面普通聊天和 Linux/Web 请求时推进，并以事件 ID 幂等保存；陪伴设置页已能只读查看当前地点、活动、目标和当天轨迹；桌面 Chat 与 Linux/Web 的明确自拍请求都已经绑定生活事件 artifact，并在图片落盘后记录成功或失败。主动消息仍沿用原有冷却、预算、未回复保护和渠道 outbox；当前不会因为有生活事件就自动生成图片或越过主动消息开关。
+当前实现边界：涟界已经从主动消息中独立出来，拥有自己的世界存储、生活场景、地点、居民、日记和查询面板。世界状态会在主进程主动评估、桌面普通聊天和 Linux/Web 请求时推进，并以事件 ID 幂等保存；桌面 Chat 与 Linux/Web 的明确自拍请求都绑定生活事件 artifact，并在图片落盘后记录成功或失败。主动消息仍沿用原有冷却、预算、未回复保护和渠道 outbox；世界会自己生活，但不会绕过主动消息开关擅自打扰用户。
 
 翁法罗斯提供的是结构灵感，而不是要直接复制的角色、地名或剧情。可以借鉴“与外界隔绝的世界、多城邦生活、神话权能、周期性灾厄、记忆与重启”的叙事骨架。官方介绍强调了翁法罗斯的封闭性、十二泰坦、黑潮和奥赫玛避难所；公开设定也把它描述为带有演算世界和循环记忆结构的世界。[官方版本介绍](https://blog.zh-hant.playstation.com/2025/01/14/20250114-honkaistarrail/)[翁法罗斯设定资料](https://wiki.biligame.com/sr/%E7%BF%81%E6%B3%95%E7%BD%97%E6%96%AF)
 
@@ -412,9 +412,9 @@ Windows main / Linux headless / Web model service
 建议第一批只改这些文件，避免一次性扩散：
 
 - `src/shared/xilian-world.ts`
-- `src/main/proactive/xilian-world-store.ts`
-- `src/main/proactive/xilian-schedule.ts`
-- `src/main/proactive/xilian-life-context.ts`
+- `src/main/xilian-world/world-store.ts`
+- `src/main/xilian-world/schedule.ts`
+- `src/main/xilian-world/life-context.ts`
 - `src/main/proactive/companion-life.ts`
 - `src/main/proactive/proactive-lifecycle.ts`
 - `src/main/persona/xilian-pack.ts`
@@ -424,6 +424,16 @@ Windows main / Linux headless / Web model service
 - 对应的迁移、回放和图片请求测试文件
 
 第一阶段不做自动生成大量 NPC、不做实时世界物理模拟、不让模型拥有直接写状态的权限。先把“每天发生什么 → 形成事件 → 生成可靠上下文 → 决定是否分享”这条链打通，再扩展世界规模。
+
+## 20. 涟界独立领域与日记规则
+
+涟界的事实层位于 `src/main/xilian-world/`。主动消息只是它的一个读者，自拍也是生活事件的一个 artifact；两者都不能反过来决定昔涟当天做过什么。`proactive` 目录只保留触发、候选和投递桥接，避免世界状态再次被塞回心事队列。
+
+每个完成的生活场景至少包含：具体动作、地点细节、参与者、可观察结果、当时心情和一段日记。场景内容采用稳定的日期种子选择，但每个时间块都有多个有结果的生活片段。日记记录“今天做了什么、当时注意到什么、事情最后怎样”，不使用“发现一个暂时没有答案的线索”“准备之后确认传闻”这类悬空模板；需要未解决主线时，也必须先有具体事件和当前阶段，不把未完成的事情冒充已经发生的经历。
+
+“涟宝的小日记”是世界的一等查询对象，和轨迹事件绑定但不等同于事件摘要。它可以在日后继续扩展为按日、按地点、按人物和按阶段的长期回忆；删除或暂停主动消息不会删除已经写下的日记。世界面板分为今天、涟宝的小日记和世界里的地方三个视图，帮助用户看到一个持续生活的昔涟，而不是一组与自拍绑定的提示词。
+
+Linux Web 的真实绘图验收位于 `src/server/xilian-image-live.integration.test.ts`，默认跳过，只有显式提供测试环境变量时才运行。测试通过 Web 登录、模型档案、会话、WebSocket 和 `/api/agui/run` 提交真实用户输入，再进入 Responses SDK、图片工具、图片解析、Web media 落盘和会话附件回写。应用运行时只读取 Web 自己的模型档案；本机 Codex 的 `config.toml` 不属于 Linux Web 配置。此次第三方 400 的根因是兼容网关拒绝 `size/quality=auto`，随后又拒绝主模型传入的 `complexity=medium`；运行时已改为具体的 `1024x1024 + low`，并在图片工具请求中剥离主模型推理档位。实测完整链路已经成功返回并持久化图片。
 
 ## 14. 与现有消息链的衔接
 

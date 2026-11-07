@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultXilianWorldData } from "../../shared/xilian-world";
-import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "./xilian-life-context";
+import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "./life-context";
 
 describe("xilian life context", () => {
   it("only classifies explicit Xilian selfie requests as selfie context", () => {

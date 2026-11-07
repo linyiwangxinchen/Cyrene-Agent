@@ -122,7 +122,7 @@ export interface CyreneRunOptions {
   /** 明确请求昔涟自拍时绑定的生活事件 artifact；生成失败只更新 artifact 状态。 */
   xilianSelfieArtifact?: {
     artifactId: string;
-    store: Pick<import("../proactive/xilian-world-store").XilianWorldStore, "markArtifactGenerating" | "completeArtifact" | "failArtifact">;
+    store: Pick<import("../xilian-world/world-store").XilianWorldStore, "markArtifactGenerating" | "completeArtifact" | "failArtifact">;
   };
   /** 原始消息（不含 system）。system 由 chat-loop / harness-adapter 按 promptLayers 组装，不随消息持久化。 */
   messages: ChatMessage[];

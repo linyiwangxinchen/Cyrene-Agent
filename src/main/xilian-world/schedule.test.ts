@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDefaultXilianWorldData } from "../../shared/xilian-world";
-import { getXilianDateKey, reconcileXilianWorld, xilianStableHash } from "./xilian-schedule";
+import { getXilianDateKey, reconcileXilianWorld, xilianStableHash } from "./schedule";
 
 describe("xilian schedule", () => {
   it("uses the configured timezone for the world date", () => {
@@ -17,6 +17,8 @@ describe("xilian schedule", () => {
     expect(first.events).toEqual(second.events);
     expect(first.state.currentActivity?.id).toBe("xilian:2026-11-07:morning");
     expect(first.state.nextPlannedEvent?.status).toBe("planned");
+    expect(first.events.find(event => event.status === "completed")?.diaryText).toBeTruthy();
+    expect(first.events.some(event => event.summary.includes("暂时还没有答案") || event.summary.includes("准备之后再确认"))).toBe(false);
     expect(xilianStableHash("same-seed")).toBe(xilianStableHash("same-seed"));
   });
 
