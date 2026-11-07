@@ -341,6 +341,7 @@ async function authorizedWorkspaceRoots(store: WebStore): Promise<string[]> {
 
 async function serveStatic(
   response: ServerResponse,
+  request: IncomingMessage,
   requestPath: string,
   staticRoot: string | undefined,
 ): Promise<boolean> {
@@ -371,9 +372,28 @@ async function serveStatic(
     const cacheControl = filePath === entry || !/[.-][a-zA-Z0-9_-]{8,}\.[^.]+$/.test(path.basename(filePath))
       ? "no-cache"
       : "public, max-age=31536000, immutable";
+    // The SPA entry is deliberately revalidated so deployments take effect
+    // immediately, while hashed assets stay edge-cacheable for a year. An
+    // entity tag makes the revalidation cheap over a high-latency tunnel:
+    // Cloudflare can turn repeated index requests into a small 304 exchange
+    // without transferring the HTML again.
+    const etag = `"${info.size.toString(16)}-${Math.trunc(info.mtimeMs).toString(16)}"`;
+    const lastModified = info.mtime.toUTCString();
+    const ifNoneMatch = headerValue(request.headers["if-none-match"]);
+    const ifModifiedSince = headerValue(request.headers["if-modified-since"]);
+    const modifiedAtSecond = Math.floor(info.mtimeMs / 1000) * 1000;
+    const notModified = ifNoneMatch === etag || ifNoneMatch === "*"
+      || (!ifNoneMatch && Boolean(ifModifiedSince) && Date.parse(ifModifiedSince || "") >= modifiedAtSecond);
+    if (notModified) {
+      response.writeHead(304, { "Cache-Control": cacheControl, ETag: etag, "Last-Modified": lastModified });
+      response.end();
+      return true;
+    }
     response.writeHead(200, {
       "Content-Type": contentType(filePath),
       "Cache-Control": cacheControl,
+      ETag: etag,
+      "Last-Modified": lastModified,
       "Content-Length": String(info.size),
     });
     await pipeline(createReadStream(filePath), response);
@@ -387,6 +407,8 @@ async function serveStatic(
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-cache",
+        ETag: `"${info.size.toString(16)}-${Math.trunc(info.mtimeMs).toString(16)}"`,
+        "Last-Modified": info.mtime.toUTCString(),
         "Content-Length": String(info.size),
       });
       await pipeline(createReadStream(entry), response);
@@ -763,7 +785,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
         return;
       }
 
-      if (method === "GET" && !url.pathname.startsWith("/api/") && await serveStatic(response, url.pathname, options.staticRoot)) {
+      if (method === "GET" && !url.pathname.startsWith("/api/") && await serveStatic(response, request, url.pathname, options.staticRoot)) {
         return;
       }
 
@@ -1276,6 +1298,14 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       if (!response.headersSent) writeJson(response, status, { ok: false, error: code }); else response.destroy();
     }
   });
+  // Cloudflare Tunnel commonly reuses one origin connection for several
+  // browser requests. Node's five-second default keep-alive is too short for
+  // that path and causes avoidable TCP/TLS handshakes during SPA navigation.
+  // Keep idle connections warm for one minute while leaving the header timeout
+  // slightly larger so slow clients cannot hold a socket indefinitely.
+  server.keepAliveTimeout = 60_000;
+  server.headersTimeout = 65_000;
+  server.maxRequestsPerSocket = 1_000;
 
   websocketServer.on("connection", (socket, request) => {
     sockets.add(socket);

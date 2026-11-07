@@ -110,6 +110,10 @@ export default defineConfig({
   build: {
     outDir: perfOutDir ? resolve(import.meta.dirname, perfOutDir) : resolve(import.meta.dirname, "dist/renderer"),
     emptyOutDir: true,
+    // Web targets are modern Chromium browsers. Let native modulepreload handle
+    // dependency fetching instead of shipping Vite's compatibility polyfill on
+    // every entry, which matters when the first request crosses a tunnel.
+    modulePreload: { polyfill: false },
     rolldownOptions: {
       input: isPerfHarnessBuild
         ? {

@@ -1,12 +1,15 @@
-import { useEffect, useState } from "react";
-import { App } from "../react/App";
-import { webAuth } from "./web-runtime";
-import { resumeCoreConnection } from "./core-transport";
-import { WebHostDialogs } from "./WebHostDialogs";
-import { WebNotifications } from "./WebNotifications";
-import { WebAudioOutput } from "./WebAudioOutput";
-import { WebConsentGate } from "./WebConsentGate";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { installWebRuntimeGlobals, webAuth } from "./web-runtime";
 import "./styles.css";
+
+// Keep the login route independent from the workspace component libraries.
+// Authentication only needs this small gate; the full workspace (including
+// i18n, chat, settings, Mantine and Ant Design) loads after auth succeeds.
+const AuthenticatedWorkspace = lazy(() => import("./WebWorkspace").then(module => ({ default: module.WebWorkspace })));
+
+function WorkspaceLoading() {
+  return <div id="cyrene-web-loading" role="status" aria-live="polite"><div id="cyrene-web-loading__card"><div id="cyrene-web-loading__spinner" /><strong>正在进入工作区</strong><div>界面资源正在加载，请稍候。</div></div></div>;
+}
 
 type AuthState = { initialized: boolean; authenticated: boolean; username?: string };
 type AuthChallenge = { challengeId: string; expiresAt: number; captchaRequired: boolean; captchaImage?: string };
@@ -31,7 +34,15 @@ export function WebAuthGate() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const refresh = () => webAuth.status().then(async status => { if (status.authenticated) await resumeCoreConnection(); setState(status); }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "连接服务失败"));
+  const refresh = () => webAuth.status().then(async status => {
+    if (status.authenticated) {
+      await installWebRuntimeGlobals();
+      await import("../ui/theme");
+      const { resumeCoreConnection } = await import("./core-transport");
+      await resumeCoreConnection();
+    }
+    setState(status);
+  }).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "连接服务失败"));
   useEffect(() => { void refresh(); }, []);
   useEffect(() => {
     if (!state || state.authenticated) return;
@@ -45,7 +56,7 @@ export function WebAuthGate() {
   }, []);
 
   if (state?.authenticated) {
-    return <WebConsentGate onDecline={async () => { await webAuth.logout(); await refresh(); }}><div className="cy-web-auth__workspace"><div className="cy-web-auth__bar"><span>{state.username}</span><button type="button" onClick={() => { void webAuth.logout().then(refresh); }}>退出</button></div><App /><WebHostDialogs /><WebNotifications /><WebAudioOutput /></div></WebConsentGate>;
+    return <Suspense fallback={<WorkspaceLoading />}><AuthenticatedWorkspace username={state.username} onLogout={async () => { await webAuth.logout(); await refresh(); }} /></Suspense>;
   }
 
   const initializing = state !== null && !state.initialized;

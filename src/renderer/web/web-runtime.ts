@@ -1,5 +1,3 @@
-import { installSharedBridge, resumeCoreConnection, stopCoreConnection } from "./core-transport";
-
 export async function requestJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, { credentials: "same-origin", ...init });
   const payload = response.status === 204 ? null : await response.json();
@@ -15,11 +13,12 @@ export const webAuth = {
   },
   login: async (username: string, password: string, challenge?: { challengeId?: string; captcha?: string }) => {
     const result = await requestJson<{ username: string }>("/api/auth/login", jsonRequest({ username, password, ...challenge }));
-    await resumeCoreConnection(); return result.username;
+    return result.username;
   },
-  logout: async () => { stopCoreConnection(); await requestJson("/api/auth/logout", { method: "POST" }); },
+  logout: async () => { const { stopCoreConnection } = await import("./core-transport"); stopCoreConnection(); await requestJson("/api/auth/logout", { method: "POST" }); },
 };
 export async function installWebRuntimeGlobals(): Promise<void> {
+  const { installSharedBridge } = await import("./core-transport");
   await installSharedBridge();
   const system = window.system;
   if (!system) throw new Error("System bridge unavailable");

@@ -167,13 +167,21 @@ describe("legacy web data migration regression", () => {
   it("serves the Web SPA and falls back for extensionless routes", async () => {
     const fixture = await startFixture();
     try {
+      expect(fixture.handle.server.keepAliveTimeout).toBe(60_000);
+      expect(fixture.handle.server.headersTimeout).toBe(65_000);
       expect((await fetch(`${fixture.base}/`)).status).toBe(200);
       expect(await (await fetch(`${fixture.base}/`)).text()).toContain("cyrene-web-root");
       expect(await (await fetch(`${fixture.base}/asset.txt`)).text()).toBe("asset");
       expect((await fetch(`${fixture.base}/chat/session-1`)).status).toBe(200);
       expect((await fetch(`${fixture.base}/avatars/missing.png`)).status).toBe(404);
       expect((await fetch(`${fixture.base}/animation.gif`)).headers.get("content-type")).toContain("image/gif");
-      expect((await fetch(`${fixture.base}/asset.txt`)).headers.get("cache-control")).toBe("no-cache");
+      const asset = await fetch(`${fixture.base}/asset.txt`);
+      expect(asset.headers.get("cache-control")).toBe("no-cache");
+      expect(asset.headers.get("etag")).toMatch(/^"[0-9a-f]+-[0-9a-f]+"$/);
+      expect(asset.headers.get("last-modified")).toBeTruthy();
+      expect((await fetch(`${fixture.base}/asset.txt`, { headers: { "If-None-Match": asset.headers.get("etag") || "" } })).status).toBe(304);
+      const index = await fetch(`${fixture.base}/`);
+      expect((await fetch(`${fixture.base}/`, { headers: { "If-Modified-Since": index.headers.get("last-modified") || "" } })).status).toBe(304);
     } finally {
       await closeFixture(fixture.handle);
     }
