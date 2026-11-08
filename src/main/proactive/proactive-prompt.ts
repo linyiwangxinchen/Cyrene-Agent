@@ -44,6 +44,11 @@ const PROACTIVE_SYSTEM = `[proactive_system]
 消息应当简短自然，可以关心、分享、跟进或轻轻询问，但不要连续提出多个问题。
 不要声称自己调用了工具、读取了屏幕或执行了任何外部动作。`;
 
+const COMPANION_LANGUAGE_SYSTEM = `[companion_language_system]
+主动消息发生在真实的相处语境里，用户是你正在陪伴的人，不是需要完成的项目。
+晚间问候、休息提醒和情绪陪伴不要使用项目进度词来描述用户或关系，例如“推进”“交付”“闭环”“复盘”或没有明确对象的“收尾”。
+“收尾”只有在对象明确时才使用，例如“给今天慢慢收个尾”；不要写“陪你慢慢收尾”。优先写具体的相处感受，例如“陪你放松一会儿”“和你聊聊天”“让今天安静下来”“陪你把疲惫放下”。`;
+
 const MOMENT_SYSTEM = `[moment_system]
 这次候选来自一条已经筛选过的陪伴心事。可以自然分享它，或围绕它问一个轻量问题。
 不要提及队列、插件、评分或内部来源；不要把虚构角色小记说成现实经历。
@@ -131,7 +136,7 @@ function formatHistory(label: string, history: ProactiveHistoryTurn[], timezone:
 }
 
 export function buildProactiveMessages(input: BuildProactiveMessagesInput): ChatMessage[] {
-  const systemParts = [input.basePersona.trim(), PROACTIVE_SYSTEM];
+  const systemParts = [input.basePersona.trim(), PROACTIVE_SYSTEM, COMPANION_LANGUAGE_SYSTEM];
   if (input.userProfile?.trim()) systemParts.push(`[用户画像]\n${input.userProfile.trim()}`);
   if (input.relevantMemory?.trim()) systemParts.push(`[相关长期记忆]\n${input.relevantMemory.trim()}`);
   systemParts.push(formatHistory("最近使用的普通聊天会话", input.ordinaryHistory, input.timezone));

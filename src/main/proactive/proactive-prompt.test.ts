@@ -100,6 +100,23 @@ describe("proactive prompt", () => {
     expect(combined).not.toContain("工具目录");
     expect(combined).not.toContain("Tool Calling");
   });
+
+  it("keeps proactive companionship language human instead of task-like", () => {
+    const messages = buildProactiveMessages({
+      basePersona: "P",
+      ordinaryHistory: [],
+      proactiveHistory: [],
+      sceneId: "evening_checkin",
+      localNow: new Date(Date.UTC(2026, 6, 13, 15, 0)), // 23:00 Asia/Shanghai
+      idleSec: 20,
+      unansweredCount: 0,
+      timezone: TIMEZONE,
+    });
+    const combined = messages.map((message) => String(message.content)).join("\n");
+    expect(combined).toContain("用户是你正在陪伴的人，不是需要完成的项目");
+    expect(combined).toContain("不要写“陪你慢慢收尾”");
+    expect(combined).toContain("陪你放松一会儿");
+  });
 });
 
 // ── 时区专项测试 ───────────────────────────────────────────
