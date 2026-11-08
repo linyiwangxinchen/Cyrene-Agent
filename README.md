@@ -20,6 +20,7 @@
 
 - [Linux 构建、运行、停止与异机编译部署](./docs/deployment/linux-operations.md)
 - [Linux/Web 配置与能力说明](./docs/deployment/linux-web.md)
+- [QQ / NapCat（OneBot 11）详细配置](./docs/user-guide/napcat-onebot.md)
 - [全部修改说明与逐文件清单](./docs/changes/linux-web-changes.md)
 - [向上游同步修改的提交指南](./docs/changes/upstream-sync.md)
 
@@ -119,6 +120,111 @@ Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 
 > `pnpm run build` 已包含 `build:cli`，但 `pnpm link --global` 仍需单独运行。正式安装版的 `cyrene desktop` 入口将在 1.x 提供。
 
 </details>
+
+---
+
+## QQ / NapCat（OneBot 11）配置
+
+Cyrene 通过 **OneBot 11 反向 WebSocket** 接入 QQ。NapCat 登录一个专用 QQ 账号，Cyrene 在本机监听端口，NapCat 作为 WebSocket 客户端主动连接：
+
+```text
+QQ 好友或群 ── QQ 服务器 ── NapCat（登录机器人账号）
+                              └─ OneBot 11 反向 WebSocket ── Cyrene
+```
+
+完整的安装说明、群聊规则和媒体限制见[详细接入教程](./docs/user-guide/napcat-onebot.md)。下面是从安装到第一次收发消息所需的最小完整配置。
+
+### 1. 准备 NapCat 与 QQ
+
+- Windows 10/11 64 位，已安装 QQ NT 版。
+- 从 [NapCatQQ Releases](https://github.com/NapNeko/NapCatQQ/releases) 下载 `NapCat.Shell`，解压后运行 `launcher.bat`；Windows 10 可使用 `launcher-win10.bat`。
+- 使用一个专用 QQ 账号登录 NapCat。不要把常用个人账号作为机器人账号，也不要在同一 QQ 账号上重复配置多个会发送相同回复的框架。
+- 首次启动时在 NapCat WebUI 中扫码。WebUI 地址通常是 `http://127.0.0.1:6099/webui?token=...`，实际端口和 token 以启动日志或 `napcat/config/webui.json` 为准。
+- NapCat 建议使用 `4.8.115` 或更高版本；较旧版本可收发文本，但不支持 Cyrene 的完整媒体流能力。
+
+### 2. 在 Cyrene 中开启 QQ 监听
+
+打开「设置 → 连接手机 → QQ（NapCat / OneBot 11）」：
+
+| 设置项 | 同机 Windows 推荐值 | 说明 |
+| --- | --- | --- |
+| 启用 | 开启 | 保存后启动 OneBot 监听器 |
+| 监听模式 | `127.0.0.1` / `loopback` | NapCat 与 Cyrene 在同一台电脑时使用 |
+| 端口 | `6200` | 端口被占用时改成其他空闲端口 |
+| 私聊 QQ 白名单 | 你的常用 QQ 号，每行一个 | 这是**发送消息的人**，不是 NapCat 登录的机器人账号 |
+| 群号白名单 | 允许使用 Cyrene 的群号，每行一个 | 群聊只处理白名单群 |
+| Token | 同机 loopback 可留空 | WSL、Docker 或局域网连接必须设置随机 Token |
+| 群聊 @要求 | 保持开启 | 只有 `@机器人` 的群消息会触发回复 |
+
+点击「保存并启动监听」，确认状态变为「等待 NapCat 连接」或「NapCat 已连接」。页面显示的 WebSocket 地址就是下一步要填入 NapCat 的地址，例如：
+
+```text
+ws://127.0.0.1:6200/onebot/v11/ws
+```
+
+> `loopback` 只监听本机。跨 WSL、Docker 或局域网连接时，改用 Cyrene 页面显示的 `custom` 地址，并在两侧填写相同 Token；不要把 OneBot 端口直接暴露到公网或 Cloudflare Tunnel。
+
+### 3. 在 NapCat 中新建 WebSocket 客户端
+
+进入 NapCat WebUI →「网络配置」→「新建」→ **WebSocket 客户端**。不要选择 WebSocket 服务端，因为监听端口由 Cyrene 提供。
+
+| NapCat 字段 | 推荐值 |
+| --- | --- |
+| Enable | 开启 |
+| URL | `ws://127.0.0.1:6200/onebot/v11/ws` |
+| Message Post Format | `array` |
+| Report Self Message | 关闭 |
+| Reconnect Interval | `5000` |
+| Heart Interval | `30000` |
+| Token | 与 Cyrene 一致；同机 loopback 且 Cyrene Token 为空时留空 |
+
+保存并启用后，NapCat 控制台应显示反向 WebSocket 已连接，Cyrene 状态应显示「NapCat 已连接」。如果 NapCat 中已有其他框架的连接，新增一个 Cyrene 专用连接即可，不要覆盖原有配置。
+
+### 4. 配置文件示例（可选）
+
+NapCat Shell 的 OneBot 配置通常位于 `<NapCat目录>/napcat/config/onebot11_<机器人QQ号>.json`。也可以在 WebUI 中配置，下面的 JSON 仅展示 Cyrene 所需字段；`token` 不要提交到 Git 或公开日志：
+
+```json
+{
+  "network": {
+    "websocketClients": [
+      {
+        "enable": true,
+        "name": "cyrene",
+        "url": "ws://127.0.0.1:6200/onebot/v11/ws",
+        "reportSelfMessage": false,
+        "messagePostFormat": "array",
+        "token": "",
+        "debug": false,
+        "heartInterval": 30000,
+        "reconnectInterval": 5000,
+        "verifyCertificate": true
+      }
+    ]
+  }
+}
+```
+
+如果 Cyrene 使用了 Token，把上例的空字符串替换成同一个 Token。配置文件的其他 NapCat 选项可以保留；只需确保 `websocketClients` 中存在一个启用的 Cyrene 客户端。
+
+### 5. 验证收发链路
+
+1. Cyrene 显示「NapCat 已连接」后，点击「测试连接」，确认能看到机器人 QQ 号、昵称和 NapCat 版本。
+2. 用白名单中的个人 QQ 给机器人发送一条短消息。消息应按私聊会话进入 Cyrene 并收到回复。
+3. 群聊中必须把机器人加入白名单群，并在消息中 `@机器人`；群回复会引用原消息并 @发送者。
+4. 如果测试媒体，先用小图片或短语音验证，再逐步测试大文件。缓存位于 `<userData>/channels/cache/qq/`，单文件和总缓存上限见[详细接入教程](./docs/user-guide/napcat-onebot.md)。
+
+### 常见问题
+
+| 现象 | 检查项 |
+| --- | --- |
+| 一直显示「等待 NapCat 连接」 | NapCat 是否选择了 **WebSocket 客户端**；URL 是否包含 `/onebot/v11/ws`；连接是否已启用；QQ 是否已扫码登录 |
+| NapCat 日志显示 `ECONNREFUSED` | Cyrene 监听器未启动、端口填错或端口被其他程序占用；以 Cyrene 设置页当前显示的 URL 为准 |
+| 返回 `401 Unauthorized` | 两侧 Token 不一致；重新生成 Token 后同时更新 Cyrene 与 NapCat |
+| 私聊没有回复 | 发送者 QQ 号是否在 Cyrene 的私聊白名单中；白名单填写的是对方 QQ 号，不是机器人 QQ 号 |
+| 群聊没有回复 | 群号是否在白名单；消息是否真正 @ 了机器人；群聊工具调用始终关闭 |
+| 回复重复 | 检查 NapCat 是否同时启用了多个指向 Cyrene 的 WebSocket 客户端或其他机器人框架 |
+| 登录后频繁掉线 | 重新扫码并减少频繁换 IP/设备；建议使用专用 QQ 账号并遵守 QQ 平台规则 |
 
 ---
 
