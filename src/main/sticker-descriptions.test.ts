@@ -1,7 +1,17 @@
 // 贴纸描述纯函数测试：解析优先级与模型侧文本组装。
 // 设计：UI 展示图片，但模型侧只收到一段纯文本（用户原话 + internal_context 提示）。
 import { describe, expect, it } from "vitest";
-import { buildStickerUserModelText, resolveStickerPhrase } from "./sticker-descriptions";
+import { buildStickerUserModelText, BUILT_IN_STICKER_DESCRIPTIONS, BUILT_IN_STICKER_FILES, resolveStickerPhrase } from "./sticker-descriptions";
+import { BUILT_IN_STICKER_IDS } from "../shared/sticker-types";
+
+describe("built-in sticker catalog", () => {
+  it("keeps every built-in sticker wired to a description and an asset", () => {
+    for (const id of BUILT_IN_STICKER_IDS) {
+      expect(BUILT_IN_STICKER_DESCRIPTIONS[id]?.phrases.length, `${id} description`).toBeGreaterThan(0);
+      expect(BUILT_IN_STICKER_FILES[id], `${id} asset`).toMatch(/\.(?:png|jpe?g|gif|webp)$/i);
+    }
+  });
+});
 
 describe("resolveStickerPhrase 贴纸自然语言解析", () => {
   it("用户自定义 phrases 优先，多条用顿号拼接，忽略空白项", () => {

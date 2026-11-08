@@ -10,7 +10,7 @@ describe("web media", () => {
   it("persists sticker enablement, uploads and avatars independently of Electron", async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), "cyrene-media-")); directories.push(directory);
     let store = new WebMediaStore(directory);
-    expect((await store.list()).length).toBe(52);
+    expect((await store.list()).length).toBe(84);
     await store.setEnabled("playful", false);
     await store.add({ id: "fixture", description: "测试", phrases: ["测试"], dataUrl: image });
     const avatar = await store.setAvatar("cyrene", image);
