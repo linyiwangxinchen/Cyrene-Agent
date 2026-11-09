@@ -20,6 +20,7 @@ import {
   type HandlerCtx,
 } from "./commands/handlers.js";
 import { cmdRun } from "./commands/run.js";
+import { cmdConfig } from "./commands/config.js";
 
 declare const __CYRENE_VERSION__: string;
 
@@ -35,6 +36,9 @@ function resolveVersion(override?: string): string {
 
 export async function main(argv: readonly string[], versionOverride?: string): Promise<number> {
   const ctx: HandlerCtx = { version: resolveVersion(versionOverride) };
+  if (argv[0] === "config" && argv.some((item) => item === "--help" || item === "-h")) {
+    return cmdConfig([]);
+  }
   const cmd: Command = parseArgv(argv);
   switch (cmd.kind) {
     case "default":
@@ -49,6 +53,8 @@ export async function main(argv: readonly string[], versionOverride?: string): P
       return cmdHelp();
     case "run":
       return cmdRun();
+    case "config":
+      return cmdConfig(cmd.args);
     case "placeholder":
       return cmdPlaceholder(cmd.name);
     case "unknown":

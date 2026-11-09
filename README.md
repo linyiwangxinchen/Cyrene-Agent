@@ -20,6 +20,7 @@
 
 - [Linux 构建、运行、停止与异机编译部署](./docs/deployment/linux-operations.md)
 - [Linux/Web 配置与能力说明](./docs/deployment/linux-web.md)
+- [命令行与文件配置模型、微信连接](./docs/user-guide/cli-config.md)
 - [QQ / NapCat（OneBot 11）详细配置](./docs/user-guide/napcat-onebot.md)
 - [全部修改说明与逐文件清单](./docs/changes/linux-web-changes.md)
 - [向上游同步修改的提交指南](./docs/changes/upstream-sync.md)
@@ -115,7 +116,7 @@ Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 
 
 ### 4. 命令行入口（可选）
 
-项目附带 `cyrene` 命令行入口，执行 `pnpm run build:cli && pnpm link --global` 后即可在任意目录使用，提供 `version`、`run` 等子命令，详见 `cyrene --help`。
+项目附带 `cyrene` 命令行入口，执行 `pnpm run build:cli && pnpm link --global` 后即可在任意目录使用，提供 `version`、`run` 和可选的 `config` 子命令。`cyrene config` 可以从 JSON 文件或命令行参数写入模型信息、微信 iLink 连接和数据目录，详见[命令行与文件配置指南](./docs/user-guide/cli-config.md)。
 
 > `pnpm run build` 已包含 `build:cli`，但 `pnpm link --global` 仍需单独运行。正式安装版的 `cyrene desktop` 入口将在 1.x 提供。
 

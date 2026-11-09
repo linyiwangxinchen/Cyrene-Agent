@@ -42,6 +42,7 @@ Commands:
   about     Print banner plus project metadata
   version   Print version only
   run       Launch the Electron desktop app [dev only]
+  config    Configure model and WeChat settings from a file or flags
   doctor    Diagnose the local environment (planned)
   init      Initialize a workspace (planned)
   update    Self-update (planned)

@@ -200,6 +200,8 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+# Optional local model/WeChat configuration; use docs/user-guide/cli-config.md for the schema.
+cyrene.config.json
 # Video/preview render projects (not source code)
 videos/
 

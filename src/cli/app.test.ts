@@ -3,7 +3,7 @@
  * a temporary CYRENE_HOME so first-launch state is isolated.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { main } from "./app";
@@ -36,6 +36,7 @@ afterEach(() => {
   outSpy.mockRestore();
   errSpy.mockRestore();
   delete process.env.CYRENE_HOME;
+  delete process.env.CYRENE_CONFIG_TEST_KEY;
   rmSync(tmpHome, { recursive: true, force: true });
 });
 
@@ -83,6 +84,13 @@ describe("main: help", () => {
     expect(code).toBe(0);
     expect(stdoutBuf).toContain("Usage: cyrene");
   });
+
+  it("prints config-specific help", async () => {
+    const code = await main(["config", "--help"], VERSION);
+    expect(code).toBe(0);
+    expect(stdoutBuf).toContain("Usage: cyrene config");
+    expect(stdoutBuf).toContain("--api-key-env");
+  });
 });
 
 describe("main: default (first meeting)", () => {
@@ -123,6 +131,20 @@ describe("main: placeholder", () => {
     const code = await main(["doctor"], VERSION);
     expect(code).toBe(0);
     expect(stdoutBuf).toContain("planned for a future release");
+  });
+});
+
+describe("main: config", () => {
+  it("applies inline model flags to a Web data directory", async () => {
+    process.env.CYRENE_CONFIG_TEST_KEY = "fixture-key";
+    const code = await main([
+      "config", "apply", "--target", "web", "--data-dir", tmpHome,
+      "--provider", "Fixture", "--base-url", "https://example.test/v1", "--model", "fixture-model",
+      "--api-key-env", "CYRENE_CONFIG_TEST_KEY",
+    ], VERSION);
+    expect(code).toBe(0);
+    const data = JSON.parse(readFileSync(path.join(tmpHome, "web-data.json"), "utf8"));
+    expect(data.settings.modelProfiles[0]).toMatchObject({ provider: "Fixture", model: "fixture-model", apiKey: "fixture-key" });
   });
 });
 

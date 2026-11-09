@@ -21,6 +21,8 @@ node "$(node -e 'const p=require("node:path");const r=require("node:module").cre
 
 构建结果为 `dist/server/server/index.js`、`dist/headless/core.cjs`、知识库索引 worker、SQLite 数据库 worker、`dist/plugin-panel/` 和 `dist/renderer/`。运行时保留 `node_modules/`、`prompts/`、`skills/`、`resources/` 和可选的 `vendor/cyrene-skills/`，不能仅复制 HTML 或 `dist/server/`。Node 使用 24.x，系统需有 Git；Code 模式的语言服务器和 Skill 自身依赖按所用语言/技能安装。Chromium 和系统依赖的安装方式见 [Playwright 官方文档](https://playwright.dev/docs/browsers#install-system-dependencies)。
 
+模型和微信 iLink 也可以在无桌面环境中通过 `cyrene config apply --target web --data-dir "$CYRENE_DATA_DIR"` 写入；配置文件格式、环境变量密钥和凭据导入见[命令行与文件配置指南](../user-guide/cli-config.md)。
+
 部署时须同时保留仓库的 `prompts/` 目录，包括模式规则、身份、`soul.md`、台词参考、`styles/` 和 `worldbook/`。Web Server 与 Windows 端读取同一套资源；只复制 `dist/` 会缺少人格内容。默认从服务程序所在目录定位资源，不依赖启动时的当前目录；也可在程序根目录执行 `export CYRENE_PROMPTS_DIR="$(pwd -P)/prompts"` 指定位置。缺少必需提示词会明确报错。
 
 用户覆盖文件位于 `$CYRENE_DATA_DIR/prompts/`，按文件优先于随程序部署的版本。自定义表达风格位于 `$CYRENE_DATA_DIR/styles/custom/custom.md`；可选通用语气规则为 `$CYRENE_DATA_DIR/prompts/tone-rules.md`。这些文件使用 UTF-8。身份规则与风格分开，风格只改变表达方式；Work/Code 不注入 Chat 风格或风格采样参数。

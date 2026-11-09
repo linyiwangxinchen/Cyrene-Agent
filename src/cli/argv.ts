@@ -11,6 +11,7 @@ export type Command =
   | { kind: "version" }
   | { kind: "help" }
   | { kind: "run" }
+  | { kind: "config"; args: string[] }
   | { kind: "placeholder"; name: "doctor" | "init" | "update" }
   | { kind: "unknown"; name: string };
 
@@ -20,6 +21,7 @@ const SUBCOMMANDS = new Map<string, Command>([
   ["version", { kind: "version" }],
   ["help", { kind: "help" }],
   ["run", { kind: "run" }],
+  ["config", { kind: "config", args: [] }],
   ["doctor", { kind: "placeholder", name: "doctor" }],
   ["init", { kind: "placeholder", name: "init" }],
   ["update", { kind: "placeholder", name: "update" }],
@@ -33,8 +35,9 @@ export function parseArgv(argv: readonly string[]): Command {
     if (a === "--version" || a === "-v") return { kind: "version" };
   }
 
-  // First non-flag token is the subcommand. Extra tokens are rejected as
-  // unknown so we fail fast and predictably (no silent swallowed args).
+  // First non-flag token is the subcommand. The config command keeps its
+  // remaining arguments for its own option parser; the small legacy commands
+  // continue to use the first token only.
   const sub = argv.find((a) => !a.startsWith("-"));
   if (sub === undefined) {
     // No subcommand. If there are any leftover flags we did not recognise,
@@ -45,7 +48,13 @@ export function parseArgv(argv: readonly string[]): Command {
   }
 
   const known = SUBCOMMANDS.get(sub);
-  if (known) return known;
+  if (known) {
+    if (known.kind === "config") {
+      const index = argv.indexOf(sub);
+      return { kind: "config", args: argv.slice(index + 1) };
+    }
+    return known;
+  }
 
   return { kind: "unknown", name: sub };
 }

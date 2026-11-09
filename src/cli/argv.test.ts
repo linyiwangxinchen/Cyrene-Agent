@@ -26,6 +26,13 @@ describe("parseArgv", () => {
     expect(parseArgv(["run"])).toEqual({ kind: "run" });
   });
 
+  it("keeps config arguments for the config handler", () => {
+    expect(parseArgv(["config", "apply", "--file", "cyrene.config.json"])).toEqual({
+      kind: "config",
+      args: ["apply", "--file", "cyrene.config.json"],
+    });
+  });
+
   it("maps --help and -h to help, regardless of position", () => {
     expect(parseArgv(["--help"])).toEqual({ kind: "help" });
     expect(parseArgv(["-h"])).toEqual({ kind: "help" });
