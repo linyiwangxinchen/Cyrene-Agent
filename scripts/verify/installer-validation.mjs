@@ -140,7 +140,7 @@ SectionEnd
 $ErrorActionPreference = 'Stop'
 $stream = [System.IO.File]::Open(${ps(invalid)}, 'Open', 'Read', 'None')
 try {
-  $process = Start-Process -FilePath ${ps(exe)} -ArgumentList '/S' -PassThru -Wait
+  $process = Start-Process -FilePath ${ps(exe)} -ArgumentList '/S' -WindowStyle Hidden -PassThru -Wait
   $code = $process.ExitCode
 } finally { $stream.Dispose() }
 exit $code

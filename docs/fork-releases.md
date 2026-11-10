@@ -65,6 +65,11 @@ systemd 使用该启动器作为 ExecStart，数据目录继续由 `CYRENE_DATA_
 
 ## Release 与上游同步
 
+Windows 打包完成后可执行 `node scripts/verify/windows-packaged.mjs release/win-unpacked`，
+使用独立临时数据运行实际发行程序，验证 CLI、翁法罗斯 IPC/界面、历史读取与重启持久化。
+该检查抑制系统登录项、全局快捷键和窗口显示，不替代完整安装/卸载测试。
+本版构建与验收记录见 [1.3.5-2 发行验收](releases/2026-11-11-v1.3.5-2.md)。
+
 Fork 使用独立且不覆盖上游的标签，例如 `1.3.4+fork.20261019`。不要移动已存在的
 上游 `v1.3.4` 标签。发布说明注明 Windows/Linux 平台、源码提交、上游基线、
 实际验收和签名状态。更新元数据内的应用版本仍来自 package.json，后续希望触发
