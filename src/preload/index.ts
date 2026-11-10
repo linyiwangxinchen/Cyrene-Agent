@@ -1075,6 +1075,10 @@ exposeMusicApi();
 const companionApi: import("../shared/companion").CompanionApi = {
   get: () => ipcRenderer.invoke(IPC.COMPANION_GET),
   getWorld: () => ipcRenderer.invoke(IPC.COMPANION_WORLD_GET),
+  configureWorld: (options) => ipcRenderer.invoke(IPC.COMPANION_WORLD_CONFIGURE, options),
+  getWorldHistory: (query) => ipcRenderer.invoke(IPC.COMPANION_WORLD_HISTORY, query),
+  getWorldUpdate: (cursor) => ipcRenderer.invoke(IPC.COMPANION_WORLD_UPDATE, cursor),
+  getWorldArtifact: (id) => ipcRenderer.invoke(IPC.COMPANION_WORLD_ARTIFACT, id),
   update: (command) => ipcRenderer.invoke(IPC.COMPANION_UPDATE, command),
   export: () => ipcRenderer.invoke(IPC.COMPANION_EXPORT),
 };

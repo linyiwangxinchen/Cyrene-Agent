@@ -243,7 +243,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           const timezone = resolveChatContextTimezone(rawDeps.loadUserProfile().timezone);
           const state = xilianWorldStore.advance({ now, timezone });
           const timeline = xilianWorldStore.queryTimeline({ dateKey: state.worldDate, order: "desc", limit: 8 });
-          return formatXilianLifeContext(buildXilianLifeSnapshot({ state, timeline, now, timezone }));
+          return formatXilianLifeContext(buildXilianLifeSnapshot({ state, timeline, now, timezone, world: xilianWorldStore.worldView().amphoreus }));
         } catch (error) {
           console.warn("[XilianWorld] 构建桌面生活上下文失败，已降级为空", error);
           return "";

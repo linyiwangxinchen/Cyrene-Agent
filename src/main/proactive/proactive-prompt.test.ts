@@ -8,6 +8,10 @@ const TIMEZONE = "Asia/Shanghai";
 const turn = (role: "user" | "model", index: number) => ({ role, content: `${role}-${index}`, at: index });
 
 describe("proactive prompt", () => {
+  it("includes world continuity even when no moment was selected", () => {
+    const messages = buildProactiveMessages({ basePersona: "P", ordinaryHistory: [], proactiveHistory: [], sceneId: "work_break", localNow: new Date(Date.UTC(2026, 6, 13, 6)), idleSec: 0, unansweredCount: 0, timezone: TIMEZONE, lifeContext: "亲历：今天的记录尚未完成；现在正在吃午餐。" });
+    expect(String(messages[0].content)).toContain("今天的记录尚未完成；现在正在吃午餐");
+  });
   it("labels and limits ordinary and proactive histories independently", () => {
     const messages = buildProactiveMessages({
       basePersona: "PERSONA",

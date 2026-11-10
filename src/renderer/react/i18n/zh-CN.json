@@ -903,6 +903,148 @@
     "noReadableContent": "这条消息没有可朗读的内容"
   },
   "settingsPage": {
+    "amphoreus": {
+      "title": "翁法罗斯",
+      "intro": "世界有自己的时间，每个人都有自己的生活。",
+      "refresh": "刷新",
+      "retry": "重试",
+      "loading": "正在读取世界",
+      "loadError": "暂时无法读取世界，请稍后重试。",
+      "unavailable": "世界数据尚未就绪，请更新核心服务后重试。",
+      "clockHint": "现实时间决定昼夜与作息。公共事件每日续写，发生过的变化会留在世界中。",
+      "narrative": "每日世界续写",
+      "narrativeHint": "模型按日安排事件，并在活动结束后根据当时的条件确定结果。吃饭、休息与个人生活持续按当地时间运行。",
+      "attempts": "今日尝试",
+      "lastSuccess": "最近续写",
+      "events": "世界动态",
+      "eventFilter": "事件筛选",
+      "today": "今日",
+      "recent": "近期历史",
+      "major": "重大事件",
+      "noEvents": "这里还没有公共事件。居民仍在按作息生活，可查看推进状态。",
+      "outcome": "后续结果",
+      "generated": "模型续写",
+      "threads": "持续公共事务",
+      "open": "进行中",
+      "resolved": "已解决",
+      "next": "接下来：",
+      "residents": "居民",
+      "residentHint": "十二个黄金裔席位中，缇宝、缇安、缇宁各自拥有经历；另有昔涟与六位常见居民。每个人都有自己的作息、目标与关注。",
+      "profile": "人物与资料",
+      "aspiration": "日常方向：",
+      "routine": "日常作息",
+      "places": "地点",
+      "diary": "昔涟的生活",
+      "diaryHint": "昔涟是世界中的一位居民。这里只记录她自己的行程与经历。",
+      "now": "此刻",
+      "continuation": "翁法罗斯续写",
+      "archive": "原涟界历史",
+      "noDiary": "还没有完成并留下的日记。",
+      "artifacts": "生活留影与作品",
+      "noArtifacts": "还没有生成作品。",
+      "sources": "设定与来源",
+      "sourceHint": "人物与历史参考公开资料；日常方向、公共事务和模型生成事件属于本项目延续，不是官方新剧情。",
+      "revision": "资料版本",
+      "phase": {
+        "dawn": "清晨",
+        "morning": "上午",
+        "noon": "午间",
+        "afternoon": "下午",
+        "dusk": "傍晚",
+        "night": "夜间"
+      },
+      "status": {
+        "pending": "等待今日续写",
+        "generating": "正在续写",
+        "success": "今日计划已生成",
+        "failed": "续写失败，按作息运行",
+        "unconfigured": "等待配置模型",
+        "cancelled": "本次续写已取消",
+        "disabled": "仅按日常作息运行"
+      },
+      "error": {
+        "invalid_output": "模型返回的计划未通过校验。",
+        "request_failed": "模型请求未完成，将按每日额度稍后重试。",
+        "interrupted": "运行状态已变化，未采用迟到的回复。"
+      },
+      "eventStatus": {
+        "planned": "计划中",
+        "active": "正在发生",
+        "completed": "已结束",
+        "deferred": "已调整安排",
+        "awaiting_resolution": "等待结果",
+        "partial": "部分完成",
+        "failed": "未能完成",
+        "cancelled": "已取消"
+      },
+      "kind": {
+        "golden_heir": "黄金裔",
+        "npc": "城邦居民",
+        "cyrene": "昔涟"
+      },
+      "sourceKind": {
+        "official": "官方发布",
+        "transcript": "游戏文本转录",
+        "community": "社区整理"
+      },
+      "dailyBudget": "今日世界推演",
+      "sinceVisit": "查看上次离开后的变化",
+      "offlineContinuity": "离线期间的生活接续",
+      "causes": "缘由与后续",
+      "intent": "原来的打算",
+      "requires": "需要的条件",
+      "earlierEvent": "更早的已归档事件",
+      "changedBecause": "安排变化的原因",
+      "changed": "留下的影响",
+      "attention": "正在惦记",
+      "personalLife": "个人目标与经历",
+      "personHistory": "查看此人的完整经历",
+      "placeHistory": "查看此地历史",
+      "chronicle": "世界编年史",
+      "allResidents": "所有居民",
+      "allPlaces": "所有地点",
+      "showAllHistory": "查看全部历史",
+      "historyHint": "这里保存已经发生的事件、事务变化与离线接续记录，可按人物和地点回看。",
+      "noHistory": "这段范围内还没有记录。",
+      "loadMore": "加载更早记录",
+      "mapHint": "城邦往来示意图，并非官方地理地图。标注为正常通路下的模拟行程时间；通路受限会增加耗时。",
+      "facilities": "设施",
+      "supplies": "物资",
+      "hereNow": "当前在此",
+      "noResident": "暂无常驻人物在此活动",
+      "routes": "直接往来",
+      "minutes": "分钟",
+      "preview": "查看作品",
+      "previewUnavailable": "这份作品暂时无法预览，原有记录仍保留。",
+      "artifactAlt": "昔涟生活记录中的画面",
+      "canonFacts": "设定依据与延续边界",
+      "condition": {
+        "poor": "需要修复",
+        "recovering": "逐渐恢复",
+        "stable": "运转稳定"
+      },
+      "suppliesLevel": {
+        "low": "紧张",
+        "enough": "基本够用",
+        "plenty": "较为充足"
+      },
+      "access": {
+        "open": "往来正常",
+        "limited": "通路受限",
+        "closed": "暂时封闭"
+      },
+      "memoryKind": {
+        "experienced": "亲历",
+        "heard": "听闻",
+        "routine": "日常"
+      },
+      "historyKind": {
+        "event": "公共事件",
+        "memory": "个人经历",
+        "thread": "事务变化",
+        "gap": "离线接续"
+      }
+    },
     "knowledgeBase": {
       "title": "知识库",
       "description": "管理本地资料集，按原文件路径检索和引用内容。",
@@ -2182,20 +2324,46 @@
       "worldOutcome": "目前结果：{{value}}",
       "worldNext": "接下来：{{value}}",
       "worldGoalProgress": "{{progress}} / {{target}} · {{status}}",
-      "worldGoalStatus": { "active": "进行中", "paused": "已暂停", "completed": "已完成" },
+      "worldGoalStatus": {
+        "active": "进行中",
+        "paused": "已暂停",
+        "completed": "已完成"
+      },
       "worldNoTimeline": "今天还没有已完成的生活记录。",
       "worldResult": "结果：{{value}}",
       "worldTogether": "一起：{{value}}",
       "worldNoDiary": "今天还没有写下日记。",
       "worldMood": "那时的心情：{{value}}",
-      "worldEventStatus": { "planned": "准备开始", "active": "正在进行", "completed": "已完成", "interrupted": "中途停下" },
+      "worldEventStatus": {
+        "planned": "准备开始",
+        "active": "正在进行",
+        "completed": "已完成",
+        "interrupted": "中途停下"
+      },
       "worldArtifacts": "生活产物",
       "worldArtifactsHint": "显示最近产物的状态，不暴露本地文件路径。",
       "worldNoArtifacts": "还没有生活产物。",
       "worldArtifactModel": "成图模型：{{model}}",
-      "worldArtifactStatus": { "planned": "待生成", "generating": "生成中", "generated": "已生成", "failed": "生成失败" },
-      "worldArtifactKind": { "selfie": "自拍", "note": "便签", "song": "歌曲", "question": "问题" },
-      "worldArtifactError": { "auth": "认证失败", "parameter": "参数错误", "network": "网络错误", "timeout": "超时", "parse": "解析失败", "unknown": "未知错误" },
+      "worldArtifactStatus": {
+        "planned": "待生成",
+        "generating": "生成中",
+        "generated": "已生成",
+        "failed": "生成失败"
+      },
+      "worldArtifactKind": {
+        "selfie": "自拍",
+        "note": "便签",
+        "song": "歌曲",
+        "question": "问题"
+      },
+      "worldArtifactError": {
+        "auth": "认证失败",
+        "parameter": "参数错误",
+        "network": "网络错误",
+        "timeout": "超时",
+        "parse": "解析失败",
+        "unknown": "未知错误"
+      },
       "worldNotice": "涟界里的居民、地点和经历都属于昔涟的虚拟人生；这里不会把服务器记录说成用户的现实经历。"
     },
     "asr": {

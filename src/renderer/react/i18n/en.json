@@ -903,6 +903,148 @@
     "noReadableContent": "This message has nothing to read aloud"
   },
   "settingsPage": {
+    "amphoreus": {
+      "title": "Amphoreus",
+      "intro": "A world with its own time, and people with lives of their own.",
+      "refresh": "Refresh",
+      "retry": "Retry",
+      "loading": "Loading world",
+      "loadError": "The world is unavailable. Please try again.",
+      "unavailable": "World data is not ready. Update the core service and try again.",
+      "clockHint": "Real time guides day, night and daily routines. Daily stories leave lasting changes in the world.",
+      "narrative": "Daily world stories",
+      "narrativeHint": "The model plans each day and resolves events against current conditions after they end. Meals, rest and personal life follow local time.",
+      "attempts": "Attempts today",
+      "lastSuccess": "Last story",
+      "events": "World events",
+      "eventFilter": "Filter events",
+      "today": "Today",
+      "recent": "Recent history",
+      "major": "Major events",
+      "noEvents": "No public events here yet. Residents continue their routines; check the story status.",
+      "outcome": "Outcome",
+      "generated": "Model story",
+      "threads": "Ongoing affairs",
+      "open": "Ongoing",
+      "resolved": "Resolved",
+      "next": "Next:",
+      "residents": "Residents",
+      "residentHint": "The twelve Chrysos Heir seats include three distinct lives for Tribbie, Trian and Trinnon. Cyrene and six familiar residents also follow their own routines and goals.",
+      "profile": "Character and sources",
+      "aspiration": "Daily direction:",
+      "routine": "Daily routine",
+      "places": "Places",
+      "diary": "Cyrene’s life",
+      "diaryHint": "Cyrene is one resident of the world. These are her own activities and experiences.",
+      "now": "Now",
+      "continuation": "Amphoreus continuation",
+      "archive": "Former world archive",
+      "noDiary": "No completed diary entries yet.",
+      "artifacts": "Photos and keepsakes",
+      "noArtifacts": "No keepsakes yet.",
+      "sources": "Canon and sources",
+      "sourceHint": "Characters and history draw on public sources. Daily directions, public affairs and generated events are this project’s continuation, not new official story.",
+      "revision": "Source revision",
+      "phase": {
+        "dawn": "Dawn",
+        "morning": "Morning",
+        "noon": "Noon",
+        "afternoon": "Afternoon",
+        "dusk": "Evening",
+        "night": "Night"
+      },
+      "status": {
+        "pending": "Waiting for today’s story",
+        "generating": "Writing today’s story",
+        "success": "Today’s plan is ready",
+        "failed": "Story failed; routines continue",
+        "unconfigured": "Waiting for model configuration",
+        "cancelled": "Story cancelled",
+        "disabled": "Daily routines only"
+      },
+      "error": {
+        "invalid_output": "The model plan did not pass validation.",
+        "request_failed": "The model request failed. A later attempt is subject to the daily limit.",
+        "interrupted": "The runtime changed; the late reply was discarded."
+      },
+      "eventStatus": {
+        "planned": "Planned",
+        "active": "Happening now",
+        "completed": "Completed",
+        "deferred": "Rescheduled",
+        "awaiting_resolution": "Awaiting outcome",
+        "partial": "Partly completed",
+        "failed": "Unsuccessful",
+        "cancelled": "Cancelled"
+      },
+      "kind": {
+        "golden_heir": "Chrysos Heir",
+        "npc": "Local resident",
+        "cyrene": "Cyrene"
+      },
+      "sourceKind": {
+        "official": "Official publication",
+        "transcript": "Game transcript",
+        "community": "Community reference"
+      },
+      "dailyBudget": "World requests today",
+      "sinceVisit": "Changes since your last visit",
+      "offlineContinuity": "Life while offline",
+      "causes": "Causes and consequences",
+      "intent": "Original intention",
+      "requires": "Requires",
+      "earlierEvent": "An earlier archived event",
+      "changedBecause": "Why plans changed",
+      "changed": "Lasting change",
+      "attention": "On their mind",
+      "personalLife": "Personal goals and experiences",
+      "personHistory": "View full personal history",
+      "placeHistory": "View local history",
+      "chronicle": "World chronicle",
+      "allResidents": "All residents",
+      "allPlaces": "All places",
+      "showAllHistory": "Show all history",
+      "historyHint": "Browse completed events, changing affairs and offline continuity by person or place.",
+      "noHistory": "No records in this range yet.",
+      "loadMore": "Load earlier records",
+      "mapHint": "A schematic of simulated routes, not official geography. Times assume normal access; restrictions increase travel time.",
+      "facilities": "Facilities",
+      "supplies": "Supplies",
+      "hereNow": "Here now",
+      "noResident": "No listed resident is currently here",
+      "routes": "Direct routes",
+      "minutes": "min",
+      "preview": "View artwork",
+      "previewUnavailable": "This artwork is currently unavailable. Its record is preserved.",
+      "artifactAlt": "A scene from Cyrene’s life",
+      "canonFacts": "Canon references and continuation boundaries",
+      "condition": {
+        "poor": "Needs repair",
+        "recovering": "Recovering",
+        "stable": "Stable"
+      },
+      "suppliesLevel": {
+        "low": "Scarce",
+        "enough": "Sufficient",
+        "plenty": "Well stocked"
+      },
+      "access": {
+        "open": "Open",
+        "limited": "Restricted",
+        "closed": "Closed"
+      },
+      "memoryKind": {
+        "experienced": "Experienced",
+        "heard": "Heard",
+        "routine": "Daily life"
+      },
+      "historyKind": {
+        "event": "World event",
+        "memory": "Personal memory",
+        "thread": "Affair update",
+        "gap": "Offline continuity"
+      }
+    },
     "knowledgeBase": {
       "title": "Knowledge Base",
       "description": "Manage local collections and search content at its original file path.",
@@ -2182,20 +2324,46 @@
       "worldOutcome": "Current outcome: {{value}}",
       "worldNext": "Next: {{value}}",
       "worldGoalProgress": "{{progress}} / {{target}} · {{status}}",
-      "worldGoalStatus": { "active": "In progress", "paused": "Paused", "completed": "Completed" },
+      "worldGoalStatus": {
+        "active": "In progress",
+        "paused": "Paused",
+        "completed": "Completed"
+      },
       "worldNoTimeline": "No completed life records for today.",
       "worldResult": "Result: {{value}}",
       "worldTogether": "Together: {{value}}",
       "worldNoDiary": "No diary entry for today.",
       "worldMood": "Mood then: {{value}}",
-      "worldEventStatus": { "planned": "Planned", "active": "In progress", "completed": "Completed", "interrupted": "Interrupted" },
+      "worldEventStatus": {
+        "planned": "Planned",
+        "active": "In progress",
+        "completed": "Completed",
+        "interrupted": "Interrupted"
+      },
       "worldArtifacts": "Life artifacts",
       "worldArtifactsHint": "Recent artifact status is shown without exposing local file paths.",
       "worldNoArtifacts": "No life artifacts yet.",
       "worldArtifactModel": "Image model: {{model}}",
-      "worldArtifactStatus": { "planned": "Planned", "generating": "Generating", "generated": "Generated", "failed": "Failed" },
-      "worldArtifactKind": { "selfie": "Selfie", "note": "Note", "song": "Song", "question": "Question" },
-      "worldArtifactError": { "auth": "Authentication failed", "parameter": "Invalid parameters", "network": "Network error", "timeout": "Timed out", "parse": "Parse failed", "unknown": "Unknown error" },
+      "worldArtifactStatus": {
+        "planned": "Planned",
+        "generating": "Generating",
+        "generated": "Generated",
+        "failed": "Failed"
+      },
+      "worldArtifactKind": {
+        "selfie": "Selfie",
+        "note": "Note",
+        "song": "Song",
+        "question": "Question"
+      },
+      "worldArtifactError": {
+        "auth": "Authentication failed",
+        "parameter": "Invalid parameters",
+        "network": "Network error",
+        "timeout": "Timed out",
+        "parse": "Parse failed",
+        "unknown": "Unknown error"
+      },
       "worldNotice": "Residents, places, and events in this world are part of Xilian's fictional life. Server records are not claims about the user's real life."
     },
     "asr": {

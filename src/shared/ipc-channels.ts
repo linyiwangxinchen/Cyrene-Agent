@@ -34,6 +34,10 @@ export const IPC = {
   MEMORY_GOVERNANCE_EXPORT: "memory-governance:export",
   COMPANION_GET: "companion:get",
   COMPANION_WORLD_GET: "companion:world:get",
+  COMPANION_WORLD_CONFIGURE: "companion:world:configure",
+  COMPANION_WORLD_HISTORY: "companion:world:history",
+  COMPANION_WORLD_UPDATE: "companion:world:update",
+  COMPANION_WORLD_ARTIFACT: "companion:world:artifact",
   COMPANION_UPDATE: "companion:update",
   COMPANION_EXPORT: "companion:export",
   // pet window

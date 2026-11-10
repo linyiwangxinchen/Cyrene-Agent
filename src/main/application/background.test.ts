@@ -68,6 +68,19 @@ describe("createBackgroundTaskRunner", () => {
 });
 
 describe("startBackground", () => {
+  it("starts the world while MCP is pending and disposes it during shutdown", async () => {
+    let resolveMcp!: () => void;
+    const disposeWorld = vi.fn();
+    const startWorld = vi.fn(async () => ({ dispose: disposeWorld }));
+    const deps = makeBackgroundDeps([], { restoreMcp: () => new Promise<void>((resolve) => { resolveMcp = resolve; }), startWorld });
+    const background = startBackground(deps);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(startWorld).toHaveBeenCalledOnce();
+    expect(deps.channels.start).not.toHaveBeenCalled();
+    resolveMcp(); await background.settled;
+    await deps.shutdown.requestControlledShutdown({ reason: "test", finalAction: () => undefined });
+    expect(disposeWorld).toHaveBeenCalledOnce();
+  });
   it("starts channels and scheduler after MCP settles", async () => {
     const calls: string[] = [];
     const background = startBackground(makeBackgroundDeps(calls));

@@ -20,4 +20,9 @@ describe("resolveSettingsDestination", () => {
   it("defaults unknown legacy sections to appearance", () => {
     expect(resolveSettingsDestination("missing-section")).toEqual({ kind: "settings", section: "appearance" });
   });
+
+  it("opens the independent world page through its new and legacy route", () => {
+    expect(resolveSettingsDestination("amphoreus")).toEqual({ kind: "settings", section: "amphoreus" });
+    expect(resolveSettingsDestination("xilian-world")).toEqual({ kind: "settings", section: "amphoreus" });
+  });
 });

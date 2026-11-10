@@ -1,8 +1,10 @@
+import { AMPHOREUS_LOCATIONS } from "./amphoreus-canon";
+
 /**
- * 昔涟虚拟世界的共享契约。
+ * 昔涟个人时间线的兼容契约；当前公共世界使用 amphoreus-world.ts。
  *
  * 这里的字段描述的是服务器内的虚构生活，不代表用户的现实地点、行程或
- * 身体状态。主进程负责推进和持久化，模型只能读取经过筛选的快照。
+ * 身体状态。主进程负责推进和持久化，模型计划经校验后才由世界内核采纳。
  */
 
 export type XilianWorldActivityKind =
@@ -121,7 +123,8 @@ export interface XilianWorldState {
 }
 
 export interface XilianWorldData {
-  version: 2;
+  version: 2 | 3;
+  amphoreus?: import("./amphoreus-world").AmphoreusState;
   state: XilianWorldState;
   timeline: XilianTimelineEvent[];
   diary: XilianDiaryEntry[];
@@ -130,6 +133,7 @@ export interface XilianWorldData {
 }
 
 export interface XilianWorldView {
+  amphoreus?: import("./amphoreus-world").AmphoreusView;
   state: XilianWorldState;
   timeline: XilianTimelineEvent[];
   diary: XilianDiaryEntry[];
@@ -139,6 +143,7 @@ export interface XilianWorldView {
 }
 
 export interface XilianLifeSnapshot {
+  worldContext?: string;
   worldDate: string;
   localTime: string;
   season: string;
@@ -224,7 +229,7 @@ export const XILIAN_DEFAULT_GOALS = Object.freeze([
 ] as const);
 
 export function getXilianLocation(id: string): XilianLocation | undefined {
-  return XILIAN_LOCATIONS.find((location) => location.id === id);
+  return AMPHOREUS_LOCATIONS.find((location) => location.id === id) ?? XILIAN_LOCATIONS.find((location) => location.id === id);
 }
 
 export function getXilianTimeBlock(id: string): XilianTimeBlock | undefined {

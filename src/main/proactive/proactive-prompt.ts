@@ -145,8 +145,8 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   if (input.unansweredCount === 1) systemParts.push(FOLLOWUP_SYSTEM);
   if (input.momentContext?.trim()) {
     systemParts.push(MOMENT_SYSTEM, `[陪伴心事]\n${input.momentContext.trim()}`);
-    if (input.lifeContext?.trim()) systemParts.push(`[虚拟状态参考]\n${input.lifeContext.trim()}`);
   }
+  if (input.lifeContext?.trim()) systemParts.push(`[虚拟状态参考]\n${input.lifeContext.trim()}`);
 
   const trigger = `[本次主动聊天候选]
 电脑本地时间：${formatLocalTime(input.localNow, input.timezone)}（按用户设置的时区）

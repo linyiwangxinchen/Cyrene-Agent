@@ -15,6 +15,12 @@ import {
   type XilianWorldState,
 } from "../../shared/xilian-world";
 import { getXilianDateKey, reconcileXilianWorld, type XilianCompanionSignals } from "./schedule";
+import { AMPHOREUS_LOCATIONS } from "../../shared/amphoreus-canon";
+import type { AmphoreusState } from "../../shared/amphoreus-world";
+import { amphoreusView, createAmphoreusState, reconcileAmphoreus } from "../amphoreus-world/engine";
+import { FutureWorldVersion, readAmphoreusState } from "../amphoreus-world/narrative";
+import { archiveWorld, queryHistory } from "../amphoreus-world/archive";
+import type { WorldHistoryQuery } from "../../shared/amphoreus-world";
 
 const MAX_TIMELINE_EVENTS = 2_000;
 const MAX_ARTIFACTS = 500;
@@ -95,7 +101,7 @@ function normalizeEvent(value: unknown): XilianTimelineEvent | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const raw = value as Partial<XilianTimelineEvent>;
   if (typeof raw.id !== "string" || typeof raw.dateKey !== "string" || !validDateKey(raw.dateKey)) return null;
-  if (typeof raw.slotId !== "string" || !getXilianTimeBlock(raw.slotId)) return null;
+  if (typeof raw.slotId !== "string" || (raw.slotId !== "amphoreus" && !getXilianTimeBlock(raw.slotId))) return null;
   if (typeof raw.locationId !== "string" || !getXilianLocation(raw.locationId)) return null;
   const activityKinds = ["work", "study", "game", "rest", "explore", "social", "maintenance", "travel"] as const;
   const statuses = ["planned", "active", "completed", "interrupted"] as const;
@@ -209,6 +215,7 @@ function normalizeData(value: unknown, dateKey: string, now: number): XilianWorl
   const fallback = createDefaultXilianWorldData(dateKey, now);
   if (!value || typeof value !== "object" || Array.isArray(value)) return fallback;
   const raw = value as Partial<XilianWorldData>;
+  if (typeof raw.version === "number" && raw.version > 3) throw new FutureWorldVersion();
   const timeline = Array.isArray(raw.timeline)
     ? raw.timeline.map(normalizeEvent).filter((event): event is XilianTimelineEvent => Boolean(event)).slice(-MAX_TIMELINE_EVENTS)
     : [];
@@ -219,7 +226,8 @@ function normalizeData(value: unknown, dateKey: string, now: number): XilianWorl
     ? raw.artifacts.map(normalizeArtifact).filter((artifact): artifact is XilianLifeArtifactContext => Boolean(artifact)).slice(-MAX_ARTIFACTS)
     : [];
   return {
-    version: 2,
+    version: raw.version === 3 ? 3 : 2,
+    ...(raw.version === 3 ? { amphoreus: readAmphoreusState(raw.amphoreus, now) } : {}),
     state: normalizeState(raw.state, dateKey, now),
     timeline,
     diary,
@@ -234,6 +242,7 @@ function systemTimezone(): string {
 
 export class XilianWorldStore {
   private cached?: { signature: { mtimeMs: number; size: number } | null; dateKey: string; data: XilianWorldData };
+  private worldTime?: { now: number; timezone: string };
 
   constructor(private readonly filePath: string, private readonly now: () => number = Date.now) {}
 
@@ -241,7 +250,8 @@ export class XilianWorldStore {
     try {
       const info = fs.statSync(this.filePath);
       return info.isFile() ? { mtimeMs: info.mtimeMs, size: info.size } : null;
-    } catch {
+    } catch (error) {
+      if (path.basename(this.filePath) === "amphoreus-world.json" && (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return null;
     }
   }
@@ -249,8 +259,9 @@ export class XilianWorldStore {
   private backupCorruptFile(): void {
     try {
       const backup = `${this.filePath}.corrupt-${Date.now()}.json`;
-      fs.copyFileSync(this.filePath, backup);
-    } catch {
+      fs.copyFileSync(this.filePath, backup, fs.constants.COPYFILE_EXCL);
+    } catch (error) {
+      if (path.basename(this.filePath) === "amphoreus-world.json") throw error;
       // A corrupt backup is best effort; the safe default still keeps runtime alive.
     }
   }
@@ -262,17 +273,50 @@ export class XilianWorldStore {
     if (this.cached && this.cached.dateKey === dateKey && this.cached.signature?.mtimeMs === signature?.mtimeMs && this.cached.signature?.size === signature?.size) return clone(this.cached.data);
     if (!signature) {
       const fallback = createDefaultXilianWorldData(dateKey, at);
+      if (path.basename(this.filePath) === "amphoreus-world.json") {
+        const legacy = path.join(path.dirname(this.filePath), "xilian-world.json");
+        let migrated = fallback;
+        if (fs.existsSync(legacy)) {
+          try { migrated = normalizeData(JSON.parse(fs.readFileSync(legacy, "utf8")), dateKey, at); }
+          catch (error) {
+            if (error instanceof FutureWorldVersion) throw error;
+            fs.copyFileSync(legacy, `${legacy}.corrupt-${at}.json`, fs.constants.COPYFILE_EXCL);
+          }
+        }
+        migrated.version = 3;
+        migrated.amphoreus = createAmphoreusState(at);
+        migrated.timeline = migrated.timeline.map((event) => event.source === "simulated_world" && (event.status === "active" || event.status === "planned") ? { ...event, status: "interrupted" } : event);
+        this.writeData(migrated);
+        return migrated;
+      }
       this.cached = { signature: null, dateKey, data: clone(fallback) };
       return fallback;
     }
     try {
-      const data = normalizeData(JSON.parse(fs.readFileSync(this.filePath, "utf8")), dateKey, at);
+      const raw: unknown = JSON.parse(fs.readFileSync(this.filePath, "utf8"));
+      if (path.basename(this.filePath) === "amphoreus-world.json") {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid world document");
+        const document = raw as Partial<XilianWorldData>;
+        if (document.version === 3 && !document.amphoreus) throw new Error("Missing world state");
+      }
+      const data = normalizeData(raw, dateKey, at);
+      if (path.basename(this.filePath) === "amphoreus-world.json" && (raw as { amphoreus?: { schema?: number } }).amphoreus?.schema === 1) {
+        const backup = `${this.filePath}.schema1-backup.json`;
+        if (!fs.existsSync(backup)) fs.copyFileSync(this.filePath, backup, fs.constants.COPYFILE_EXCL);
+        this.writeData(data);
+        return data;
+      }
       this.cached = { signature, dateKey, data: clone(data) };
       return data;
-    } catch {
+    } catch (error) {
+      if (error instanceof FutureWorldVersion) throw error;
+      if (path.basename(this.filePath) === "amphoreus-world.json" && (error as NodeJS.ErrnoException).code) throw error;
       this.backupCorruptFile();
       const fallback = createDefaultXilianWorldData(dateKey, at);
-      try { this.writeData(fallback); } catch { /* keep the in-memory safe default */ }
+      try { this.writeData(fallback); } catch (writeError) {
+        if (path.basename(this.filePath) === "amphoreus-world.json") throw writeError;
+        /* Legacy callers keep their in-memory safe default. */
+      }
       this.cached = { signature: this.fileSignature(), dateKey, data: clone(fallback) };
       return fallback;
     }
@@ -281,9 +325,20 @@ export class XilianWorldStore {
   private writeData(data: XilianWorldData): void {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     const temporary = `${this.filePath}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    const full = `${JSON.stringify(data, null, 2)}\n`;
+    fs.writeFileSync(temporary, full, "utf8");
     fs.renameSync(temporary, this.filePath);
     this.cached = { signature: this.fileSignature(), dateKey: getXilianDateKey(new Date(this.now()), systemTimezone()), data: clone(data) };
+    // The complete snapshot is authoritative. Archive cannot publish uncommitted facts.
+    // If archive/compaction fails, the full snapshot remains recoverable and replay is idempotent.
+    if (data.amphoreus) {
+      archiveWorld(path.join(path.dirname(this.filePath), "amphoreus-history.sqlite"), data.amphoreus);
+      const compact = `${JSON.stringify(data, null, 2)}\n`;
+      if (compact !== full) {
+        fs.writeFileSync(temporary, compact, "utf8"); fs.renameSync(temporary, this.filePath);
+        this.cached = { signature: this.fileSignature(), dateKey: getXilianDateKey(new Date(this.now()), systemTimezone()), data: clone(data) };
+      }
+    }
   }
 
   private save(data: XilianWorldData): void {
@@ -303,6 +358,13 @@ export class XilianWorldStore {
     const at = input.now ?? this.now();
     const timezone = input.timezone || systemTimezone();
     const data = this.readData();
+    if (data.version === 3 || path.basename(this.filePath) === "amphoreus-world.json") {
+      this.worldTime = { now: at, timezone };
+      const before = JSON.stringify(data);
+      reconcileAmphoreus(data, at, timezone);
+      if (before !== JSON.stringify(data)) this.save(data);
+      return clone(data.state);
+    }
     const result = reconcileXilianWorld({ state: data.state, timeline: data.timeline, now: at, timezone, companion: input.companion });
     if (!result.changed) return clone(data.state);
     const byId = new Map(data.timeline.map((event) => [event.id, event]));
@@ -360,15 +422,47 @@ export class XilianWorldStore {
     const artifactLimit = Math.max(1, Math.min(200, Math.floor(Number.isFinite(input.limit) ? input.limit! : 50)));
     return {
       state: clone(data.state),
-      timeline: this.queryTimeline({ dateKey, order: "asc", limit: input.limit ?? 50 }),
-      diary: this.queryDiary({ dateKey, order: "asc", limit: input.limit ?? 50 }),
+      timeline: data.timeline.filter((event) => event.dateKey === dateKey).sort((a, b) => a.occurredAt - b.occurredAt).slice(0, artifactLimit),
+      diary: data.diary.filter((entry) => data.amphoreus || entry.dateKey === dateKey).sort((a, b) => data.amphoreus ? b.writtenAt - a.writtenAt : a.writtenAt - b.writtenAt).slice(0, artifactLimit),
       artifacts: data.artifacts.slice(-artifactLimit).reverse().map((artifact) => {
         const safe = { ...artifact };
         delete safe.outputPath;
         return safe;
       }),
-      locations: XILIAN_LOCATIONS,
+      locations: data.amphoreus ? AMPHOREUS_LOCATIONS : XILIAN_LOCATIONS,
+      ...(data.amphoreus ? { amphoreus: clone(amphoreusView(data.amphoreus, this.worldTime?.now ?? this.now(), this.worldTime?.timezone ?? systemTimezone())) } : {}),
     };
+  }
+
+  /** Synchronous read/modify/write; async model calls must happen outside this transaction. */
+  updateAmphoreus(update: (world: AmphoreusState) => boolean): void {
+    const data = this.readData();
+    if (!data.amphoreus) data.amphoreus = createAmphoreusState(this.now());
+    if (update(data.amphoreus)) {
+      const retained = new Set(data.amphoreus.days.flatMap((day) => day.events.map((event) => event.id)));
+      data.amphoreus.appliedEventIds = [...new Set(data.amphoreus.appliedEventIds)].filter((id) => retained.has(id));
+      data.version = 3; this.save(data);
+    }
+  }
+
+  queryWorldHistory(input: WorldHistoryQuery = {}) {
+    this.readData();
+    return queryHistory(path.join(path.dirname(this.filePath), "amphoreus-history.sqlite"), input);
+  }
+
+  readWorldArtifact(id: string): { dataUrl: string } | null {
+    if (typeof id !== "string" || id.length > 200) throw new Error("Invalid artifact");
+    const artifact = this.readData().artifacts.find((item) => item.id === id && item.status === "generated");
+    if (!artifact?.outputPath) return null;
+    try {
+      const root = fs.realpathSync(path.dirname(this.filePath)), file = fs.realpathSync(artifact.outputPath);
+      const relative = path.relative(root, file);
+      if (relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) return null;
+      const stat = fs.statSync(file); if (!stat.isFile() || stat.size > 8 * 1024 * 1024) return null;
+      const bytes = fs.readFileSync(file);
+      const mime = bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) ? "image/png" : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255 ? "image/jpeg" : bytes.subarray(0, 4).toString() === "RIFF" && bytes.subarray(8, 12).toString() === "WEBP" ? "image/webp" : undefined;
+      return mime ? { dataUrl: `data:${mime};base64,${bytes.toString("base64")}` } : null;
+    } catch { return null; }
   }
 
   listArtifacts(input: { eventId?: string; kind?: XilianLifeArtifactKind; limit?: number } = {}): XilianLifeArtifactContext[] {
@@ -431,6 +525,8 @@ const sharedStores = new Map<string, XilianWorldStore>();
 
 /** Desktop main-process callers share one store instance to serialize writes. */
 export function getSharedXilianWorldStore(filePath: string): XilianWorldStore {
+  filePath = path.resolve(filePath);
+  if (path.basename(filePath) === "xilian-world.json") filePath = path.join(path.dirname(filePath), "amphoreus-world.json");
   const existing = sharedStores.get(filePath);
   if (existing) return existing;
   const created = createXilianWorldStore(filePath);

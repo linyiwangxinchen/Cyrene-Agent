@@ -6,6 +6,7 @@ import {
   type XilianWorldState,
 } from "../../shared/xilian-world";
 import { getXilianDateKey, getZonedDateParts, xilianStableHash } from "./schedule";
+import { formatAmphoreusContext } from "../amphoreus-world/engine";
 
 export interface XilianLifeContextInput {
   state: XilianWorldState;
@@ -13,6 +14,7 @@ export interface XilianLifeContextInput {
   now: number;
   timezone: string;
   energy?: number;
+  world?: import("../../shared/amphoreus-world").AmphoreusView;
 }
 
 export function isXilianSelfieRequest(text: string): boolean {
@@ -29,6 +31,7 @@ function eventLocation(event: XilianTimelineEvent | undefined): string {
 }
 
 function chooseOutfit(input: XilianLifeContextInput, event: XilianTimelineEvent | undefined): string {
+  if (event?.slotId === "amphoreus" && event.activityTitle.includes("睡眠")) return "适合安静休息的柔软睡衣";
   const seed = xilianStableHash(`${getXilianDateKey(new Date(input.now), input.timezone)}:${event?.slotId ?? "idle"}`) % 3;
   if (event?.activityKind === "maintenance" || event?.activityKind === "work") return "便于行动的浅色工作外套";
   if (event?.activityKind === "game") return "袖口稍微卷起的轻便日常装";
@@ -38,6 +41,7 @@ function chooseOutfit(input: XilianLifeContextInput, event: XilianTimelineEvent 
 }
 
 function selfieReason(event: XilianTimelineEvent | undefined): string {
+  if (event?.slotId === "amphoreus") return event.activityTitle.includes("睡眠") ? "她正在休息；这是当前休息场景的画面，不声称她刚醒来拍摄" : "记录眼下的生活片刻，不把尚未发生的计划说成已经完成";
   if (!event) return "她想把今天安静的一小段时间留存下来";
   switch (event.activityKind) {
     case "maintenance": return "灯光终于稳定下来，她想记录这次小小的完成感";
@@ -72,13 +76,14 @@ export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLi
   return {
     worldDate: getXilianDateKey(new Date(input.now), input.timezone),
     localTime: localTime(input.now, input.timezone),
-    season: arc?.title ?? input.state.seasonId,
+    season: input.state.seasonId.startsWith("翁法罗斯") ? input.state.seasonId : arc?.title ?? input.state.seasonId,
+    ...(input.world ? { worldContext: formatAmphoreusContext(input.world) } : {}),
     location,
     currentActivity: current?.activityTitle ?? "还在决定今天先从哪一页开始",
-    recentEvent: recent?.summary ?? "今天还没有完成可以回看的生活事件",
+    recentEvent: recent?.outcome ?? recent?.summary ?? "今天还没有完成可以回看的生活事件",
     nextPlan: next?.activityTitle ?? "晚上留一点安静时间整理心情",
     mood: current?.mood ?? "平稳，带着一点期待",
-    energy: Math.max(0, Math.min(100, Math.floor(input.energy ?? current?.energyAfter ?? 70))),
+    energy: Math.max(0, Math.min(100, Math.floor((input.world ? input.world.residentStates.find((r) => r.id === "cyrene")?.energy : input.energy) ?? current?.energyAfter ?? 70))),
     outfit: chooseOutfit(input, current),
     selfieReason: selfieReason(current),
     visualAnchors: [
@@ -88,7 +93,7 @@ export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLi
     ],
     avoid: [
       "不要出现第二个人物、文字水印、相机 UI 或未授权品牌",
-      "不要把涟界地点画成现实城市，也不要添加与当前活动冲突的道具",
+      "不要把虚构世界地点画成现实城市，也不要添加与当前活动冲突的道具",
     ],
     sourceEventId: current?.id ?? "xilian:none",
   };
@@ -96,6 +101,7 @@ export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLi
 
 export function formatXilianLifeContext(snapshot: XilianLifeSnapshot): string {
   return [
+    snapshot.worldContext ?? "",
     "【昔涟虚拟生活快照】",
     "以下内容属于昔涟所在的虚构世界，只能作为连续性事实，不代表用户现实地点或真实行程。",
     `世界日期：${snapshot.worldDate} ${snapshot.localTime}`,

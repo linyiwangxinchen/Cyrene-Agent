@@ -22,6 +22,7 @@
 - [Linux/Web 配置与能力说明](./docs/deployment/linux-web.md)
 - [命令行与文件配置模型、微信连接](./docs/user-guide/cli-config.md)
 - [QQ / NapCat（OneBot 11）详细配置](./docs/user-guide/napcat-onebot.md)
+- [翁法罗斯：世界动态、居民作息与每日模型续写](./docs/user-guide/amphoreus-world.md)
 - [全部修改说明与逐文件清单](./docs/changes/linux-web-changes.md)
 - [向上游同步修改的提交指南](./docs/changes/upstream-sync.md)
 

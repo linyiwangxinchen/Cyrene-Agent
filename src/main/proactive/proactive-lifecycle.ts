@@ -39,6 +39,7 @@ import type { ProactiveCandidate, ProactiveEvaluationStatus, ProactiveRuntimeSna
 import { getSharedXilianWorldStore, type XilianWorldStore } from "../xilian-world/world-store";
 import { buildXilianLifeSnapshot, formatXilianLifeContext } from "../xilian-world/life-context";
 import type { XilianTimelineEvent, XilianWorldState, XilianWorldView } from "../../shared/xilian-world";
+import { createAmphoreusRuntime } from "../amphoreus-world/runtime";
 
 export interface ProactiveLifecycleOptions {
   loadGeneralSettings: () => GeneralSettings;
@@ -49,11 +50,14 @@ export interface ProactiveLifecycle {
   initializeProactiveChatService: () => void;
   initializeProactiveTrigger: () => void;
   stopProactiveTrigger: () => void;
+  startWorld: () => void;
+  stopWorld: () => void;
   getProactiveChatService: () => ProactiveChatService | null;
   getProactiveStatus: () => ProactiveEvaluationStatus;
   getWorldSnapshot: (input?: { now?: number; timezone?: string }) => XilianWorldState;
   queryWorldTimeline: (input?: { dateKey?: string; from?: number; to?: number; limit?: number; order?: "asc" | "desc" }) => XilianTimelineEvent[];
   getWorldView: (input?: { now?: number; timezone?: string; limit?: number }) => XilianWorldView;
+  setWorldNarrativeEnabled: (enabled: boolean) => void;
   enqueueCompanionMoment: (moment: Omit<CompanionMoment, "status">) => CompanionMoment;
   observeCompanionActivity: (kind: CompanionLifeObservationKind) => void;
   proactiveConversationLifecycle: {
@@ -70,6 +74,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   const conversationJournal = options.conversationJournal;
   const lifeStore: CompanionLifeStore = createCompanionLifeStore(path.join(app.getPath("userData"), "companion-life.json"));
   const worldStore: XilianWorldStore = getSharedXilianWorldStore(path.join(app.getPath("userData"), "xilian-world.json"));
+  const amphoreus = createAmphoreusRuntime(worldStore);
   let normalConversationBusyCount = 0;
   let proactiveScreenLocked = false;
   let lastMessageActivityAt: number | null = null;
@@ -197,6 +202,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const worldTimeline = worldStore.queryTimeline({ dateKey: worldState.worldDate, order: "desc", limit: 8 });
     const worldSnapshot = buildXilianLifeSnapshot({
       state: worldState,
+      world: worldStore.worldView().amphoreus,
       timeline: worldTimeline,
       now: snapshot.now,
       timezone,
@@ -214,7 +220,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       unansweredCount: state.unansweredCount,
       timezone,
       ...(moment ? { momentContext: moment.summary } : {}),
-      ...(moment ? { lifeContext: `${formatXilianLifeContext(worldSnapshot)}\n精力 ${lifeState.energy}/100；好奇 ${lifeState.curiosity}/100；无聊 ${lifeState.boredom}/100。` } : {}),
+      lifeContext: `${formatXilianLifeContext(worldSnapshot)}\n好奇 ${lifeState.curiosity}/100；无聊 ${lifeState.boredom}/100。`,
     });
   }
 
@@ -517,7 +523,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         lifeStore.ensureDailyFictionalMoment({
           enabled: companion.relationship.innerLifeEnabled && companion.relationship.proactiveLifeEnabled,
           conversationId: route?.available ? (route.recipient.conversationId ?? route.recipient.sessionId) : undefined,
-          summary: `【虚构角色小记】${worldSnapshot.currentActivity}。${worldSnapshot.mood}。${worldSnapshot.nextPlan}。这是昔涟在涟界里的生活记录，不是现实地点或真实行程。`,
+          summary: `【虚构角色小记】${worldSnapshot.currentActivity}。${worldSnapshot.mood}。下一计划：${worldSnapshot.nextPlan}。这是昔涟在翁法罗斯延续世界线中的生活记录，不是现实地点或真实行程。`,
           now: ctx.now,
           dateKey: ctx.localDate,
         });
@@ -565,6 +571,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   }
 
   return {
+    setWorldNarrativeEnabled: (enabled) => amphoreus.setNarrativeEnabled(enabled),
+    startWorld: () => amphoreus.start(),
+    stopWorld: () => amphoreus.stop(),
     initializeProactiveChatService,
     initializeProactiveTrigger,
     stopProactiveTrigger,

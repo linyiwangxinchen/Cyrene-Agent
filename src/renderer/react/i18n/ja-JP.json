@@ -903,6 +903,148 @@
     "noReadableContent": "このメッセージには読み上げ可能な内容がありません"
   },
   "settingsPage": {
+    "amphoreus": {
+      "title": "オンパロス",
+      "intro": "世界には独自の時間があり、誰もが自分の暮らしを持っています。",
+      "refresh": "更新",
+      "retry": "再試行",
+      "loading": "世界を読み込み中",
+      "loadError": "世界を読み込めません。後ほどお試しください。",
+      "unavailable": "世界データの準備ができていません。コアを更新してください。",
+      "clockHint": "現実の時間に合わせて昼夜と生活が移り変わります。毎日の出来事が世界に残ります。",
+      "narrative": "毎日の物語生成",
+      "narrativeHint": "モデルが一日の予定を立て、終了後に実際の条件から結果を決めます。食事や休息、個人の生活は現地時間に従います。",
+      "attempts": "今日の試行",
+      "lastSuccess": "前回の生成",
+      "events": "世界の動き",
+      "eventFilter": "出来事を絞り込む",
+      "today": "今日",
+      "recent": "最近の記録",
+      "major": "大きな出来事",
+      "noEvents": "公共の出来事はまだありません。住民は日課を続けています。生成状況をご確認ください。",
+      "outcome": "結果",
+      "generated": "モデルによる続編",
+      "threads": "継続中の公共事項",
+      "open": "進行中",
+      "resolved": "解決済み",
+      "next": "次は：",
+      "residents": "住民",
+      "residentHint": "十二の黄金裔の席位には、三つ子それぞれの暮らしと記憶があります。キュレネと六人の住民にも、独自の日課と目標があります。",
+      "profile": "人物と資料",
+      "aspiration": "日常の方向：",
+      "routine": "日課",
+      "places": "場所",
+      "diary": "キュレネの暮らし",
+      "diaryHint": "キュレネも世界の住民の一人です。ここには彼女自身の活動と経験だけを記録します。",
+      "now": "現在",
+      "continuation": "オンパロス続編",
+      "archive": "旧世界の記録",
+      "noDiary": "完了した日記はまだありません。",
+      "artifacts": "写真と思い出",
+      "noArtifacts": "作品はまだありません。",
+      "sources": "設定と出典",
+      "sourceHint": "人物と歴史は公開資料に基づきます。日課や公共事項、生成された出来事は本プロジェクトの続編であり、公式の新しい物語ではありません。",
+      "revision": "資料バージョン",
+      "phase": {
+        "dawn": "早朝",
+        "morning": "午前",
+        "noon": "昼",
+        "afternoon": "午後",
+        "dusk": "夕方",
+        "night": "夜"
+      },
+      "status": {
+        "pending": "今日の生成待ち",
+        "generating": "生成中",
+        "success": "今日の計画を生成済み",
+        "failed": "生成失敗、日課を継続",
+        "unconfigured": "モデルの設定待ち",
+        "cancelled": "生成を中止",
+        "disabled": "日課のみ"
+      },
+      "error": {
+        "invalid_output": "モデルの計画が検証を通過しませんでした。",
+        "request_failed": "リクエストに失敗しました。一日の上限内で後ほど再試行します。",
+        "interrupted": "実行状態が変わったため、遅れて届いた応答を破棄しました。"
+      },
+      "eventStatus": {
+        "planned": "予定",
+        "active": "進行中",
+        "completed": "終了",
+        "deferred": "予定変更",
+        "awaiting_resolution": "結果待ち",
+        "partial": "一部完了",
+        "failed": "未達成",
+        "cancelled": "中止"
+      },
+      "kind": {
+        "golden_heir": "黄金裔",
+        "npc": "街の住民",
+        "cyrene": "キュレネ"
+      },
+      "sourceKind": {
+        "official": "公式発表",
+        "transcript": "ゲーム本文の転記",
+        "community": "コミュニティ資料"
+      },
+      "dailyBudget": "今日の世界推演",
+      "sinceVisit": "前回の訪問後の変化",
+      "offlineContinuity": "オフライン中の暮らし",
+      "causes": "経緯とその後",
+      "intent": "当初の予定",
+      "requires": "必要な条件",
+      "earlierEvent": "保存済みの過去の出来事",
+      "changedBecause": "予定が変わった理由",
+      "changed": "残った変化",
+      "attention": "気にかけていること",
+      "personalLife": "目標と経験",
+      "personHistory": "この人物の記録を見る",
+      "placeHistory": "この場所の歴史を見る",
+      "chronicle": "世界年代記",
+      "allResidents": "すべての住民",
+      "allPlaces": "すべての場所",
+      "showAllHistory": "すべての記録を見る",
+      "historyHint": "実際の出来事、課題の変化、オフライン中の記録を人物や場所で振り返れます。",
+      "noHistory": "この範囲にはまだ記録がありません。",
+      "loadMore": "以前の記録を読み込む",
+      "mapHint": "移動経路の模式図です。公式の地理図ではありません。所要時間は通常時の想定で、通行制限により長くなります。",
+      "facilities": "施設",
+      "supplies": "物資",
+      "hereNow": "今ここにいる人",
+      "noResident": "現在ここで活動している登録住民はいません",
+      "routes": "直接の移動経路",
+      "minutes": "分",
+      "preview": "作品を見る",
+      "previewUnavailable": "現在この作品は表示できません。記録は保存されています。",
+      "artifactAlt": "キュレネの暮らしの一場面",
+      "canonFacts": "設定の根拠と物語の境界",
+      "condition": {
+        "poor": "修復が必要",
+        "recovering": "復旧中",
+        "stable": "安定"
+      },
+      "suppliesLevel": {
+        "low": "不足",
+        "enough": "必要量あり",
+        "plenty": "豊富"
+      },
+      "access": {
+        "open": "通行可能",
+        "limited": "通行制限",
+        "closed": "閉鎖中"
+      },
+      "memoryKind": {
+        "experienced": "体験",
+        "heard": "伝聞",
+        "routine": "日常"
+      },
+      "historyKind": {
+        "event": "世界の出来事",
+        "memory": "個人の記憶",
+        "thread": "課題の変化",
+        "gap": "オフラインの記録"
+      }
+    },
     "knowledgeBase": {
       "title": "ナレッジベース",
       "description": "ローカル資料を管理し、元のファイルから検索・参照します。",
@@ -2182,20 +2324,46 @@
       "worldOutcome": "現在の結果：{{value}}",
       "worldNext": "次：{{value}}",
       "worldGoalProgress": "{{progress}} / {{target}} · {{status}}",
-      "worldGoalStatus": { "active": "進行中", "paused": "一時停止", "completed": "完了" },
+      "worldGoalStatus": {
+        "active": "進行中",
+        "paused": "一時停止",
+        "completed": "完了"
+      },
       "worldNoTimeline": "今日は完了した生活記録がありません。",
       "worldResult": "結果：{{value}}",
       "worldTogether": "一緒に：{{value}}",
       "worldNoDiary": "今日はまだ日記を書いていません。",
       "worldMood": "そのときの気分：{{value}}",
-      "worldEventStatus": { "planned": "開始前", "active": "進行中", "completed": "完了", "interrupted": "中断" },
+      "worldEventStatus": {
+        "planned": "開始前",
+        "active": "進行中",
+        "completed": "完了",
+        "interrupted": "中断"
+      },
       "worldArtifacts": "生活の成果物",
       "worldArtifactsHint": "ローカルファイルのパスを表示せず、最近の成果物の状態を表示します。",
       "worldNoArtifacts": "生活の成果物はまだありません。",
       "worldArtifactModel": "画像モデル：{{model}}",
-      "worldArtifactStatus": { "planned": "生成待ち", "generating": "生成中", "generated": "生成済み", "failed": "生成失敗" },
-      "worldArtifactKind": { "selfie": "自撮り", "note": "メモ", "song": "曲", "question": "質問" },
-      "worldArtifactError": { "auth": "認証失敗", "parameter": "パラメータエラー", "network": "ネットワークエラー", "timeout": "タイムアウト", "parse": "解析失敗", "unknown": "不明なエラー" },
+      "worldArtifactStatus": {
+        "planned": "生成待ち",
+        "generating": "生成中",
+        "generated": "生成済み",
+        "failed": "生成失敗"
+      },
+      "worldArtifactKind": {
+        "selfie": "自撮り",
+        "note": "メモ",
+        "song": "曲",
+        "question": "質問"
+      },
+      "worldArtifactError": {
+        "auth": "認証失敗",
+        "parameter": "パラメータエラー",
+        "network": "ネットワークエラー",
+        "timeout": "タイムアウト",
+        "parse": "解析失敗",
+        "unknown": "不明なエラー"
+      },
       "worldNotice": "涟界の住民、場所、出来事はキュレネの架空の人生に属します。サーバーの記録はユーザーの現実の出来事を示すものではありません。"
     },
     "asr": {

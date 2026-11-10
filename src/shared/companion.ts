@@ -1,6 +1,7 @@
 /** One identity across all task modes and transports. No Electron dependency. */
 import type { BondProgressState } from "./companion-progress";
 import type { XilianWorldView } from "./xilian-world";
+import type { WorldHistoryPage, WorldHistoryQuery } from "./amphoreus-world";
 
 export type RelationshipStage = "new" | "familiar" | "close" | "long_term";
 /**
@@ -131,6 +132,10 @@ export type CompanionCommand = { expectedRevision: number } & (
 export interface CompanionApi {
   get(): Promise<CompanionSnapshot>;
   getWorld(): Promise<XilianWorldView>;
+  configureWorld(options: { narrativeEnabled: boolean }): Promise<void>;
+  getWorldHistory(query?: WorldHistoryQuery): Promise<WorldHistoryPage>;
+  getWorldUpdate(cursor?: string): Promise<{ cursor: string; clock?: import("./amphoreus-world").AmphoreusClock; view?: XilianWorldView }>;
+  getWorldArtifact(id: string): Promise<{ dataUrl: string } | null>;
   update(command: CompanionCommand): Promise<CompanionSnapshot>;
   export(): Promise<string>;
 }

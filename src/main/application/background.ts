@@ -41,6 +41,7 @@ export interface BackgroundDependencies {
   prewarmScreenshot(signal: AbortSignal): Promise<void>;
   scheduleUpdateCheck(signal: AbortSignal): Promise<{ dispose(): void } | void>;
   startProactiveTrigger(signal: AbortSignal): Promise<{ dispose(): void } | void>;
+  startWorld?(signal: AbortSignal): Promise<{ dispose(): void } | void>;
   /** 启动动态反应队列周期扫描器（含启动补扫，重启后逾期任务尽快续上） */
   startMomentsReactionScanner(signal: AbortSignal): Promise<{ dispose(): void } | void>;
 }
@@ -143,6 +144,7 @@ export function startBackground(deps: BackgroundDependencies): BackgroundHandle 
   let proactiveTriggerDisposer: OptionalDisposer;
   let updateCheckDisposer: OptionalDisposer;
   let momentsScannerDisposer: OptionalDisposer;
+  let worldDisposer: OptionalDisposer;
 
   const isShuttingDown = (): boolean => {
     const phase = readiness.getPhase();
@@ -270,8 +272,18 @@ export function startBackground(deps: BackgroundDependencies): BackgroundHandle 
     });
   }
 
+  shutdown.register({ id: "amphoreus-world", phase: "stopProducers", dispose: async () => { disposeOptional(worldDisposer); } });
+  async function groupWorld(): Promise<void> {
+    if (!deps.startWorld) return;
+    await runTracked("amphoreus-world", "amphoreus", async (signal) => {
+      if (signal.aborted) return;
+      worldDisposer = await deps.startWorld!(signal);
+      return worldDisposer;
+    });
+  }
+
   const settled = (async () => {
-    await Promise.allSettled([groupA(), groupB(), groupC(), groupD()]);
+    await Promise.allSettled([groupA(), groupB(), groupC(), groupD(), groupWorld()]);
     try {
       if (readiness.getPhase() === "background-starting") {
         readiness.transition("ready");

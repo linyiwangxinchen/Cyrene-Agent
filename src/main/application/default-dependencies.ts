@@ -934,6 +934,10 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         core.services.proactive.initializeProactiveTrigger();
         return { dispose: () => core.services.proactive.stopProactiveTrigger() };
       },
+      startWorld: async () => {
+        core.services.proactive.startWorld();
+        return { dispose: () => core.services.proactive.stopWorld() };
+      },
       startMomentsReactionScanner: async () => {
         // 启动即补扫一轮：重启前已逾期的反应任务尽快续上，不等第一个扫描周期
         momentsService.startReactionScanner();

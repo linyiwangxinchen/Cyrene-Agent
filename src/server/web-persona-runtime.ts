@@ -18,7 +18,7 @@ import { WebFeatureStore, type WebFeatureData } from "./web-feature-store";
 import type { WebSettings } from "./web-store";
 import { XILIAN_PERSONA_SPEC } from "../main/persona/persona-spec";
 import { XILIAN_IMAGE_GENERATION_PROMPT } from "../main/persona/xilian-image-prompt";
-import { createXilianWorldStore } from "../main/xilian-world/world-store";
+import { getSharedXilianWorldStore as createXilianWorldStore } from "../main/xilian-world/world-store";
 import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../main/xilian-world/life-context";
 import type { XilianLifeSnapshot } from "../shared/xilian-world";
 import type { RelationshipPreferencesPatch } from "../main/relationship/relationship-log-core";
@@ -183,7 +183,7 @@ export class WebPersonaRuntime {
     const worldNow = Date.now();
     const worldState = this.world.advance({ now: worldNow, timezone });
     const worldTimeline = this.world.queryTimeline({ dateKey: worldState.worldDate, order: "desc", limit: 8 });
-    const worldSnapshot = buildXilianLifeSnapshot({ state: worldState, timeline: worldTimeline, now: worldNow, timezone });
+    const worldSnapshot = buildXilianLifeSnapshot({ state: worldState, timeline: worldTimeline, now: worldNow, timezone, world: this.world.worldView().amphoreus });
     const selfieContext = config.imageGeneration?.enabled && isXilianSelfieRequest(input.prompt)
       ? buildXilianSelfiePrompt(worldSnapshot)
       : "";

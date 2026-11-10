@@ -335,6 +335,7 @@ export async function startHeadlessCore() {
   // proactive scan is delayed, but a slow iLink/Feishu startup used to race
   // it and leave the trigger in a delivery-offline state until the next retry.
   scheduler.start();
+  proactive.startWorld();
   await channels.start();
   proactive.initializeProactiveTrigger();
   momentsService.startReactionScanner();
@@ -366,7 +367,7 @@ export async function startHeadlessCore() {
           mcpAbort.abort(); await restoreMcp;
           await Promise.allSettled(listMcpServers().map(server => disconnectMcpServer(server.id)));
           toast.dispose();
-          scheduler.stop(); proactive.stopProactiveTrigger(); momentsService.stopReactionScanner(); await browser.close(); await music.shutdown();
+          scheduler.stop(); proactive.stopWorld(); proactive.stopProactiveTrigger(); momentsService.stopReactionScanner(); await browser.close(); await music.shutdown();
           await channels.shutdown(); await plugins?.stop();
           await flushAllSummaryMemory(); await enableWikiMemoryScheduler(false); await flushRAGStore(); await flushUsage();
           await disposeVectorMemory();
