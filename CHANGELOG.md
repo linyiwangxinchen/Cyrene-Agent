@@ -5,6 +5,12 @@ Cyrene-Agent 的版本变更记录。格式参考 [Keep a Changelog](https://kee
 
 > 本文件由 `pnpm run release` 生成，请勿手工编辑；需要调整措辞请改写对应的提交信息。
 
+## [1.3.5-3](https://github.com/linyiwangxinchen/Cyrene-Agent/compare/v1.3.5-2...v1.3.5-3) (2026-11-13)
+
+### 修复
+
+* **主动陪伴:** 修复投递终态与角色连续性 ([07ef8d3](https://github.com/linyiwangxinchen/Cyrene-Agent/commit/07ef8d303b29f62075cc6fe07f063f81b8b23bf2))
+
 ## [1.3.5-1](https://github.com/linyiwangxinchen/Cyrene-Agent/compare/v1.3.5...v1.3.5-1) (2026-11-08)
 
 ### 新增
