@@ -71,6 +71,12 @@ describe("real clock and resident life", () => {
     expect(JSON.stringify(view)).not.toContain("已经完成");
     expect(formatAmphoreusContext(view)).not.toContain("已经完成");
   });
+  it("carries distinct continuation texture for every golden-heir seat", () => {
+    const heirs = AMPHOREUS_RESIDENTS.filter((person) => person.kind === "golden_heir");
+    expect(new Set(heirs.map((person) => person.heirSeat)).size).toBe(12);
+    expect(heirs.every((person) => (person.signatureDetails?.length ?? 0) >= 2 && (person.relationshipHooks?.length ?? 0) >= 1 && (person.avoidances?.length ?? 0) >= 1)).toBe(true);
+    expect(new Set(heirs.map((person) => person.signatureDetails?.[0])).size).toBeGreaterThan(heirs.length / 2);
+  });
   it("requires a verified resolution, applies it once and carries the change into the next day", () => {
     store.advance({ now: current, timezone: "UTC" });
     store.updateAmphoreus((s) => { s.days.push(parseDailyPlan(JSON.stringify(plan()), "2026-11-10", "UTC", current)); return true; });

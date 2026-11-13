@@ -130,7 +130,7 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
                 {life.memories.slice(-5).reverse().map((memory) => <p key={memory.id}><small>{time(memory.at, true)} · {label(`memoryKind.${memory.kind}`)} · {memory.source}</small>{memory.text}</p>)}
                 <Button onClick={() => openHistory(person.id)}>{label("personHistory")}</Button>
               </details>
-              <details><summary>{label("profile")}</summary><p>{person.identity}</p><p>{person.personality}</p><p>{label("aspiration")} {person.aspiration}</p><p>{person.relations}</p><div className="cy-amphoreus__sources">{world.sources.filter((s) => person.sources.includes(s.id)).map((s) => <a key={s.id} href={s.url} target="_blank" rel="noreferrer">{s.title}</a>)}</div></details>
+              <details><summary>{label("profile")}</summary><p>{person.identity}</p><p>{person.personality}</p><p>{person.voice && <><strong>表达</strong> {person.voice}</>}</p><p>{person.preferences?.length ? <><strong>偏好</strong> {person.preferences.join("、")}</> : null}</p><p>{person.signatureDetails?.length ? <><strong>辨识细节</strong> {person.signatureDetails.join("；")}</> : null}</p><p>{label("aspiration")} {person.aspiration}</p><p>{person.relations}</p><div className="cy-amphoreus__sources">{world.sources.filter((s) => person.sources.includes(s.id)).map((s) => <a key={s.id} href={s.url} target="_blank" rel="noreferrer">{s.title}</a>)}</div></details>
             </article>;
           })}</div>
         </> },

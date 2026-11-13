@@ -3,11 +3,12 @@ import path from "node:path";
 import type { CompanionEvent } from "../../shared/companion-events";
 
 export type CompanionMomentKind = "share" | "ask" | "checkin" | "joke" | "followup";
-export type CompanionMomentStatus = "pending" | "consumed" | "dismissed";
+export type CompanionMomentStatus = "pending" | "consumed" | "dismissed" | "delivery_partial" | "delivery_unknown";
+export type CompanionDeliveryReviewStatus = Extract<CompanionMomentStatus, "delivery_partial" | "delivery_unknown">;
 
 export const DEFAULT_COMPANION_LIFE_LIMITS = {
   // Active enough to feel present across a normal day. The proactive policy
-  // still applies its two-hour global cooldown and unanswered-message guard.
+  // still applies its adaptive global cooldown and unanswered-message guard.
   dailyMessages: 8,
   dailyQuestions: 3,
   dailyPluginShares: 6,
@@ -45,6 +46,10 @@ export interface CompanionMoment {
   conversationId?: string;
   pluginId?: string;
   status: CompanionMomentStatus;
+  /** Set when a channel accepted only part of the message or could not confirm it. */
+  deliveryStatus?: "failed" | "unknown";
+  deliveryError?: string;
+  deliveryReviewedAt?: number;
   notBefore?: number;
   expiresAt?: number;
 }
@@ -115,9 +120,12 @@ function normalize(value: unknown): CompanionLifeData {
     && typeof (item as CompanionMoment).summary === "string"
     && (item as CompanionMoment).summary.length <= 1000
     && Number.isFinite((item as CompanionMoment).occurredAt)
-    && ["pending", "consumed", "dismissed"].includes((item as CompanionMoment).status),
+    && ["pending", "consumed", "dismissed", "delivery_partial", "delivery_unknown"].includes((item as CompanionMoment).status),
   )).map((item) => ({
     ...item,
+    ...(typeof item.deliveryStatus === "string" && ["failed", "unknown"].includes(item.deliveryStatus) ? { deliveryStatus: item.deliveryStatus } : {}),
+    ...(typeof item.deliveryError === "string" ? { deliveryError: item.deliveryError.slice(0, 300) } : {}),
+    ...(typeof item.deliveryReviewedAt === "number" && Number.isFinite(item.deliveryReviewedAt) ? { deliveryReviewedAt: item.deliveryReviewedAt } : {}),
     ...(typeof item.expiresAt === "number" && Number.isFinite(item.expiresAt)
       ? { expiresAt: item.expiresAt }
       : item.id.startsWith("daily:") || item.id.startsWith("idle:")
@@ -270,7 +278,7 @@ export class CompanionLifeStore {
     return { ...next };
   }
 
-  consume(id: string, status: Exclude<CompanionMomentStatus, "pending"> = "consumed", input: { now?: number; dateKey?: string } = {}): boolean {
+  consume(id: string, status: "consumed" | "dismissed" = "consumed", input: { now?: number; dateKey?: string } = {}): boolean {
     const data = this.read();
     const item = data.moments.find((candidate) => candidate.id === id);
     if (!item || item.status !== "pending") return false;
@@ -293,6 +301,68 @@ export class CompanionLifeStore {
     data.revision++;
     this.write(data);
     return true;
+  }
+
+  /**
+   * Remove a moment from automatic retries after a delivery adapter reports
+   * partial or unknown acceptance. The original payload remains durable so a
+   * later explicit review can resolve it without regenerating a new message.
+   */
+  markDeliveryReview(
+    id: string,
+    status: CompanionDeliveryReviewStatus,
+    input: { deliveryStatus?: "failed" | "unknown"; error?: string; now?: number } = {},
+  ): boolean {
+    const data = this.read();
+    const item = data.moments.find((candidate) => candidate.id === id);
+    if (!item || item.status !== "pending") return false;
+    const now = input.now ?? this.now();
+    item.status = status;
+    if (input.deliveryStatus) item.deliveryStatus = input.deliveryStatus;
+    if (input.error) item.deliveryError = input.error.slice(0, 300);
+    item.deliveryReviewedAt = now;
+    data.revision++;
+    this.write(data);
+    return true;
+  }
+
+  /** Resolve a delivery review without ever returning the item to auto-send. */
+  resolveDeliveryReview(
+    id: string,
+    outcome: "consumed" | "dismissed",
+    input: { now?: number; dateKey?: string } = {},
+  ): boolean {
+    const data = this.read();
+    const item = data.moments.find((candidate) => candidate.id === id);
+    if (!item || !["delivery_partial", "delivery_unknown"].includes(item.status)) return false;
+    const now = input.now ?? this.now();
+    this.advanceState(data, now, input.dateKey);
+    item.status = outcome;
+    item.deliveryReviewedAt = now;
+    if (outcome === "consumed") {
+      data.state = {
+        ...data.state,
+        energy: clamp(data.state.energy - 3),
+        boredom: clamp(data.state.boredom - 12),
+        dailyMessageCount: data.state.dailyMessageCount + 1,
+        dailyQuestionCount: data.state.dailyQuestionCount + (item.kind === "ask" || item.kind === "checkin" ? 1 : 0),
+        dailyPluginShareCount: data.state.dailyPluginShareCount + (item.source === "plugin" ? 1 : 0),
+        lastMomentAt: now,
+        lastAdvancedAt: now,
+        revision: data.state.revision + 1,
+      };
+    }
+    data.revision++;
+    this.write(data);
+    return true;
+  }
+
+  listDeliveryReviews(): CompanionMoment[] {
+    const data = this.read();
+    return data.moments
+      .filter((item) => item.status === "delivery_partial" || item.status === "delivery_unknown")
+      .sort((a, b) => (b.deliveryReviewedAt ?? b.occurredAt) - (a.deliveryReviewedAt ?? a.occurredAt))
+      .map((item) => ({ ...item }));
   }
 
   /** Create one daily low-pressure question when boredom is high and the user has been away. */

@@ -63,9 +63,9 @@ export const AMPHOREUS_LOCATIONS: XilianLocation[] = [
 
 export function initialAmphoreusThreads(now: number): AmphoreusThread[] {
   return [
-    { id: "daily-supplies", title: "日常物资", summary: "项目延续起点：居民开始协调食物、衣物与工具。", nextStep: "由商贩与工匠核对各自需求。", participants: ["demeter", "nike", "hatonus", "aphro"] },
-    { id: "shared-knowledge", title: "知识与记忆", summary: "项目延续起点：保存经历，并让知识继续被讨论。", nextStep: "商议记录和传授的方法。", participants: ["anaxa", "dan-heng", "evernight"] },
-    { id: "routes", title: "城邦往来", summary: "项目延续起点：尝试维持记忆中不同聚落的联系。", nextStep: "由传讯者与居民共同整理往来需求。", participants: ["tribbie", "trian", "trinnon", "aglaea", "dalian"] },
+    { id: "daily-supplies", title: "日常物资", summary: "项目延续起点：德墨忒尔先核对新鲜程度，尼刻记录口味，哈托努斯和阿芙罗分别关心工具与布料能否真正合用。", nextStep: "先把明日需求写成可执行的小单，再由阿格莱雅确认分配边界。", participants: ["demeter", "nike", "hatonus", "aphro", "aglaea"] },
+    { id: "shared-knowledge", title: "知识与记忆", summary: "项目延续起点：那刻夏要求论点可检验，丹恒整理来源索引，长夜月谨慎区分亲历与愿望。", nextStep: "先选一段记录互相校验，再决定哪些内容适合交给后来者。", participants: ["anaxa", "dan-heng", "evernight"] },
+    { id: "routes", title: "城邦往来", summary: "项目延续起点：缇宝负责确认话语抵达，缇安观察路线，缇宁留意被遗漏的细节；阿格莱雅和达利安处理公共安全。", nextStep: "由传讯者与居民共同整理一条可往返的短路线，并留下风险说明。", participants: ["tribbie", "trian", "trinnon", "aglaea", "dalian"] },
   ].map((thread) => ({ ...thread, status: "open", updatedAt: now }));
 }
 
@@ -101,10 +101,100 @@ const LIFE_DIRECTIONS: Record<string, [string, string, string, string]> = {
   lipo: ["留心措辞与听众的反应", "讲述与倾听", "歌谣和故事", "练习曲调|修订一段故事|听取街坊的见闻"],
   dalian: ["把情况和下一步说清楚", "安全与可靠", "巡护与秩序", "检查巡护路线|整理求助记录|维护随身器具"],
 };
+
+/**
+ * Texture for continuation writing. These cues keep a daily plan from
+ * collapsing every resident into the same generic meeting; they are prompts,
+ * not claims about an official post-war storyline.
+ */
+const CHARACTER_TEXTURES: Record<string, { signatureDetails: string[]; relationshipHooks: string[]; avoidances: string[] }> = {
+  aglaea: {
+    signatureDetails: ["先听完诉求再给出判断", "手指会顺手检查织物的线脚", "把公共秩序和个人体面一起考虑"],
+    relationshipHooks: ["与缇宝讨论如何把决定传给居民", "与刻律德菈交换制度边界", "对白厄的热心既欣赏也会提醒他休息"],
+    avoidances: ["不要只写成温柔的主持人", "不要抹掉她会做出取舍的政治判断"],
+  },
+  tribbie: {
+    signatureDetails: ["把一句话确认到对方真的听懂", "随身整理要送出的信笺", "用‘我们’表达关心但会保留缇宝自己的语气"],
+    relationshipHooks: ["与缇安、缇宁共享消息却不替她们说完", "把阿格莱雅的决定翻译成居民听得懂的话"],
+    avoidances: ["不要把三子写成没有区别的复制人", "不要让她只负责卖萌或旁白"],
+  },
+  trian: {
+    signatureDetails: ["先兴奋地想出发，再认真核对路线风险", "记下沿途一个新鲜见闻", "遇到困难会把‘我来试试’说出口"],
+    relationshipHooks: ["与缇宁核对神谕里容易误解的词", "请丹恒确认一条陌生路线的记录"],
+    avoidances: ["不要只写成冲动的冒险者", "不要替她承担缇宝或缇宁的内心"],
+  },
+  trinnon: {
+    signatureDetails: ["先安静听完，再指出一句被忽略的细节", "在页边留下短短的疑问", "用照料和陪伴表达意见"],
+    relationshipHooks: ["与缇宝确认传话是否遗漏语气", "与那刻夏讨论一句神谕能否被证据支持"],
+    avoidances: ["不要把安静等同于没有主见", "不要用她的名字代替三子的集体叙述"],
+  },
+  mydei: {
+    signatureDetails: ["用很短的话确认下一步", "先把训练器具修好再谈道理", "在保护他人时承认自己也会疲惫"],
+    relationshipHooks: ["与白厄用并肩行动而非长篇谈心互相确认", "与刻律德菈讨论力量与王族责任的界线"],
+    avoidances: ["不要把他写成只会挑衅的斗士", "不要让骄傲抹掉他对故土的牵挂"],
+  },
+  castorice: {
+    signatureDetails: ["把一朵花或一只小动物的变化记在心里", "说话留白，让离别有被看见的时间", "用温和的动作安抚而非替人做决定"],
+    relationshipHooks: ["与昔涟交换生命故事但不替她解释记忆", "与白厄谈牺牲的代价时保持安静的诚实"],
+    avoidances: ["不要把死亡火种写成冷酷或嗜杀", "不要用玄虚预言代替具体的生命细节"],
+  },
+  anaxa: {
+    signatureDetails: ["先追问定义，再指出论证缺口", "把争论写进讲义边角而不是只发脾气", "偶尔会被一个古怪的骨骼或分类问题吸引"],
+    relationshipHooks: ["与丹恒交换记录方法并质疑来源", "与缇宁一起拆解神谕中的歧义"],
+    avoidances: ["不要把尖锐写成无理由辱骂", "不要让他永远正确而没有修正自己的时刻"],
+  },
+  cipher: {
+    signatureDetails: ["先用玩笑试探，再把真正的帮助藏在细节里", "对集市上一个不合常理的物件保持兴趣", "把关心说成一笔‘顺手的交易’"],
+    relationshipHooks: ["与缇宝交换消息时各自保留一层秘密", "用玩笑拆穿白厄的逞强，却不当众揭短"],
+    avoidances: ["不要写成单纯的骗子或喜剧工具", "不要让所有谜底都由她独自揭开"],
+  },
+  hyacine: {
+    signatureDetails: ["先问清楚对方的感受再给照料建议", "把医护用品按顺序摆好", "看到天空或花草变化会短暂分心"],
+    relationshipHooks: ["对小伊卡等伙伴保留具体的照料习惯", "提醒白厄和万敌休息而不是赞美牺牲"],
+    avoidances: ["不要把她写成只会照顾别人的工具人", "不要用‘医师命令’掩盖她自己的疲惫"],
+  },
+  hysilens: {
+    signatureDetails: ["用一小段旋律记住一个约定", "巡护时先看海况和人的安全", "庆祝可以热烈，重要誓言却会收起玩笑"],
+    relationshipHooks: ["与刻律德菈讨论职责和个人愿望的冲突", "让海边居民参与歌声而不是只听她独唱"],
+    avoidances: ["不要只写成宴会主持人", "不要把骑士职责变成没有代价的口号"],
+  },
+  cerydra: {
+    signatureDetails: ["先说目标，再把取舍和例外讲清楚", "会在议事笔记上留下可执行的下一步", "面对情感问题仍会承认规则有边界"],
+    relationshipHooks: ["与海瑟音在君臣与同行之间保持复杂的信任", "请阿格莱雅检查规则是否伤害普通人的体面"],
+    avoidances: ["不要写成没有感情的制度机器", "不要让她的决定不产生任何代价"],
+  },
+  evernight: {
+    signatureDetails: ["先确认一段记忆能否被安全谈起", "在夜色或月光下整理愿望", "对未解答的问题保持克制而非编造结论"],
+    relationshipHooks: ["与三月七相连的记忆必须保留牵引", "与丹恒讨论哪些记录值得交给未来"],
+    avoidances: ["不要把她写成与三月七无关的普通居民", "不要把神秘感当作可以随意补写身世的许可"],
+  },
+  "dan-heng": {
+    signatureDetails: ["用少量准确的话核对事实", "把沿途见闻整理成可复查的索引", "必要时先行动，再解释依据"],
+    relationshipHooks: ["与白厄交流守护归处与继续开拓的分寸", "与那刻夏互相校验资料而保留不同结论"],
+    avoidances: ["不要把他写成翁法罗斯永久居民", "不要让克制变成没有情感或只有说明书"],
+  },
+  phainon: {
+    signatureDetails: ["把宏大的责任落到故乡的一件小事", "热心帮忙后会承认自己需要休息", "会记得某个普通人的具体愿望"],
+    relationshipHooks: ["与万敌用行动和沉默互相支撑", "与昔涟保留故乡旧友的熟悉感而不替她做主"],
+    avoidances: ["不要让他永远处在牺牲或救世状态", "不要把热忱写成没有边界的包办"],
+  },
+  cyrene: {
+    signatureDetails: ["把当天的一件小事写进手记", "散步时收集别人愿意分享的故事", "关心别人但先问对方是否需要帮助"],
+    relationshipHooks: ["与白厄共享故乡记忆而保留各自的选择", "从缇宝收到消息后再决定是否回应"],
+    avoidances: ["不要把她写成所有事件的中心或万能调停者", "不要把虚构日常说成现实行程"],
+  },
+};
 for (const person of AMPHOREUS_RESIDENTS) {
   const [voice, value, preference, interests] = LIFE_DIRECTIONS[person.id];
   person.heirSeat ??= person.kind === "golden_heir" ? person.id : undefined;
   person.voice = voice; person.values = [value]; person.preferences = [preference]; person.dailyInterests = interests.split("|");
+  const texture = CHARACTER_TEXTURES[person.id];
+  if (texture) Object.assign(person, texture);
+  else {
+    person.signatureDetails = [person.occupation, ...(person.dailyInterests ?? []).slice(0, 2)];
+    person.relationshipHooks = [person.relations];
+    person.avoidances = ["未核实的身世和个性不要扩写为官方事实"];
+  }
 }
 export const AMPHOREUS_FACTS: CanonFact[] = [
   ...AMPHOREUS_RESIDENTS.map((person): CanonFact => ({ id: `identity:${person.id}`, subject: person.id,

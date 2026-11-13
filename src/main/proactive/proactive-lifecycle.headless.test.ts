@@ -81,6 +81,14 @@ describe("proactive lifecycle on a headless host", () => {
     expect(mocks.runModel).not.toHaveBeenCalled();
   });
 
+  it("does not treat Web renderer activity as a night-time proactive permission", async () => {
+    vi.setSystemTime(Date.UTC(2026, 9, 9, 15)); // Shanghai 23:00
+    mocks.powerMonitor = Object.assign(new EventEmitter(), { getSystemIdleTime: () => 0 });
+    const ctx = setup();
+    await ctx.lifecycle.getProactiveChatService()!.evaluateCandidate(ctx.candidate);
+    expect(mocks.runModel).not.toHaveBeenCalled();
+  });
+
   it("uses the configured default model profile when the compatibility mirror is empty", async () => {
     vi.setSystemTime(Date.UTC(2026, 9, 14, 6)); // Shanghai 14:00
     mocks.modelSettings = {

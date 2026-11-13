@@ -450,6 +450,14 @@ describe("conversation follow-ups without desktop activity", () => {
     ctx.state.unansweredCount = 2;
     expect(canStartProactiveGeneration(ctx.snapshot, ctx.state, candidate).reason).toBe("unanswered_limit");
   });
+  it("keeps a natural conversation follow-up reachable after one unanswered message", async () => {
+    const now = Date.UTC(2026, 9, 14, 6);
+    const ctx = setup({ getConversationLastActivity: async () => now - 3 * 60 * 60 * 1000 });
+    ctx.setSnapshot({ now, localHour: 14, idleSec: 100000 });
+    ctx.setState({ unansweredCount: 1, lastProactiveAt: now - 7 * 60 * 60 * 1000, lastProactiveScene: "morning_greeting" });
+    await ctx.trigger.evaluateNow();
+    expect(ctx.evaluateCandidate).toHaveBeenCalledWith(expect.objectContaining({ sceneId: "conversation_followup" }));
+  });
   it("does not consume model backoff while the channel is unavailable", async () => {
     let blocked: string | undefined = "wechat_context_missing";
     const onEvaluation = vi.fn();

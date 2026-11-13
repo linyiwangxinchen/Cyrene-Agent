@@ -6,6 +6,8 @@ import {
   canCommitProactiveMessage,
   canStartProactiveGeneration,
   createDefaultProactiveState,
+  getFollowupIntervalMs,
+  getGlobalProactiveIntervalMs,
   markNormalConversationEnded,
   markProactiveCommitted,
   markUserActivity,
@@ -38,6 +40,24 @@ function candidate(patch: Partial<ProactiveCandidate> = {}): ProactiveCandidate 
 }
 
 describe("proactive hard policy", () => {
+  it("uses the configured daily cap to shorten pacing without turning it into a schedule", () => {
+    expect(getGlobalProactiveIntervalMs()).toBe(GLOBAL_PROACTIVE_INTERVAL_MS);
+    expect(getGlobalProactiveIntervalMs(20)).toBe(30 * 60 * 1000);
+    expect(getFollowupIntervalMs()).toBe(FOLLOWUP_INTERVAL_MS);
+    expect(getFollowupIntervalMs(20)).toBe(2 * 60 * 60 * 1000);
+    const state = createDefaultProactiveState();
+    state.lastProactiveAt = NOW - 31 * 60 * 1000;
+    expect(canStartProactiveGeneration(snapshot({ dailyLimit: 20 }), state, candidate()).allowed).toBe(true);
+  });
+
+  it("allows one context follow-up after an unanswered message when the conversation is still the reason", () => {
+    const state = createDefaultProactiveState();
+    state.unansweredCount = 1;
+    state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
+    state.lastProactiveScene = "morning_greeting";
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "conversation_followup", score: 60 })).allowed).toBe(true);
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "followup:exam", score: 60 })).allowed).toBe(true);
+  });
   it("uses user quiet hours when UTC server time is in a different day/night window", () => {
     const state = createDefaultProactiveState();
     for (const [utcHour, expectedHour, allowed] of [[1, 9, true], [15, 23, false]] as const) {

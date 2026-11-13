@@ -19,7 +19,7 @@ const userText = '请记住，我喜欢在清晨读书。';
 const previousNodeOptions = process.env.NODE_OPTIONS;
 // Do not let an inherited warning-only policy hide a rejected background tail.
 process.env.NODE_OPTIONS = `${previousNodeOptions ?? ''} --unhandled-rejections=strict`.trim();
-const results = [], logs = [], requests = [];
+const results = [], logs = [], requests = [], ignoredRequests = [];
 let mode = 'unauthorized', handle, socket, baseUrl, cookie = '', clientToken = '';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Bound the acceptance run even if the child process dies with an unresolved IPC.
@@ -36,7 +36,16 @@ const provider = createServer(async (request, response) => {
     let raw = '';
     for await (const chunk of request) raw += chunk;
     const body = JSON.parse(raw);
-    requests.push({ mode, path: request.url, stream: body.stream, model: body.model });
+    const requestItem = { mode, path: request.url, stream: body.stream, model: body.model };
+    // Runtime startup may also probe the configured model for Amphoreus. That
+    // request is unrelated to Wiki backfill and must not count as a memory
+    // retry in this acceptance fixture.
+    if (!JSON.stringify(body.input ?? '').includes(sessionId)) {
+      ignoredRequests.push(requestItem);
+      response.writeHead(503, { 'Content-Type': 'application/json' }).end(JSON.stringify({ error: { message: 'non-memory fixture request ignored' } }));
+      return;
+    }
+    requests.push(requestItem);
     assert.equal(request.url, '/v1/responses');
     assert.equal(request.headers.authorization, 'Bearer local-memory-fixture-key');
     assert.equal(body.model, model, 'memory backfill must resolve the configured default model profile');
@@ -232,7 +241,7 @@ try {
     assert.ok(!logs.some(line => String(line).includes('Fixture error:')), 'fixture assertions must all pass');
   });
   const report = path.join(dataDir, 'verification-results.json');
-  await writeFile(report, JSON.stringify({ at: new Date().toISOString(), results, requests }, null, 2));
+  await writeFile(report, JSON.stringify({ at: new Date().toISOString(), results, requests, ignoredRequests }, null, 2));
   console.log(`ALL PASSED ${results.length} checks; isolated evidence: ${report}`);
 } catch (error) {
   console.error('FAIL', error); console.error('Recent isolated core logs:', logs.slice(-16).join('\n'));

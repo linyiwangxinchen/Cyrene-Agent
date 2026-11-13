@@ -17,7 +17,9 @@ const results = [], requests = [], events = [], logs = [];
 const model = 'session-summary-model';
 const contextWindow = 4096;
 const automaticModel = 'automatic-session-model';
-const automaticContextWindow = 32768;
+// The Work fixture includes the production 55-tool catalog. Keep enough room
+// for that fixed prompt/tool overhead while still forcing a mid-loop compaction.
+const automaticContextWindow = 40960;
 const responsesModel = 'gpt-6.1-sol';
 const markers = ['ORIGINAL_GOAL', 'TOOL_FACT', 'FINAL_CONSTRAINT'];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -347,7 +349,9 @@ try {
     await invoke('agui:cancel'); // No model-run ack exists yet.
     await waitFor(() => settled && events.slice(start).some(event => event.channel === 'chats:compaction-phase'
       && event.args[0]?.sessionId === 'cancel-preflight' && event.args[0]?.phase === 'finished'), 'preflight cancellation settles');
-    await pending;
+    const cancellation = await pending;
+    assert.equal(cancellation?.success, false, JSON.stringify(cancellation));
+    assert.equal(cancellation?.status, 'cancelled', JSON.stringify(cancellation));
     await waitFor(() => stalledSummaries.size === 0, 'model HTTP request is aborted');
     assert.equal(databaseSnapshot('cancel-preflight').checkpoints.length, 0);
     const after = await invoke('chats:get', 'cancel-preflight');

@@ -1,6 +1,6 @@
 import { relationshipOpportunities } from "./relationship-opportunities";
 import { followupIdFromScene, followupOpportunities } from "./followup-opportunities";
-import { createCompanionLifeStore, type CompanionLifeObservationKind, type CompanionLifeStore, type CompanionMoment } from "./companion-life";
+import { createCompanionLifeStore, type CompanionDeliveryReviewStatus, type CompanionLifeObservationKind, type CompanionLifeStore, type CompanionMoment } from "./companion-life";
 import { withConversationRun } from "../orchestrator/conversation-run-guard";
 import { buildPersonaContractPrompt } from "../persona/persona-spec";
 import { buildRelationshipContext, getRelationshipStore, recordCompanionEvent } from "../relationship/relationship-log";
@@ -30,7 +30,7 @@ import type {
 } from "./proactive-service";
 import { routeProactiveDelivery } from "./proactive-delivery-routing";
 import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive-prompt";
-import { canCommitProactiveMessage, canStartProactiveGeneration } from "./proactive-policy";
+import { canCommitProactiveMessage, canStartProactiveGeneration, getGlobalProactiveIntervalMs } from "./proactive-policy";
 import { loadProactiveState, saveProactiveState } from "./proactive-state-store";
 import { createProactiveTrigger, getZonedDateParts, type ProactiveOpportunity, type ProactiveTriggerController } from "./proactive-trigger";
 import { runProactiveModel } from "./proactive-model";
@@ -139,9 +139,14 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
 
   function getProactiveRuntimeSnapshot(): ProactiveRuntimeSnapshot {
     const now = Date.now();
-    let idleSec = Number.POSITIVE_INFINITY;
-    try { idleSec = powerMonitor.getSystemIdleTime(); } catch { /* app 尚未 ready */ }
-    if (lastMessageActivityAt !== null) idleSec = Math.min(idleSec, Math.max(0, Math.floor((now - lastMessageActivityAt) / 1000)));
+    // Proactive timing must not inherit the Web renderer's activity clock.
+    // `web:user-activity` is useful for renderer/session idle UX, but viewing a
+    // page must not suppress an unsolicited message. Use conversation/channel
+    // messages as the only proactive activity signal; screen lock remains a
+    // separate hard delivery gate below.
+    const idleSec = lastMessageActivityAt === null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, Math.floor((now - lastMessageActivityAt) / 1000));
     const timezone = resolveChatContextTimezone(loadUserProfile().timezone);
     const zoned = getZonedDateParts(new Date(now), timezone);
     const settings = options.loadGeneralSettings();
@@ -267,19 +272,37 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     );
   }
 
-  function recordProactiveDeliveryMetadata(input: ProactiveCommitInput): void {
+  function recordProactiveDeliveryMetadata(input: ProactiveCommitInput, result: ProactiveCommitResult): void {
     // Opener 的 todayFired/recentItems 字段已整体废弃（依赖的 SCENE_CONFIGS 与 ShowBubblePayload 来自旧 opener 子系统）。
-    // 这里只处理已经完整送达的 CompanionMoment；未知或部分送达由 durable outbox 保留待核对。
-    const now = Date.now();
-    if (input.candidate.momentId && lifeStore.consume(input.candidate.momentId, "consumed", { now, dateKey: lifeDateKey(now) })) {
-      void recordCompanionEvent({
-        eventId: `moment-shared:${input.candidate.momentId}`,
-        kind: "moment_shared",
-        source: "system",
-        occurredAt: input.intentAt ?? Date.now(),
-        summary: "昔涟分享了一条经过筛选的陪伴心事",
-        ...(input.deliveryContext?.conversationId ? { conversationId: input.deliveryContext.conversationId } : {}),
-      }).catch((error) => console.warn("[Proactive] 羁绊分享事件写入失败", error));
+    // 完整送达才消费心事；部分/未知送达写入明确的复核终态，避免重试造成重复消息。
+    try {
+      const now = Date.now();
+      if (!input.candidate.momentId) return;
+      const reviewStatus: CompanionDeliveryReviewStatus | undefined = result.kind === "committed" && (result.deliveryStatus === "unknown" || result.deliveryStatus === "failed" || result.deliveryStatus === "cancelled")
+        ? result.deliveryStatus === "unknown" ? "delivery_unknown" : "delivery_partial"
+        : result.kind === "cancelled" && result.deliveryStatus === "unknown" ? "delivery_unknown" : undefined;
+      if (reviewStatus) {
+        lifeStore.markDeliveryReview(input.candidate.momentId, reviewStatus, {
+          deliveryStatus: result.deliveryStatus === "unknown" ? "unknown" : "failed",
+          ...(result.reason ? { error: result.reason } : {}),
+          now,
+        });
+        return;
+      }
+      if (result.kind === "committed" && lifeStore.consume(input.candidate.momentId, "consumed", { now, dateKey: lifeDateKey(now) })) {
+        void recordCompanionEvent({
+          eventId: `moment-shared:${input.candidate.momentId}`,
+          kind: "moment_shared",
+          source: "system",
+          occurredAt: input.intentAt ?? Date.now(),
+          summary: "昔涟分享了一条经过筛选的陪伴心事",
+          ...(input.deliveryContext?.conversationId ? { conversationId: input.deliveryContext.conversationId } : {}),
+        }).catch((error) => console.warn("[Proactive] 羁绊分享事件写入失败", error));
+      }
+    } catch (error) {
+      // Delivery is already authoritative. A metadata write failure must not
+      // leave the durable intent in a retryable state and send the same text twice.
+      console.warn("[Proactive] companion moment delivery metadata failed", error);
     }
   }
 
@@ -377,7 +400,12 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
               return getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed;
             },
           });
-          const allDelivered = channelResult.kind === "committed" && channelResult.deliveredParts === channelResult.totalParts;
+          // A delivery adapter may report all observed parts while still
+          // marking the final acknowledgement unknown; that remains a review
+          // state until the adapter confirms it explicitly.
+          const allDelivered = channelResult.kind === "committed"
+            && channelResult.deliveredParts === channelResult.totalParts
+            && !channelResult.deliveryStatus;
           const deliveryUnknown = channelResult.deliveryStatus === "unknown";
           await conversationJournal.appendDeliveryReceipt(conversationId, { assistantTurnId, channel, runId,
             status: allDelivered ? "delivered" : "failed",
@@ -389,13 +417,13 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           }
           return channelResult.kind === "committed" ? { kind: "committed" as const,
             ...(!allDelivered ? { deliveryStatus: channelResult.deliveryStatus ?? "failed" as const, reason: channelResult.error ?? "PARTIAL_DELIVERY" } : {}) }
-            : { kind: "cancelled" as const, reason: channelResult.reason };
+            : { kind: "cancelled" as const, reason: channelResult.reason, ...(channelResult.deliveryStatus ? { deliveryStatus: channelResult.deliveryStatus } : {}) };
         });
       },
     });
 
+    recordProactiveDeliveryMetadata(input, result);
     if (result.kind === "committed") {
-      if (!result.deliveryStatus) recordProactiveDeliveryMetadata(input);
       if (!result.deliveryStatus && frozen?.followupId && frozen.conversationId) await getRelationshipStore().settleFollowup(frozen.followupId, frozen.conversationId, input.intentId, Date.now(), "asked");
     }
     return result;
@@ -551,6 +579,20 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           momentId: lifeMoment.id,
           momentSummary: lifeMoment.summary,
         });
+        // Daytime companionship should have a path even when there is no
+        // morning/evening edge, work-break edge, plugin item, or named
+        // follow-up. This candidate is deliberately low priority: concrete
+        // conversations and life moments win first, while the hard policy,
+        // unanswered guard, model silent decision, and daily cap still apply.
+        const hasSpecificOpportunity = opportunities.some((item) => item.sceneId.startsWith("followup:") || item.sceneId.startsWith("life:") || item.sceneId === "relationship_milestone" || item.sceneId === "shared_goal_checkin");
+        if (!hasSpecificOpportunity && ctx.localHour >= 8 && ctx.localHour < 22) {
+          opportunities.push({
+            sceneId: "ambient_companion",
+            score: 64,
+            sceneCooldownMs: Math.max(60 * 60_000, getGlobalProactiveIntervalMs(ctx.snapshot.dailyLimit) * 2),
+            reason: "白天没有更具体的触发点，留出一次轻量陪伴机会；是否发送仍由模型判断",
+          });
+        }
         return opportunities;
       },
       onExplanation: explanation => { proactiveStatus.explanation = explanation; },

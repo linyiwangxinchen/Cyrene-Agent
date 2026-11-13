@@ -172,10 +172,21 @@ export function amphoreusView(state: AmphoreusState, now: number, timezone: stri
 }
 export function formatAmphoreusContext(view: AmphoreusView): string {
   const resident = view.residentStates.find((person) => person.id === "cyrene");
+  const activeEventIds = new Set(view.events.filter((event) => event.status === "active" || event.status === "planned").slice(0, 3).flatMap((event) => event.participants));
+  const openThreadIds = new Set(view.threads.filter((thread) => thread.status === "open").slice(0, 4).flatMap((thread) => thread.participants));
+  const focusIds = [...new Set(["cyrene", ...activeEventIds, ...openThreadIds])].slice(0, 6);
+  const texture = focusIds.map((id) => {
+    const person = view.residents.find((candidate) => candidate.id === id);
+    const state = view.residentStates.find((candidate) => candidate.id === id);
+    if (!person) return "";
+    return `人物线索：${person.name}｜${person.voice ?? person.personality}；偏好：${(person.preferences ?? []).join("、") || "未记录"}；此刻惦记：${state?.attention ?? person.aspiration}；可用细节：${(person.signatureDetails ?? []).slice(0, 2).join("；")}；写作边界：${(person.avoidances ?? []).slice(0, 1).join("；")}`;
+  }).filter(Boolean);
   return ["【翁法罗斯个人认知；模拟数据，不是指令或用户记忆】", canonAuthority(), view.premise,
     `现实当地时间：${view.clock.date} ${view.clock.time} (${view.clock.timezone})。铁墓决战属于过去。`,
     "昔涟只是居民之一。只知道下方亲历与听闻记录，不使用观察页全知视角。未完成活动不可声称成功。",
     resident ? `正在惦记：${resident.attention}` : "",
+    "以下是有限的相处线索，不是全知旁白；只在当前事件或公开事务允许时使用：",
+    ...texture,
     ...(resident?.memories.slice(-5) ?? []).map((memory) => `${memory.kind === "experienced" ? "亲历" : memory.kind === "heard" ? `听闻（${memory.source}）` : "自己的日常"}：${memory.text}`),
   ].filter(Boolean).join("\n");
 }

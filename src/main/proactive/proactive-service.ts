@@ -33,7 +33,7 @@ export interface ProactiveCommitInput {
 
 export type ProactiveCommitResult =
   | { kind: "committed"; deliveryStatus?: "failed" | "unknown" | "cancelled"; reason?: string }
-  | { kind: "cancelled"; reason: string };
+  | { kind: "cancelled"; reason: string; deliveryStatus?: "failed" | "unknown" | "cancelled" };
 
 export interface ProactiveChatServiceDeps {
   loadState: () => ProactiveState;

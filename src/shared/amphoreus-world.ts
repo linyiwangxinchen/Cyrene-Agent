@@ -20,6 +20,10 @@ export interface AmphoreusResident {
   values?: string[];
   preferences?: string[];
   dailyInterests?: string[];
+  /** Continuation writing guidance; these are not new canon facts. */
+  signatureDetails?: string[];
+  relationshipHooks?: string[];
+  avoidances?: string[];
 }
 export interface CanonFact { id: string; subject: string; statement: string; scope: "canon" | "continuation"; sources: string[]; revision: string }
 export interface ResidentGoal { id: string; title: string; progress: number; status: "active" | "completed"; updatedAt: number; reason: string }

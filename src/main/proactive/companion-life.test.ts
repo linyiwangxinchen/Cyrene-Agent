@@ -81,4 +81,21 @@ describe("CompanionLifeStore", () => {
     store.enqueue({ id: "plugin:new", kind: "share", source: "plugin", occurredAt: now + 1_000, summary: "插件观察" });
     expect(store.getNextShareable({ now: now + 1_000, dateKey: "2026-11-07", allow: item => item.source !== "plugin" })?.id).toBe(daily?.id);
   });
+
+  it.each([
+    ["delivery_partial", "failed"],
+    ["delivery_unknown", "unknown"],
+  ] as const)("moves %s out of automatic retries and resolves it exactly once", (status, deliveryStatus) => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), `companion-life-${status}-`));
+    const store = new CompanionLifeStore(path.join(root, "life.json"));
+    const now = new Date("2026-11-07T10:00:00.000Z").getTime();
+    store.enqueue({ id: `moment:${status}`, kind: "share", source: "system", summary: "一条需要复核的心事", occurredAt: now });
+    expect(store.markDeliveryReview(`moment:${status}`, status, { deliveryStatus, error: "second_part_unconfirmed", now })).toBe(true);
+    expect(store.listPending(now + 1_000)).toHaveLength(0);
+    expect(store.listDeliveryReviews()).toMatchObject([{ id: `moment:${status}`, status, deliveryStatus }]);
+    expect(store.getState({ now, dateKey: "2026-11-07" }).dailyMessageCount).toBe(0);
+    expect(store.resolveDeliveryReview(`moment:${status}`, "consumed", { now: now + 1_000, dateKey: "2026-11-07" })).toBe(true);
+    expect(store.resolveDeliveryReview(`moment:${status}`, "consumed", { now: now + 2_000, dateKey: "2026-11-07" })).toBe(false);
+    expect(store.getState({ now: now + 2_000, dateKey: "2026-11-07" }).dailyMessageCount).toBe(1);
+  });
 });

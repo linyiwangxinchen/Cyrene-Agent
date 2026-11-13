@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createWebServer, isWebCoreChannelAllowed, MAX_CORE_FILE_BYTES, resolveAuthorizedWebPath, type WebServerHandle, validateCoreDirectoryEntryCount, validateCoreFileTransferSize } from "./index";
+import { IPC } from "../shared/ipc-channels";
 
 const temporaryDirectories: string[] = [];
 
@@ -46,6 +47,11 @@ describe("legacy web data migration regression", () => {
     expect(isWebCoreChannelAllowed("invoke", "gmail:get-status")).toBe(false);
     expect(isWebCoreChannelAllowed("invoke", "tts:upload")).toBe(false);
     expect(isWebCoreChannelAllowed("invoke", "tts:synthesize")).toBe(true);
+    expect(isWebCoreChannelAllowed("invoke", IPC.OPEN_EXTERNAL)).toBe(true);
+    expect(isWebCoreChannelAllowed("invoke", "web:asr-transcribe")).toBe(true);
+    expect(isWebCoreChannelAllowed("invoke", IPC.CALL_OPEN)).toBe(true);
+    expect(isWebCoreChannelAllowed("invoke", IPC.CHATS_OPEN_FOLDER)).toBe(true);
+    expect(isWebCoreChannelAllowed("invoke", IPC.MUSIC_IMPORT_LOCAL_TRACKS)).toBe(true);
     expect(isWebCoreChannelAllowed("invoke", "unknown:channel")).toBe(false);
     expect(isWebCoreChannelAllowed("send", "agui:run")).toBe(false);
   });

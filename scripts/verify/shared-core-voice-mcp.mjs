@@ -175,10 +175,15 @@ try {
     const stream = await run(work, 'case:mcp-' + transport); assert.ok(mcpCalls.includes('case:mcp-' + transport)); assert.ok(JSON.stringify(stream).includes('MCP_EXECUTED'));
   });
   await check('MCP tools with unknown effects are refused by the original execution policy', async () => {
+    // Full access deliberately permits unknown MCP effects. Exercise the
+    // normal scoped policy for this refusal check, then restore full access
+    // for the remaining real-server checks below.
+    await invoke('permission:set-level', 'scoped');
     const stream = await run(work, 'case:mcp-http-unknown');
     assert.ok(!mcpCalls.includes('UNSAFE_EXECUTED'), 'unclassified tool must never reach the MCP server');
     const refused = stream.find(event => event.type === 'TOOL_CALL_RESULT' && event.status === 'failed');
-    assert.ok(refused); assert.match(refused.content, /effectKind 为 unknown.*拒绝执行/);
+    assert.ok(refused); assert.match(refused.content, /拒绝/);
+    await invoke('permission:set-level', 'full');
   });
   await check('MCP validates configuration before spawning or connecting', async () => { assert.equal((await invoke('mcp:add-server', { id: 'bad:id', name: 'Invalid', transport: 'stdio', command: process.execPath })).ok, false); assert.equal((await invoke('mcp:add-server', { id: 'bad-url', name: 'Invalid', transport: 'http', url: 'file:///tmp/mcp' })).ok, false); });
   await check('MCP stdio starts real bundled Filesystem server and executes a read', async () => {

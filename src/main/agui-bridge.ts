@@ -1360,6 +1360,17 @@ export function registerAgUiIpc(
     // 这样避免 invoke reply 与 send 事件的投递顺序竞争导致 offEvent 提前取消监听。
     return { success: true, runId };
     } catch (error) {
+      // 取消可能发生在 buildOptions/预运行压缩阶段，此时还没有 Observable
+      // 可以发出 RUN_FINISHED。把这条路径收敛为明确的取消 ACK，避免把用户
+      // 的取消误报为 E_HARNESS_FAILURE 或 TRANSCRIPT_COMPACTION_REQUIRED。
+      if (runAbortController.signal.aborted) {
+        if (admitted) await database.call("runs.terminal", runId, "cancelled", Date.now(), "user_cancelled").catch(failure => console.error("[AgUiBridge] 取消回执写入失败:", failure));
+        releaseSessionGuard?.();
+        backgroundRunControllers.delete(runAbortController);
+        endConversation();
+        if (!background) shellCompletions?.kick(sessionId);
+        return { success: false, runId, status: "cancelled" };
+      }
       if (admitted) await database.call("runs.terminal", runId, "failed", Date.now(), (error as Error).message).catch(failure => console.error("[AgUiBridge] 失败回执写入失败:", failure));
       releaseSessionGuard?.();
       backgroundRunControllers.delete(runAbortController);

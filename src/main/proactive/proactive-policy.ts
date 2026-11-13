@@ -9,10 +9,41 @@ export const NORMAL_QUIET_MS = 30 * 60 * 1000;
 export const GLOBAL_PROACTIVE_INTERVAL_MS = 2 * 60 * 60 * 1000;
 export const FOLLOWUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const NIGHT_ACTIVE_IDLE_LIMIT_SEC = 60;
-// With the built-in scene scores, a valid back-from-away event tops out at
-// 82 after the one-unanswered penalty. Keep the follow-up gate strict while
-// leaving that deliberately rare path reachable.
+// Generic scenes keep a high follow-up bar; a conversation follow-up has its
+// own lower floor because it carries a concrete recent topic.
 export const FOLLOWUP_MIN_SCORE = 80;
+const HIGH_FREQUENCY_INTERVAL_MS = 30 * 60 * 1000;
+const MEDIUM_FREQUENCY_INTERVAL_MS = 60 * 60 * 1000;
+const LIGHT_FREQUENCY_INTERVAL_MS = 90 * 60 * 1000;
+const HIGH_FREQUENCY_FOLLOWUP_INTERVAL_MS = 2 * 60 * 60 * 1000;
+const MEDIUM_FREQUENCY_FOLLOWUP_INTERVAL_MS = 3 * 60 * 60 * 1000;
+const LIGHT_FREQUENCY_FOLLOWUP_INTERVAL_MS = 4 * 60 * 60 * 1000;
+
+/**
+ * The daily setting is a cap, but it must also affect pacing. Previously the
+ * hard-coded two-hour gate made a value such as 20 almost indistinguishable
+ * from the default three-message setting.
+ */
+export function getGlobalProactiveIntervalMs(dailyLimit?: number): number {
+  if (dailyLimit !== undefined && dailyLimit > 10) return HIGH_FREQUENCY_INTERVAL_MS;
+  if (dailyLimit !== undefined && dailyLimit > 6) return MEDIUM_FREQUENCY_INTERVAL_MS;
+  if (dailyLimit !== undefined && dailyLimit > 3) return LIGHT_FREQUENCY_INTERVAL_MS;
+  return GLOBAL_PROACTIVE_INTERVAL_MS;
+}
+
+export function getFollowupIntervalMs(dailyLimit?: number): number {
+  if (dailyLimit !== undefined && dailyLimit > 10) return HIGH_FREQUENCY_FOLLOWUP_INTERVAL_MS;
+  if (dailyLimit !== undefined && dailyLimit > 6) return MEDIUM_FREQUENCY_FOLLOWUP_INTERVAL_MS;
+  if (dailyLimit !== undefined && dailyLimit > 3) return LIGHT_FREQUENCY_FOLLOWUP_INTERVAL_MS;
+  return FOLLOWUP_INTERVAL_MS;
+}
+
+/** Context follow-ups remain deliberately easier to reach than generic scenes. */
+function followupScoreFloor(candidate: ProactiveCandidate): number {
+  return candidate.sceneId === "conversation_followup" || candidate.sceneId.startsWith("followup:")
+    ? 60
+    : FOLLOWUP_MIN_SCORE;
+}
 
 const allow = (): ProactiveCommitDecision => ({ allowed: true, reason: "allowed" });
 const block = (reason: ProactiveCommitDecision["reason"]): ProactiveCommitDecision => ({ allowed: false, reason });
@@ -65,7 +96,7 @@ export function canStartProactiveGeneration(
 
   if (
     state.lastProactiveAt !== null &&
-    snapshot.now - state.lastProactiveAt < GLOBAL_PROACTIVE_INTERVAL_MS
+    snapshot.now - state.lastProactiveAt < getGlobalProactiveIntervalMs(snapshot.dailyLimit)
   ) return block("global_cooldown");
 
   const sceneLastFiredAt = state.lastFiredAt[candidate.sceneId];
@@ -77,10 +108,10 @@ export function canStartProactiveGeneration(
   if (state.unansweredCount === 1) {
     if (
       state.lastProactiveAt !== null &&
-      snapshot.now - state.lastProactiveAt < FOLLOWUP_INTERVAL_MS
+      snapshot.now - state.lastProactiveAt < getFollowupIntervalMs(snapshot.dailyLimit)
     ) return block("followup_cooldown");
     if (state.lastProactiveScene === candidate.sceneId) return block("followup_same_scene");
-    if (candidate.score < FOLLOWUP_MIN_SCORE) return block("followup_score_too_low");
+    if (candidate.score < followupScoreFloor(candidate)) return block("followup_score_too_low");
   }
 
   return allow();

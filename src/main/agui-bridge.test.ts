@@ -1167,25 +1167,23 @@ describe("agui-bridge session run guard", () => {
   it.each([true, false])("压缩准备阶段也能取消，指定 runId=%s", async withRunId => {
     mocks.getSession.mockReturnValue({ id: "preflight-cancel", mode: "chat", messages: [] });
     let entered!: () => void;
-    let rejectPreparation!: (error: Error) => void;
     let signal: AbortSignal | undefined;
     const started = new Promise<void>(resolve => { entered = resolve; });
     const { bridge, runHandler } = await setupBridge(async (input?: { signal?: AbortSignal }) => {
       signal = input!.signal;
       entered();
       await new Promise<void>((_resolve, reject) => {
-        rejectPreparation = reject;
         signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
       });
       return defaultBuildOptions();
     });
-    const pending = runHandler({ sender: makeSender() }, { sessionId: "preflight-cancel", assistantTurnId: "preflight-assistant" }).catch((error: Error) => error);
+    const pending = runHandler({ sender: makeSender() }, { sessionId: "preflight-cancel", assistantTurnId: "preflight-assistant" });
     await started;
     const runId = bridge.__getSessionActiveRunForTest("preflight-cancel");
-    try {
-      mocks.handlers.get(IPC.AGUI_CANCEL)!({}, withRunId ? runId : undefined);
-      expect(signal?.aborted).toBe(true);
-    } finally { rejectPreparation(new Error("test cleanup")); await pending; }
+    mocks.handlers.get(IPC.AGUI_CANCEL)!({}, withRunId ? runId : undefined);
+    expect(signal?.aborted).toBe(true);
+    const result = await pending;
+    expect(result).toMatchObject({ success: false, status: "cancelled" });
     expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
     expect(bridge.__getSessionActiveRunForTest("preflight-cancel")).toBeUndefined();
   });

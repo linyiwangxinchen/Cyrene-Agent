@@ -66,7 +66,12 @@ const FOLLOWUP_SYSTEM = `[followup_system]
 这是用户未回复情况下允许的最后一次主动机会。
 本地系统已经确认出现了不同于上一次的新场景理由，但你仍应判断它是否值得打扰用户。
 不要责怪、催促、卖惨或表现出被冷落，也不要机械地重复"在吗"。
-没有充分理由时必须返回 silent。`;
+如果最近普通聊天里有具体话题、未完成的表达或自然的关心点，可以用一句轻量追问接住它；只有确实没有可落地内容时才返回 silent。`;
+
+const AMBIENT_SYSTEM = `[ambient_system]
+这是白天的一次轻量陪伴机会，不需要等待用户正在看某个页面，也不应提及屏幕、浏览器或系统活动。
+优先从最近聊天、长期记忆或虚构生活里选一个具体的小细节，分享一句话或只问一个容易回答的问题。
+不要为了凑频率编造事实；没有任何具体落点时才保持安静。`;
 
 /**
  * 用 Intl 把日期拆成 {year, month, day, hour, minute}（按 timezone）。
@@ -143,6 +148,7 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   systemParts.push(formatHistory("主动聊天专用会话", input.proactiveHistory, input.timezone));
   if (isActiveNight(input.localNow, input.timezone, input.idleSec)) systemParts.push(NIGHT_SYSTEM);
   if (input.unansweredCount === 1) systemParts.push(FOLLOWUP_SYSTEM);
+  if (input.sceneId === "ambient_companion") systemParts.push(AMBIENT_SYSTEM);
   if (input.momentContext?.trim()) {
     systemParts.push(MOMENT_SYSTEM, `[陪伴心事]\n${input.momentContext.trim()}`);
   }

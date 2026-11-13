@@ -121,6 +121,17 @@ describe("proactive prompt", () => {
     expect(combined).toContain("不要写“陪你慢慢收尾”");
     expect(combined).toContain("陪你放松一会儿");
   });
+
+  it("gives daytime ambient and context follow-ups a concrete path", () => {
+    const messages = buildProactiveMessages({
+      basePersona: "P", ordinaryHistory: [{ role: "user", content: "我还在准备答辩", at: Date.UTC(2026, 6, 13, 2) }], proactiveHistory: [],
+      sceneId: "ambient_companion", localNow: new Date(Date.UTC(2026, 6, 13, 6)), idleSec: 900, unansweredCount: 1, timezone: TIMEZONE,
+    });
+    const system = String(messages[0].content);
+    expect(system).toContain("[ambient_system]");
+    expect(system).toContain("最近聊天、长期记忆或虚构生活");
+    expect(system).toContain("轻量追问");
+  });
 });
 
 // ── 时区专项测试 ───────────────────────────────────────────
