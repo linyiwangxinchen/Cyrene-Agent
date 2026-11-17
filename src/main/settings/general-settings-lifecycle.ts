@@ -166,8 +166,13 @@ export function handleGeneralSettingsChanged(
   }
   if (
     before.proactiveChatMode !== after.proactiveChatMode
+    || before.proactiveDensity !== after.proactiveDensity
+    || before.companionPluginSharingEnabled !== after.companionPluginSharingEnabled
     || before.proactiveDeliveryTarget !== after.proactiveDeliveryTarget
     || before.proactiveTargetScore !== after.proactiveTargetScore
+    || before.proactiveDailyLimit !== after.proactiveDailyLimit
+    || before.proactiveQuietStartMinute !== after.proactiveQuietStartMinute
+    || before.proactiveQuietEndMinute !== after.proactiveQuietEndMinute
   ) {
     deps.proactiveLifecycle.getProactiveChatService()?.invalidate();
   }

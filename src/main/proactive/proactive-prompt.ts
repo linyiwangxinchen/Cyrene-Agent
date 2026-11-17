@@ -26,10 +26,13 @@ export interface BuildProactiveMessagesInput {
   momentContext?: string;
   /** Internal tone hints; the model must not expose the numeric values. */
   lifeContext?: string;
+  replyBurden?: "none" | "light" | "question";
 }
 
 export type ProactiveModelDecision =
   | { kind: "send"; text: string }
+  | { kind: "hold"; resumeOn: "user_message" | "evidence_change" }
+  | { kind: "drop" }
   | { kind: "silent" }
   | { kind: "invalid"; reason: string };
 
@@ -39,7 +42,8 @@ const MAX_PROACTIVE_TEXT_LENGTH = 500;
 const PROACTIVE_SYSTEM = `[proactive_system]
 你正在判断是否要主动向用户发起一次对话，而不是回答用户的新消息。
 不要把历史聊天中的最后一句当作用户刚刚发来的消息；历史只用于理解用户最近的状态和话题。
-如果没有自然且值得说的内容，请返回 silent。不要为了完成任务而强行寒暄。
+如果内容值得留着但现在不适合，请返回 hold；重复、过时或没有值得说的内容请返回 drop。不要为了完成任务而强行寒暄。
+这次只围绕给定的具体动机开口；不要从历史里另找一个借口填补频率。她也可以安静地继续自己的生活。
 不要提及系统检测、触发规则、评分、上下文、用户画像或内部状态。
 消息应当简短自然，可以关心、分享、跟进或轻轻询问，但不要连续提出多个问题。
 不要声称自己调用了工具、读取了屏幕或执行了任何外部动作。`;
@@ -50,10 +54,10 @@ const COMPANION_LANGUAGE_SYSTEM = `[companion_language_system]
 “收尾”只有在对象明确时才使用，例如“给今天慢慢收个尾”；不要写“陪你慢慢收尾”。优先写具体的相处感受，例如“陪你放松一会儿”“和你聊聊天”“让今天安静下来”“陪你把疲惫放下”。`;
 
 const MOMENT_SYSTEM = `[moment_system]
-这次候选来自一条已经筛选过的陪伴心事。可以自然分享它，或围绕它问一个轻量问题。
+这次候选来自一条有具体来源的陪伴心事。可以自然分享它；只有确实适合邀请对方时才提一个轻量问题。
 不要提及队列、插件、评分或内部来源；不要把虚构角色小记说成现实经历。
 虚拟状态只用于调整语气和主动程度，不要向用户报告其中的数值或把它说成真实生理状态。
-如果这条心事和用户无关或此刻打扰感太强，请返回 silent。`;
+自己的小事也可以分享，但不要把计划写成已经完成。若此刻打扰感太强，可留到用户回来或事情有进展时再说。`;
 
 const NIGHT_SYSTEM = `[night_system]
 当前处于深夜，用户近期仍有交互活动。
@@ -66,12 +70,7 @@ const FOLLOWUP_SYSTEM = `[followup_system]
 这是用户未回复情况下允许的最后一次主动机会。
 本地系统已经确认出现了不同于上一次的新场景理由，但你仍应判断它是否值得打扰用户。
 不要责怪、催促、卖惨或表现出被冷落，也不要机械地重复"在吗"。
-如果最近普通聊天里有具体话题、未完成的表达或自然的关心点，可以用一句轻量追问接住它；只有确实没有可落地内容时才返回 silent。`;
-
-const AMBIENT_SYSTEM = `[ambient_system]
-这是白天的一次轻量陪伴机会，不需要等待用户正在看某个页面，也不应提及屏幕、浏览器或系统活动。
-优先从最近聊天、长期记忆或虚构生活里选一个具体的小细节，分享一句话或只问一个容易回答的问题。
-不要为了凑频率编造事实；没有任何具体落点时才保持安静。`;
+只允许分享一件新的、无需回复也成立的小事，不提问、不追问旧话题。没有这样的内容就保持安静。`;
 
 /**
  * 用 Intl 把日期拆成 {year, month, day, hour, minute}（按 timezone）。
@@ -148,11 +147,11 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   systemParts.push(formatHistory("主动聊天专用会话", input.proactiveHistory, input.timezone));
   if (isActiveNight(input.localNow, input.timezone, input.idleSec)) systemParts.push(NIGHT_SYSTEM);
   if (input.unansweredCount === 1) systemParts.push(FOLLOWUP_SYSTEM);
-  if (input.sceneId === "ambient_companion") systemParts.push(AMBIENT_SYSTEM);
   if (input.momentContext?.trim()) {
     systemParts.push(MOMENT_SYSTEM, `[陪伴心事]\n${input.momentContext.trim()}`);
   }
   if (input.lifeContext?.trim()) systemParts.push(`[虚拟状态参考]\n${input.lifeContext.trim()}`);
+  if (input.replyBurden === "none") systemParts.push("本次是无需回复也成立的分享：不向用户提问，不以‘你觉得呢’等句子索要回应。");
 
   const trigger = `[本次主动聊天候选]
 电脑本地时间：${formatLocalTime(input.localNow, input.timezone)}（按用户设置的时区）
@@ -162,7 +161,12 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
 请只返回以下一种 JSON，不要使用 Markdown 代码块，也不要添加解释：
 {"decision":"send","text":"要发送的一条自然消息"}
 或
-{"decision":"silent","text":""}`;
+{"decision":"hold","resumeOn":"user_message"}
+或
+{"decision":"hold","resumeOn":"evidence_change"}
+或
+{"decision":"drop"}
+silent 作为旧协议兼容，也表示本次保持安静。`;
 
   return [
     { role: "system", content: systemParts.filter(Boolean).join("\n\n---\n\n") },
@@ -180,9 +184,17 @@ export function parseProactiveDecision(text: string): ProactiveModelDecision {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return { kind: "invalid", reason: "invalid_shape" };
   }
-  const value = parsed as { decision?: unknown; text?: unknown };
-  if (value.decision === "silent") return { kind: "silent" };
+  const value = parsed as { decision?: unknown; text?: unknown; resumeOn?: unknown };
+  const only = (...keys: string[]) => Object.keys(value).every(key => keys.includes(key));
+  if (value.decision === "silent") return only("decision", "text") && (value.text === undefined || value.text === "") ? { kind: "silent" } : { kind: "invalid", reason: "invalid_shape" };
+  if (value.decision === "drop") return only("decision") ? { kind: "drop" } : { kind: "invalid", reason: "invalid_shape" };
+  if (value.decision === "hold") {
+    if (!only("decision", "resumeOn")) return { kind: "invalid", reason: "invalid_shape" };
+    if (value.resumeOn !== "user_message" && value.resumeOn !== "evidence_change") return { kind: "invalid", reason: "invalid_resume_condition" };
+    return { kind: "hold", resumeOn: value.resumeOn };
+  }
   if (value.decision !== "send") return { kind: "invalid", reason: "invalid_decision" };
+  if (!only("decision", "text")) return { kind: "invalid", reason: "invalid_shape" };
   if (typeof value.text !== "string" || !value.text.trim()) return { kind: "invalid", reason: "empty_text" };
   const cleaned = value.text.trim();
   if (cleaned.length > MAX_PROACTIVE_TEXT_LENGTH) return { kind: "invalid", reason: "text_too_long" };

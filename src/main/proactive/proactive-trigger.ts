@@ -8,7 +8,7 @@
 //
 // 边界：
 // - 不实现 fallback / Function Calling / MCP / 主动刷新外部信息
-// - 不新增 desire-engine / 概率门
+// - 自然起意由持久机会选择器负责，本模块只调度和转发结果
 // - 不实现天气缓存、TTL、expiresAt、跨日期判断
 //
 // 未来接入天气缓存时：只需让 deps.getWeatherContext 返回非空 WeatherContext，
@@ -77,7 +77,12 @@ export interface ProactiveTriggerDependencies {
   onEvaluation?: (status: ProactiveEvaluationStatus) => void;
   getConversationLastActivity?: () => Promise<number | null>;
   getAdditionalCandidates?: (context: ProactiveTriggerContext) => Promise<ProactiveOpportunity[]>;
+  /** Production uses evidence-backed opportunities; legacy clock scenes remain testable in isolation. */
+  useEventOpportunitiesOnly?: boolean;
+  onSuppressed?: (snapshot: ProactiveRuntimeSnapshot) => void;
+  getPendingCandidate?: () => ProactiveCandidate | undefined;
   getCandidateBlockReason?: (candidate: ProactiveCandidate) => string | undefined;
+  onCandidateSuppressed?: (candidate: ProactiveCandidate) => void;
 }
 
 export interface ProactiveTriggerController {
@@ -422,6 +427,7 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
   let timer: ReturnType<typeof setTimeout> | null = null;
   let running = false;
   let stopped = true;
+  let cancellationVersion = 0;
 
   // 闭包状态
   let previousIdleSec: number | null = null;
@@ -457,6 +463,7 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
   }
 
   async function evaluateNow(reason: string): Promise<void> {
+    const version = cancellationVersion;
     const snapshot = deps.getRuntimeSnapshot();
     const priorIdleSec = previousIdleSec;
 
@@ -470,8 +477,17 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
       activeSessionStartedAt = snapshot.now;
     }
     if (shouldSkipFast(snapshot)) {
+      deps.onSuppressed?.(snapshot);
       const reason = !snapshot.enabled ? "disabled" : snapshot.screenLocked ? "screen_locked" : snapshot.conversationBusy ? "conversation_busy" : "generation_busy";
       reportEvaluation(snapshot, "suppressed", null, null, reason);
+      return;
+    }
+
+    // A durable intent has already passed selection. Recovery must not depend
+    // on a new random opportunity appearing after restart.
+    const pending = deps.getPendingCandidate?.();
+    if (pending) {
+      await deps.evaluateCandidate(pending);
       return;
     }
 
@@ -495,9 +511,17 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
       conversationLastActivity: await deps.getConversationLastActivity?.() ?? null,
     };
 
-    const allOpps = [...generateProactiveCandidates(ctx), ...await deps.getAdditionalCandidates?.(ctx) ?? []];
+    const allOpps = [...(deps.useEventOpportunitiesOnly ? [] : generateProactiveCandidates(ctx)), ...await deps.getAdditionalCandidates?.(ctx) ?? []];
+    if (version !== cancellationVersion) {
+      for (const opportunity of allOpps) if (opportunity.opportunityId) deps.onCandidateSuppressed?.(opportunity);
+      return;
+    }
     const allSorted = sortCandidates(allOpps);
-    const filtered = allSorted.filter((o) => o.score >= targetScore());
+    const filtered = allSorted.filter(opportunity => {
+      if (opportunity.score >= targetScore()) return true;
+      if (opportunity.opportunityId) deps.onCandidateSuppressed?.(opportunity);
+      return false;
+    });
     const sorted = filtered;
 
     if (sorted.length === 0) {
@@ -509,7 +533,11 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
 
     // Policy/offline blocks are not model attempts and must not consume the
     // 30-minute retry budget (especially after a channel reconnects).
-    const eligible = sorted.filter(candidate => !deps.getCandidateBlockReason?.(candidate));
+    const eligible = sorted.filter(candidate => {
+      if (!deps.getCandidateBlockReason?.(candidate)) return true;
+      if (candidate.opportunityId) deps.onCandidateSuppressed?.(candidate);
+      return false;
+    });
     if (eligible.length === 0) {
       const nearest = sorted[0];
       reportEvaluation(snapshot, "suppressed", nearest.score, nearest.sceneId, deps.getCandidateBlockReason?.(nearest));
@@ -519,7 +547,7 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
     const backoffMap = deps.getLastEvaluatedAtByScene();
     const candidates = eligible.filter((o) => {
       const last = backoffMap.get(o.sceneId);
-      if (typeof last === "number" && snapshot.now - last < EVALUATION_RETRY_MS) {
+      if (!o.opportunityId && typeof last === "number" && snapshot.now - last < EVALUATION_RETRY_MS) {
         log("skipped scene=" + o.sceneId + " reason=evaluation_backoff", { reason });
         return false;
       }
@@ -543,13 +571,8 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
     deps.setLastEvaluatedAtByScene(backoffMap);
 
     try {
-      await deps.evaluateCandidate({
-        sceneId: selected.sceneId,
-        score: selected.score,
-        sceneCooldownMs: selected.sceneCooldownMs,
-        ...(selected.momentId ? { momentId: selected.momentId } : {}),
-        ...(selected.momentSummary ? { momentSummary: selected.momentSummary } : {}),
-      });
+      const { reason: _explanation, ...candidate } = selected;
+      await deps.evaluateCandidate(candidate);
     } catch (err) {
       log("evaluation_failed", { sceneId: selected.sceneId, error: err instanceof Error ? err.message : String(err) });
     } finally {
@@ -583,6 +606,7 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
   }
 
   function stop(): void {
+    cancellationVersion++;
     stopped = true;
     if (timer) { clearTimeout(timer); timer = null; }
   }

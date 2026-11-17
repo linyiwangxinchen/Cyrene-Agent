@@ -13,10 +13,12 @@ import { normalizeUiIcon } from "../../shared/ui-icon";
 import { normalizeUiLanguage } from "../../shared/ui-language";
 import {
   DEFAULT_PROACTIVE_TARGET_SCORE,
+  DEFAULT_PROACTIVE_DENSITY,
   normalizeChatSocialContextEnabled,
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
+  normalizeProactiveDensity,
   normalizeProactiveDeliveryTarget,
   normalizeProactiveTargetScore,
   normalizeProactiveQuietStartMinute,
@@ -67,6 +69,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   segmentedOutputMode: "off",
   mobileMessageSegmentation: "off",
   proactiveChatMode: "off",
+  proactiveDensity: DEFAULT_PROACTIVE_DENSITY,
   proactiveDeliveryTarget: "local",
   proactiveTargetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
   proactiveQuietStartMinute: 22 * 60,
@@ -262,6 +265,7 @@ export function normalizeGeneralSettings(
     segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
+    proactiveDensity: normalizeProactiveDensity(input?.proactiveDensity),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
     proactiveTargetScore: normalizeProactiveTargetScore(input?.proactiveTargetScore),
     proactiveQuietStartMinute: normalizeProactiveQuietStartMinute(input?.proactiveQuietStartMinute),

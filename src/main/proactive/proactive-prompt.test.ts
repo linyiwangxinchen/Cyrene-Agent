@@ -100,7 +100,10 @@ describe("proactive prompt", () => {
       timezone: TIMEZONE,
     });
     const combined = messages.map((message) => String(message.content)).join("\n");
-    expect(combined).toContain('{"decision":"silent","text":""}');
+    expect(combined).toContain('{"decision":"send","text":"要发送的一条自然消息"}');
+    expect(combined).toContain('{"decision":"hold","resumeOn":"user_message"}');
+    expect(combined).toContain('{"decision":"hold","resumeOn":"evidence_change"}');
+    expect(combined).toContain('{"decision":"drop"}');
     expect(combined).not.toContain("工具目录");
     expect(combined).not.toContain("Tool Calling");
   });
@@ -122,15 +125,28 @@ describe("proactive prompt", () => {
     expect(combined).toContain("陪你放松一会儿");
   });
 
-  it("gives daytime ambient and context follow-ups a concrete path", () => {
+  it("does not ask the model to invent a reason from history for an old ambient scene", () => {
     const messages = buildProactiveMessages({
       basePersona: "P", ordinaryHistory: [{ role: "user", content: "我还在准备答辩", at: Date.UTC(2026, 6, 13, 2) }], proactiveHistory: [],
       sceneId: "ambient_companion", localNow: new Date(Date.UTC(2026, 6, 13, 6)), idleSec: 900, unansweredCount: 1, timezone: TIMEZONE,
     });
     const system = String(messages[0].content);
-    expect(system).toContain("[ambient_system]");
-    expect(system).toContain("最近聊天、长期记忆或虚构生活");
-    expect(system).toContain("轻量追问");
+    expect(system).not.toContain("[ambient_system]");
+    expect(system).toContain("不要从历史里另找一个借口填补频率");
+    expect(system).toContain("只允许分享一件新的、无需回复也成立的小事");
+    expect(system).toContain("不提问、不追问旧话题");
+  });
+
+  it("grounds sharing in the supplied moment and permits saving it for a relevant conversation", () => {
+    const messages = buildProactiveMessages({
+      basePersona: "P", ordinaryHistory: [], proactiveHistory: [], sceneId: "life:world:note-1",
+      localNow: new Date(Date.UTC(2026, 6, 13, 6)), idleSec: 0, unansweredCount: 0, timezone: TIMEZONE,
+      momentContext: "午餐时听到一个故事，来自她的个人听闻记录。下一页的整理还没有完成。",
+    });
+    const system = String(messages[0].content);
+    expect(system).toContain("午餐时听到一个故事");
+    expect(system).toContain("不要把计划写成已经完成");
+    expect(system).toContain("可留到用户回来或事情有进展时再说");
   });
 });
 
@@ -310,7 +326,27 @@ describe("parseProactiveDecision", () => {
       kind: "send",
       text: "早点休息呀♪",
     });
-    expect(parseProactiveDecision('{"decision":"silent","text":"ignored"}')).toEqual({ kind: "silent" });
+    expect(parseProactiveDecision('{"decision":"silent","text":""}')).toEqual({ kind: "silent" });
+    expect(parseProactiveDecision('{"decision":"silent"}')).toEqual({ kind: "silent" });
+  });
+
+  it("parses both explicit hold conditions and drop without generating text", () => {
+    expect(parseProactiveDecision('{"decision":"hold","resumeOn":"user_message"}')).toEqual({ kind: "hold", resumeOn: "user_message" });
+    expect(parseProactiveDecision('{"decision":"hold","resumeOn":"evidence_change"}')).toEqual({ kind: "hold", resumeOn: "evidence_change" });
+    expect(parseProactiveDecision('{"decision":"drop"}')).toEqual({ kind: "drop" });
+    expect(parseProactiveDecision('{"decision":"send","text":"  记下一件有趣的小事。  "}')).toEqual({ kind: "send", text: "记下一件有趣的小事。" });
+  });
+
+  it.each([
+    null, [], true, 42, "send", {}, { decision: "unknown" },
+    { decision: "hold" }, { decision: "hold", resumeOn: "timer" },
+    { decision: "hold", resumeOn: 3 }, { decision: "hold", resumeOn: "user_message", text: "仍然发送" },
+    { decision: "send", text: 42 }, { decision: "send", text: "消息", resumeOn: "user_message" },
+    { decision: "drop", text: "仍然发送" }, { decision: "drop", resumeOn: "evidence_change" },
+    { decision: "silent", text: "不可发送的内容" }, { decision: "silent", text: null },
+    { decision: "send", text: "消息", tools: [] }, { decision: "hold", resumeOn: "user_message", retryAt: 1800 },
+  ])("rejects malformed, contradictory or unrecognized fields: %j", (value) => {
+    expect(parseProactiveDecision(JSON.stringify(value)).kind).toBe("invalid");
   });
 
   it("rejects prose wrappers, empty send text, and oversized output", () => {

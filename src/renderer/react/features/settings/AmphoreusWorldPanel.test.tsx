@@ -81,6 +81,31 @@ it("loads history only when opened and applies resident and location filters", a
   expect(getWorldHistory).toHaveBeenLastCalledWith(expect.objectContaining({ locationId: "okhema", residentId: undefined }));
 });
 
+it("shows Cyrene's personal projects and known moments without presenting planned outcomes as facts", async () => {
+  const now = Date.parse("2026-11-10T12:30:00Z");
+  view.amphoreus!.personal = {
+    residentId: "cyrene", energy: 77, mood: "想把手边的小事做完", attention: "还想补完那张清单",
+    goals: [{ id: "project", title: "整理有趣的街角见闻", progress: 20, status: "active", updatedAt: now, reason: "今天记下了第一处", stage: "收集线索", nextStep: "有空再去看看另一条街" }],
+    actions: [
+      { id: "future", residentId: "cyrene", goalId: "project", title: "打算整理第二页", intent: "把已经记下的内容分一分类", activity: "study", startsAt: now + 3600_000, endsAt: now + 7200_000, locationId: "okhema", status: "planned", version: 1, stage: "起意", outcome: "不应出现的未来成功", artifact: "不应出现的未来成果" },
+      { id: "past", residentId: "cyrene", goalId: "project", title: "整理第一页", intent: "留下今天的小发现", activity: "study", startsAt: now - 3600_000, endsAt: now - 1800_000, locationId: "okhema", status: "completed", version: 2, stage: "整理", outcome: "整理好了一段记录", artifact: "一张写到一半的清单" },
+    ],
+    experiences: [{ id: "heard", eventId: "news", at: now - 1200_000, kind: "heard", text: "午餐时听到一段有趣的故事", source: "午餐时的交谈", locationId: "okhema" }], changes: [],
+  };
+  await render();
+  const personal = host.querySelector('[aria-label="昔涟的此刻"]')!;
+  expect(personal.textContent).toContain("整理有趣的街角见闻");
+  expect(personal.textContent).toContain("收集线索");
+  expect(personal.textContent).toContain("还想补完那张清单");
+  expect(personal.textContent).toContain("午餐时听到一段有趣的故事");
+  expect(personal.textContent).toContain("一张写到一半的清单");
+  expect(personal.textContent).not.toContain("不应出现的未来");
+  expect(personal.textContent).not.toContain("77");
+  expect(getWorldHistory).not.toHaveBeenCalled();
+  await act(async () => button("查看昔涟的完整经历").click());
+  expect(getWorldHistory).toHaveBeenCalledWith(expect.objectContaining({ residentId: "cyrene", limit: 30 }));
+});
+
 it("does not let a late history response replace a newer filter", async () => {
   let resolve!: (value: unknown) => void;
   getWorldHistory.mockImplementationOnce(() => new Promise((r) => { resolve = r; }));

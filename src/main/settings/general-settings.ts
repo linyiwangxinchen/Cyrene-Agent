@@ -80,6 +80,8 @@ export interface GeneralSettings {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   /** 昔涟主动聊天总开关。 */
   proactiveChatMode: ProactiveChatMode;
+  /** Willingness to share meaningful life events; never a daily sending target. */
+  proactiveDensity?: import("../../shared/preferences").ProactiveDensity;
   /** 主动消息最终投递到本地、微信或飞书。 */
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   /** 主动聊天候选进入模型评估前的最低评分（0-100）。 */

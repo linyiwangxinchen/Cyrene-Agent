@@ -8,6 +8,7 @@ import { createPluginPromptRegistry } from "../../plugins/prompts";
 import type { PluginRuntime } from "../../plugins/context";
 import type { ScheduledTask } from "../scheduler/types";
 import { createAgentRuntime, type AgentRuntimeDeps } from "./agent-runtime";
+import { InitiativeOpportunityStore } from "../proactive/initiative-opportunities";
 
 const mocks = vi.hoisted(() => ({
   onAgentRunFinished: vi.fn(),
@@ -464,6 +465,74 @@ describe("AgentRuntime buildOptions 依赖装配", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe("AgentRuntime 暂存念头的会话边界", () => {
+  let root: string;
+  const localThought = "本地私聊留下的念头：刚刚整理好一张书签";
+  const privateThought = "只属于私聊甲的跟进事项";
+  const otherThought = "只属于私聊乙的跟进事项";
+  const pluginThought = "插件分享的阅读发现";
+
+  beforeEach(() => {
+    root = mkdtempSync(path.join(os.tmpdir(), "cyrene-runtime-thoughts-"));
+    electronMocks.userDataRoot = root;
+    const now = Date.now();
+    const store = new InitiativeOpportunityStore(path.join(root, "initiative-opportunities.json"), () => 0.5);
+    const entries = [
+      { id: "local", source: "amphoreus", summary: localThought },
+      { id: "private", source: "followup", summary: privateThought, conversationId: "private-uuid-a" },
+      { id: "other", source: "followup", summary: otherThought, conversationId: "private-uuid-b" },
+      { id: "plugin", source: "moment:plugin", summary: pluginThought },
+    ];
+    store.select({ now, opportunities: entries.map(entry => ({
+      ...entry, sourceEventId: entry.id, evidenceVersion: 1, motive: "interesting" as const,
+      occurredAt: now, expiresAt: now + 3_600_000, strengthPerHour: 1, replyBurden: "none" as const,
+    })), eligible: true });
+    for (const entry of entries) expect(store.resolve(entry.id, "hold", { now, resumeOn: "user_message" })).toBe(true);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    electronMocks.userDataRoot = "";
+    await closeConversationDatabases();
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  async function lifeContext(input: Record<string, unknown>, pluginSharing = false) {
+    const buildOptionsModule = await import("./build-options");
+    let captured: import("./build-options").BuildOptionsDeps | undefined;
+    vi.spyOn(buildOptionsModule, "buildAgentRunOptions").mockImplementation(async (_input, deps) => {
+      captured = deps;
+      return { options: { toolSystemContent: "", soulSystemBaseContent: "" }, latestUserText: "最近在忙什么" };
+    });
+    const runtime = createAgentRuntime(createFullDeps({
+      loadGeneralSettings: () => ({ companionPluginSharingEnabled: pluginSharing }) as never,
+      loadUserProfile: () => ({ timezone: "Asia/Shanghai" }) as never,
+    }));
+    await runtime.buildOptions(input as never);
+    return captured!.buildXilianLifeContext!();
+  }
+
+  it("私聊可读本地生活和本会话念头，不携带其他私聊或停用的插件内容", async () => {
+    const context = await lifeContext({ sessionId: "private-uuid-a", privateRelationshipContext: true });
+    expect(context).toContain(localThought);
+    expect(context).toContain(privateThought);
+    expect(context).not.toContain(otherThought);
+    expect(context).not.toContain(pluginThought);
+  });
+
+  it("绑定到 UUID 的群聊不注入个人生活与暂存念头", async () => {
+    expect(await lifeContext({ sessionId: "group-bound-uuid", channel: "wechat", privateRelationshipContext: false })).toBe("");
+  });
+
+  it("插件 agent 即使使用私聊 UUID 也不获得个人生活上下文", async () => {
+    expect(await lifeContext({ sessionId: "private-uuid-a", promptSource: "plugin-agent" })).toBe("");
+  });
+
+  it("启用插件分享后可以在私聊自然提起其保留的发现", async () => {
+    expect(await lifeContext({ sessionId: "private-uuid-a" }, true)).toContain(pluginThought);
   });
 });
 

@@ -49,6 +49,9 @@ export interface ProactiveChatServiceDeps {
   getDeliveryTarget?: () => ProactiveDeliveryTarget;
   getDeliveryContext?: () => import("./proactive-types").ProactiveDeliveryContext | undefined;
   canStartDelivery?: () => boolean;
+  validateCandidate?: (candidate: ProactiveCandidate) => string | undefined;
+  beforeModel?: (candidate: ProactiveCandidate) => boolean;
+  onOpportunityDecision?: (candidate: ProactiveCandidate, decision: "send" | "hold" | "drop" | "delivery_partial" | "delivery_unknown", input: { now: number; resumeOn?: "user_message" | "evidence_change" }) => void;
   log?: (event: string, detail?: unknown) => void;
 }
 
@@ -68,6 +71,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
     ...state,
     affinity: { ...state.affinity },
     lastFiredAt: { ...state.lastFiredAt },
+    ...(state.recentProactiveAt ? { recentProactiveAt: [...state.recentProactiveAt] } : {}),
     ...(state.pendingCommitIntent ? {
       pendingCommitIntent: {
         ...state.pendingCommitIntent,
@@ -123,6 +127,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
     intentId?: string,
   ): ProactiveCommitResult => {
     if (result.kind === "cancelled") {
+      deps.onOpportunityDecision?.(candidate, result.deliveryStatus === "unknown" ? "delivery_unknown" : "hold", { now: deps.getSnapshot().now, resumeOn: "evidence_change" });
       const cancelledState = cloneState(deps.loadState());
       if (intentId) clearPendingIntent(cancelledState, intentId);
       deps.saveState(cancelledState);
@@ -134,6 +139,9 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       return result;
     }
 
+    // A failed opportunity acknowledgement leaves the durable intent intact.
+    // Its exact text and operation identity can then be safely recovered.
+    deps.onOpportunityDecision?.(candidate, result.deliveryStatus === "unknown" ? "delivery_unknown" : result.deliveryStatus ? "delivery_partial" : "send", { now: deps.getSnapshot().now });
     const latestState = cloneState(deps.loadState());
     if (intentId) clearPendingIntent(latestState, intentId);
     if (latestState.proactiveEpoch === generationEpoch) {
@@ -141,10 +149,9 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
     } else {
       // 文本已经成功写入，但用户可能在后续 TTS 等待期间发来消息。
       // 保留更新后的 Epoch/unansweredCount，只补记这次真实发送的硬冷却时间。
-      latestState.lastProactiveAt = intentAt;
-      latestState.lastProactiveScene = candidate.sceneId;
-      latestState.lastFiredAt[candidate.sceneId] = intentAt;
-      latestState.globalDesire = 0;
+      const unanswered = latestState.unansweredCount;
+      markProactiveCommitted(latestState, candidate, intentAt, localDate);
+      latestState.unansweredCount = unanswered;
     }
     deps.saveState(latestState);
     deps.log?.(result.deliveryStatus ? "message_delivery_incomplete" : "message_committed", {
@@ -182,6 +189,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         const pendingDecision = pendingCommitDecision(initialSnapshot, initialState, pendingIntent);
         if (!pendingDecision.allowed) {
           if (pendingDecision.reason === "stale_epoch") {
+            deps.onOpportunityDecision?.(pendingIntent.candidate, "drop", { now: initialSnapshot.now });
             const staleState = deps.loadState();
             clearPendingIntent(staleState, pendingIntent.intentId);
             deps.saveState(staleState);
@@ -191,6 +199,15 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         }
         if (deps.canStartDelivery && !deps.canStartDelivery()) {
           deps.log?.("pending_commit_blocked", { scene: pendingIntent.candidate.sceneId, reason: "delivery_unavailable", intentId: pendingIntent.intentId });
+          return;
+        }
+        const invalidPending = deps.validateCandidate?.(pendingIntent.candidate);
+        if (invalidPending) {
+          deps.onOpportunityDecision?.(pendingIntent.candidate, "drop", { now: initialSnapshot.now });
+          const state = cloneState(deps.loadState());
+          clearPendingIntent(state, pendingIntent.intentId);
+          deps.saveState(state);
+          deps.log?.("pending_commit_blocked", { scene: pendingIntent.candidate.sceneId, reason: invalidPending });
           return;
         }
         generating = true;
@@ -204,11 +221,19 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
 
       const startDecision = canStartProactiveGeneration(initialSnapshot, initialState, candidate);
       if (!startDecision.allowed) {
+        deps.onOpportunityDecision?.(candidate, "hold", { now: initialSnapshot.now, resumeOn: "user_message" });
         deps.log?.("candidate_blocked", { scene: candidate.sceneId, reason: startDecision.reason });
         return;
       }
       if (deps.canStartDelivery && !deps.canStartDelivery()) {
+        deps.onOpportunityDecision?.(candidate, "hold", { now: initialSnapshot.now, resumeOn: "evidence_change" });
         deps.log?.("candidate_blocked", { scene: candidate.sceneId, reason: "delivery_unavailable" });
+        return;
+      }
+      const invalidCandidate = deps.validateCandidate?.(candidate);
+      if (invalidCandidate) {
+        deps.onOpportunityDecision?.(candidate, "drop", { now: initialSnapshot.now });
+        deps.log?.("candidate_blocked", { scene: candidate.sceneId, reason: invalidCandidate });
         return;
       }
 
@@ -216,9 +241,14 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       const generationEpoch = initialState.proactiveEpoch;
       try {
         const messages = await deps.buildMessages(candidate, initialState);
+        if (deps.loadState().proactiveEpoch !== generationEpoch || deps.beforeModel?.(candidate) === false) {
+          deps.onOpportunityDecision?.(candidate, "hold", { now: deps.getSnapshot().now, resumeOn: "user_message" });
+          return;
+        }
         const result = await deps.runModel(messages, frozenDeliveryTarget);
         const stateAfterModel = deps.loadState();
         if (stateAfterModel.proactiveEpoch !== generationEpoch) {
+          deps.onOpportunityDecision?.(candidate, "hold", { now: deps.getSnapshot().now, resumeOn: "evidence_change" });
           deps.log?.("generation_discarded", { scene: candidate.sceneId, reason: "stale_epoch" });
           return;
         }
@@ -226,14 +256,18 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         let text: string;
         let source: "model" | "fallback";
         let fallbackPayload: unknown;
-        if (result.kind === "silent") {
+        if (result.kind === "silent" || result.kind === "hold" || result.kind === "drop") {
+          deps.onOpportunityDecision?.(candidate, result.kind === "drop" ? "drop" : "hold", {
+            now: deps.getSnapshot().now,
+            resumeOn: result.kind === "hold" ? result.resumeOn : "evidence_change",
+          });
           const silentState = deps.loadState();
           if (silentState.proactiveEpoch === generationEpoch) {
             silentState.globalDesire = 0;
             silentState.lastFiredAt[candidate.sceneId] = deps.getSnapshot().now;
             deps.saveState(silentState);
           }
-          deps.log?.("model_silent", { scene: candidate.sceneId });
+          deps.log?.("model_silent", { scene: candidate.sceneId, decision: result.kind });
           return;
         }
         if (result.kind === "send") {
@@ -243,6 +277,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           // 技术失败或无效输出才允许寻找旧预设；Epoch 失效已在上方提前拦截。
           const fallback = await deps.getFallback(candidate);
           if (!fallback?.text.trim()) {
+            deps.onOpportunityDecision?.(candidate, "hold", { now: deps.getSnapshot().now, resumeOn: "user_message" });
             deps.log?.("fallback_unavailable", { scene: candidate.sceneId, result: result.kind, reason: result.reason });
             return;
           }
@@ -260,7 +295,14 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           generationEpoch,
         );
         if (!commitDecision.allowed) {
+          deps.onOpportunityDecision?.(candidate, "hold", { now: commitSnapshot.now, resumeOn: "user_message" });
           deps.log?.("commit_blocked", { scene: candidate.sceneId, reason: commitDecision.reason, source });
+          return;
+        }
+        const invalidAtCommit = deps.validateCandidate?.(candidate);
+        if (invalidAtCommit) {
+          deps.onOpportunityDecision?.(candidate, "drop", { now: commitSnapshot.now });
+          deps.log?.("commit_blocked", { scene: candidate.sceneId, reason: invalidAtCommit });
           return;
         }
 
@@ -300,6 +342,9 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         persistPendingIntent(commitStateBeforeIntent, intent);
         await deliverIntent(intent, frozenDeliveryTarget ?? "local");
       } catch (error) {
+        if (!deps.loadState().pendingCommitIntent) {
+          deps.onOpportunityDecision?.(candidate, "hold", { now: deps.getSnapshot().now, resumeOn: "user_message" });
+        }
         deps.log?.("evaluation_failed", { scene: candidate.sceneId, reason: "generation_error" });
         throw error;
       } finally {

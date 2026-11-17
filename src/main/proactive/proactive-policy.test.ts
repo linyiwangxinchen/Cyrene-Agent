@@ -40,23 +40,24 @@ function candidate(patch: Partial<ProactiveCandidate> = {}): ProactiveCandidate 
 }
 
 describe("proactive hard policy", () => {
-  it("uses the configured daily cap to shorten pacing without turning it into a schedule", () => {
+  it("uses a short anti-flood bound independently of the daily cap", () => {
     expect(getGlobalProactiveIntervalMs()).toBe(GLOBAL_PROACTIVE_INTERVAL_MS);
-    expect(getGlobalProactiveIntervalMs(20)).toBe(30 * 60 * 1000);
+    expect(getGlobalProactiveIntervalMs(20)).toBe(3 * 60 * 1000);
+    expect(getGlobalProactiveIntervalMs(3)).toBe(getGlobalProactiveIntervalMs(20));
     expect(getFollowupIntervalMs()).toBe(FOLLOWUP_INTERVAL_MS);
-    expect(getFollowupIntervalMs(20)).toBe(2 * 60 * 60 * 1000);
+    expect(getFollowupIntervalMs(20)).toBe(FOLLOWUP_INTERVAL_MS);
     const state = createDefaultProactiveState();
     state.lastProactiveAt = NOW - 31 * 60 * 1000;
     expect(canStartProactiveGeneration(snapshot({ dailyLimit: 20 }), state, candidate()).allowed).toBe(true);
   });
 
-  it("allows one context follow-up after an unanswered message when the conversation is still the reason", () => {
+  it("does not prompt for a reply just because a context follow-up became due", () => {
     const state = createDefaultProactiveState();
     state.unansweredCount = 1;
     state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
     state.lastProactiveScene = "morning_greeting";
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "conversation_followup", score: 60 })).allowed).toBe(true);
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "followup:exam", score: 60 })).allowed).toBe(true);
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "conversation_followup", score: 60 })).reason).toBe("followup_requires_new_content");
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "followup:exam", score: 60, replyBurden: "question", sourceEventId: "exam" })).reason).toBe("followup_requires_new_content");
   });
   it("uses user quiet hours when UTC server time is in a different day/night window", () => {
     const state = createDefaultProactiveState();
@@ -114,7 +115,7 @@ describe("proactive hard policy", () => {
     expect(canStartProactiveGeneration(snapshot({ generationBusy: true }), state, candidate()).reason).toBe("generation_busy");
   });
 
-  it("requires six hours, a new scene, and a stricter score for the second message", () => {
+  it("requires genuinely new low-burden content and a stricter score for the second message", () => {
     const state = createDefaultProactiveState();
     state.unansweredCount = 1;
     state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS + 1;
@@ -122,11 +123,44 @@ describe("proactive hard policy", () => {
 
     expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_cooldown");
     state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
-    expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_same_scene");
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "rainy_day", score: 79 })).reason)
+    expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_requires_new_content");
+    const newContent = { sourceEventId: "new-event", replyBurden: "none" as const };
+    expect(canStartProactiveGeneration(snapshot(), state, candidate(newContent)).reason).toBe("followup_same_scene");
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ ...newContent, sceneId: "rainy_day", score: 59 })).reason)
       .toBe("followup_score_too_low");
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "rainy_day", score: 80 })).allowed)
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ ...newContent, sceneId: "rainy_day", score: 60 })).allowed)
       .toBe(true);
+    state.lastProactiveSourceEventId = "new-event";
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({ ...newContent, sceneId: "another-title", score: 95 })).reason).toBe("followup_requires_new_content");
+  });
+
+  it("keeps the rolling hourly cap across user replies and allows dense independent moments", () => {
+    const state = createDefaultProactiveState();
+    for (let index = 0; index < 4; index++) {
+      const now = NOW + index * 4 * 60_000;
+      const c = candidate({ sceneId: `moment:${index}`, sourceEventId: `source:${index}` });
+      expect(canStartProactiveGeneration(snapshot({ now, dailyLimit: 20 }), state, c).allowed).toBe(true);
+      markProactiveCommitted(state, c, now);
+      markUserActivity(state);
+    }
+    expect(canStartProactiveGeneration(snapshot({ now: NOW + 16 * 60_000 }), state, candidate()).reason).toBe("hourly_limit");
+    expect(canStartProactiveGeneration(snapshot({ now: NOW + 60 * 60_000 }), state, candidate()).allowed).toBe(true);
+  });
+
+  it("caps all question opportunities using the shared durable daily budget", () => {
+    const state = createDefaultProactiveState();
+    const question = candidate({ sceneId: "boredom", replyBurden: "question" });
+    for (let index = 0; index < 3; index++) {
+      markProactiveCommitted(state, question, NOW + index * 20 * 60_000, "2026-11-17");
+      markUserActivity(state);
+    }
+    expect(state.dailyQuestionCount).toBe(3);
+    const next = snapshot({ now: NOW + 60 * 60_000, localDate: "2026-11-17", dailyLimit: 20 });
+    expect(canStartProactiveGeneration(next, state, question).reason).toBe("daily_question_limit");
+    expect(canStartProactiveGeneration(next, state, candidate({ replyBurden: "none" })).allowed).toBe(true);
+    expect(canStartProactiveGeneration({ ...next, now: NOW + 86_400_000, localDate: "2026-11-18" }, state, question).allowed).toBe(true);
+    markProactiveCommitted(state, question, NOW + 86_400_000, "2026-11-18");
+    expect(state.dailyQuestionCount).toBe(1);
   });
 
   it("hard-blocks a third unanswered proactive message", () => {

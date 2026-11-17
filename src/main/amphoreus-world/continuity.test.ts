@@ -193,7 +193,7 @@ describe("durable history and upgrades", () => {
     expect(state().days[0].events[0].outcome).toContain("留下了新的记录");
     expect(state().days[0].events[1].outcome).toBeUndefined();
     expect(fs.readFileSync(`${file}.schema1-backup.json`, "utf8")).toBe(bytes);
-    expect(new XilianWorldStore(file, () => now).readDataSnapshot().amphoreus!.schema).toBe(2);
+    expect(new XilianWorldStore(file, () => now).readDataSnapshot().amphoreus!.schema).toBe(3);
   });
   it("retains the authoritative snapshot when the archive is unavailable, then recovers history", () => {
     const archive = path.join(root, "amphoreus-history.sqlite"); fs.renameSync(archive, archive + ".saved"); fs.mkdirSync(archive);
@@ -223,11 +223,15 @@ describe("durable history and upgrades", () => {
     }
     expect(state().days).toHaveLength(60);
     expect(state().residents.every((r) => r.goals.some((g) => g.progress > 0) && r.memories.length <= 48)).toBe(true);
+    const cyrene = state().residents.find((r) => r.id === "cyrene")!;
+    expect(cyrene.goals.some((goal) => (goal.cycle ?? 1) > 1)).toBe(true);
+    expect(cyrene.goals.some((goal) => goal.lastActionId && goal.updatedAt > now - 14 * 86_400_000)).toBe(true);
     const entries = []; let page = store.queryWorldHistory({ limit: 80 });
     entries.push(...page.entries);
     while (page.next) { page = store.queryWorldHistory({ limit: 80, ...page.next }); entries.push(...page.entries); }
     expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
-    expect(entries.filter((e) => e.kind === "event")).toHaveLength(eventCount);
+    expect(entries.filter((e) => e.kind === "event" && !e.id.startsWith("amphoreus:personal:"))).toHaveLength(eventCount);
+    expect(entries.some((e) => e.id.startsWith("amphoreus:personal:"))).toBe(true);
     expect(entries.some((e) => e.id.startsWith("amphoreus:2026-11-10:"))).toBe(true);
     expect(store.queryWorldHistory({ residentId: "cyrene", limit: 80 }).entries.every((e) => e.residentIds.includes("cyrene"))).toBe(true);
     expect(() => store.queryWorldHistory({ before: NaN })).toThrow();

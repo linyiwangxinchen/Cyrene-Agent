@@ -242,3 +242,14 @@ describe("general browser viewport mode setting", () => {
     expect(normalizeGeneralSettings({ browserViewportMode: "custom" }).browserViewportMode).toBe("custom");
   });
 });
+
+describe("proactive density migration", () => {
+  it("adds willingness without changing the existing cap, quiet window or delivery target", () => {
+    const legacy = normalizeGeneralSettings({ proactiveChatMode: "on", proactiveDailyLimit: 20,
+      proactiveDeliveryTarget: "feishu", proactiveQuietStartMinute: 1380, proactiveQuietEndMinute: 420 });
+    expect(legacy).toMatchObject({ proactiveDensity: "active", proactiveDailyLimit: 20,
+      proactiveDeliveryTarget: "feishu", proactiveQuietStartMinute: 1380, proactiveQuietEndMinute: 420 });
+    expect(normalizeGeneralSettings({ proactiveDensity: "quiet", proactiveDailyLimit: 0 })).toMatchObject({ proactiveDensity: "quiet", proactiveDailyLimit: 0 });
+    expect(normalizeGeneralSettings({ proactiveDensity: "invalid" } as never).proactiveDensity).toBe("active");
+  });
+});

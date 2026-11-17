@@ -309,7 +309,9 @@ export async function startHeadlessCore() {
   ipc.handle(IPC.TOKEN_USAGE_CLEAR, () => clearUsage());
   onGeneralSettingsChanged((before, after) => {
     syncBuiltInToolToggles(after); updateLocaleContext({ uiLocale: after.language });
-    if (before.proactiveChatMode !== after.proactiveChatMode) proactive.getProactiveChatService()?.invalidate();
+    if (["proactiveChatMode", "proactiveDensity", "proactiveDeliveryTarget", "proactiveTargetScore", "proactiveDailyLimit", "proactiveQuietStartMinute", "proactiveQuietEndMinute", "companionPluginSharingEnabled"].some(key => before[key as keyof typeof before] !== after[key as keyof typeof after])) {
+      proactive.getProactiveChatService()?.invalidate();
+    }
     broadcast(IPC.UI_THEME_CHANGED, getEffectiveUiTheme(after.uiTheme));
     if (before.uiThemeRadius !== after.uiThemeRadius) broadcast(IPC.UI_THEME_RADIUS_CHANGED, after.uiThemeRadius);
     broadcast("web:general-changed", after);

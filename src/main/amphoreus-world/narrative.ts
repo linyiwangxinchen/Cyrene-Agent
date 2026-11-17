@@ -1,5 +1,5 @@
 import { AMPHOREUS_LOCATIONS, AMPHOREUS_RESIDENTS, expandResidentIds } from "../../shared/amphoreus-canon";
-import type { AmphoreusDay, AmphoreusEvent, AmphoreusState, AmphoreusThread, EventCondition, EventResolution, ResidentActivity, WorldEffect } from "../../shared/amphoreus-world";
+import type { AmphoreusDay, AmphoreusEvent, AmphoreusState, AmphoreusThread, EventCondition, EventResolution, PersonalAction, ResidentActivity, WorldEffect } from "../../shared/amphoreus-world";
 import { worldClock, worldInstant, worldTimezone } from "./clock";
 import { fitsRoutine, travelMinutes } from "./life";
 import { boundedText as text, check, finite as number, list, record, storyText, jsonObject, onlyKeys } from "./canon-guard";
@@ -18,7 +18,10 @@ export function parseThread(value: unknown, legacy = false): Omit<AmphoreusThrea
   check(/^[a-z][a-z0-9-]*$/.test(id) && (raw.status === "open" || raw.status === "resolved"));
   const read = legacy ? text : storyText;
   return { id, title: read(raw.title, 100), summary: read(raw.summary, 500), nextStep: read(raw.nextStep, 300), participants: members(raw.participants, legacy, AMPHOREUS_RESIDENTS.length), status: raw.status,
-    ...(typeof raw.eventId === "string" ? { eventId: raw.eventId } : {}) };
+    ...(typeof raw.eventId === "string" ? { eventId: raw.eventId } : {}),
+    ...(legacy && typeof raw.stage === "string" ? { stage: text(raw.stage, 100) } : {}),
+    ...(legacy && Array.isArray(raw.evidenceEventIds) ? { evidenceEventIds: list(raw.evidenceEventIds, 0, 40).map((id) => text(id, 160)) } : {}),
+    ...(legacy && Array.isArray(raw.blockers) ? { blockers: list(raw.blockers, 0, 5).map((blocker) => text(blocker, 600)) } : {}) };
 }
 export function parseConditions(value: unknown): EventCondition[] {
   return list(value ?? [], 0, 5).map((entry) => {
@@ -42,7 +45,7 @@ export function neglectedResidents(state: AmphoreusState, now: number): string[]
   return AMPHOREUS_RESIDENTS.filter((person) => now - last(person.id) >= 7 * 86_400_000).sort((a, b) => last(a.id) - last(b.id) || a.id.localeCompare(b.id)).map((r) => r.id);
 }
 export function parseDailyPlan(output: string, date: string, timezone: string, now: number, state?: AmphoreusState): AmphoreusDay {
-  const raw = jsonObject(output); onlyKeys(raw, ["date", "events"]); check(raw.date === date);
+  const raw = jsonObject(output); onlyKeys(raw, ["date", "events", "personalPlans"]); check(raw.date === date);
   const events: AmphoreusEvent[] = list(raw.events, 3, 8).map((value, index) => {
     const entry = record(value);
     onlyKeys(entry, ["startMinute", "durationMinutes", "locationId", "participants", "activity", "severity", "title", "summary", "intent", "conditions", "visibility"]);
@@ -69,10 +72,45 @@ export function parseDailyPlan(output: string, date: string, timezone: string, n
     check(previous ? previous.endsAt <= event.startsAt && previous.id !== event.id : !!state?.eventFacts[condition.eventId]);
   }
   if (state) {
+    for (const event of events) {
+      if (!event.participants.includes("cyrene")) continue;
+      const person = AMPHOREUS_RESIDENTS.find((resident) => resident.id === "cyrene")!;
+      const travel = travelMinutes(person.home, event.locationId, state.places) * 60_000;
+      if (event.startsAt - travel >= now) continue;
+      // Late daily plans may supply backstory, but cannot overwrite already-lived private time.
+      check(!state.personalActions.some((action) => {
+        const livedEnd = action.status === "interrupted" ? action.resolvedAt ?? action.startsAt : Math.min(now, action.endsAt);
+        return action.residentId === person.id && action.status !== "planned" && livedEnd > action.startsAt && action.startsAt < Math.min(now, event.endsAt + travel) && livedEnd > event.startsAt - travel;
+      }));
+    }
     const overdue = neglectedResidents(state, now).slice(0, 3);
     if (overdue.length) check(events.some((event) => event.participants.some((id) => overdue.includes(id))));
+    parsePersonalPlans(output, state, date, timezone, now, events);
   }
   return { date, timezone: worldTimezone(timezone), generatedAt: now, events: events.sort((a, b) => a.startsAt - b.startsAt || a.id.localeCompare(b.id)) };
+}
+export function parsePersonalPlans(output: string, state: AmphoreusState, date: string, timezone: string, now: number, proposedEvents: AmphoreusEvent[] = []): PersonalAction[] | undefined {
+  const raw = jsonObject(output);
+  if (raw.personalPlans === undefined) return undefined;
+  const person = AMPHOREUS_RESIDENTS.find((resident) => resident.id === "cyrene")!;
+  const resident = state.residents.find((r) => r.id === person.id)!;
+  const actions = list(raw.personalPlans, 0, 3).map((value, index): PersonalAction => {
+    const entry = record(value); onlyKeys(entry, ["goalId", "title", "intent", "activity", "startMinute", "durationMinutes"]);
+    const goalId = text(entry.goalId, 160), start = number(entry.startMinute), duration = number(entry.durationMinutes);
+    check(resident.goals.some((goal) => goal.id === goalId && goal.status === "active"));
+    check(Number.isInteger(start) && Number.isInteger(duration) && duration >= 20 && duration <= 60 && fitsRoutine(person, start, start + duration));
+    check(["study", "work", "watch", "social", "rest"].includes(entry.activity as string));
+    const startsAt = worldInstant(date, start, timezone), endsAt = startsAt + duration * 60_000;
+    return { id: `amphoreus:personal:model:${date}:${index}`, residentId: person.id, goalId, title: storyText(entry.title, 200), intent: storyText(entry.intent, 300), activity: entry.activity as ResidentActivity, startsAt, endsAt, locationId: person.home, status: "planned", version: 1, stage: "自己想做的小事", origin: "model" };
+  }).filter((action) => action.startsAt >= now);
+  for (const action of actions) {
+    check(!actions.some((other) => other.id !== action.id && other.startsAt < action.endsAt && other.endsAt > action.startsAt));
+    check(![...state.days.flatMap((day) => day.events), ...proposedEvents].some((event) => {
+      const travel = travelMinutes(person.home, event.locationId, state.places) * 60_000;
+      return event.status !== "cancelled" && event.participants.includes(person.id) && event.startsAt - travel < action.endsAt && event.endsAt + travel > action.startsAt;
+    }));
+  }
+  return actions;
 }
 function validateEnsemble(events: AmphoreusEvent[]): void {
   const ids = new Set(events.flatMap((e) => e.participants));

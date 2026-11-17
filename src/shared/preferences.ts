@@ -2,7 +2,9 @@ export type DefaultChatMode = "work" | "chat" | "code";
 export type SegmentedOutputMode = "all" | "chat" | "off";
 export type MobileMessageSegmentationMode = "on" | "natural" | "off";
 export type ProactiveChatMode = "on" | "off";
+export type ProactiveDensity = "quiet" | "natural" | "active";
 export type ProactiveDeliveryTarget = "local" | "wechat" | "feishu";
+export const DEFAULT_PROACTIVE_DENSITY: ProactiveDensity = "active";
 export const DEFAULT_PROACTIVE_TARGET_SCORE = 60;
 export const DEFAULT_PROACTIVE_QUIET_START_MINUTE = 22 * 60;
 export const DEFAULT_PROACTIVE_QUIET_END_MINUTE = 8 * 60;
@@ -32,6 +34,10 @@ export function normalizeMobileMessageSegmentationMode(value: unknown): MobileMe
 
 export function normalizeProactiveChatMode(value: unknown): ProactiveChatMode {
   return value === "on" ? "on" : "off";
+}
+
+export function normalizeProactiveDensity(value: unknown): ProactiveDensity {
+  return value === "quiet" || value === "natural" || value === "active" ? value : DEFAULT_PROACTIVE_DENSITY;
 }
 
 export function normalizeProactiveDeliveryTarget(value: unknown): ProactiveDeliveryTarget {

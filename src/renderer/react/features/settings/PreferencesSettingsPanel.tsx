@@ -5,6 +5,7 @@ import {
   normalizeChatSocialContextEnabled,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
+  normalizeProactiveDensity,
   normalizeProactiveDeliveryTarget,
   normalizeProactiveTargetScore,
   normalizeProactiveQuietStartMinute,
@@ -14,8 +15,10 @@ import {
   DEFAULT_PROACTIVE_QUIET_END_MINUTE,
   DEFAULT_PROACTIVE_DAILY_LIMIT,
   DEFAULT_PROACTIVE_TARGET_SCORE,
+  DEFAULT_PROACTIVE_DENSITY,
   type MobileMessageSegmentationMode,
   type ProactiveChatMode,
+  type ProactiveDensity,
   type ProactiveDeliveryTarget,
 } from "../../../../shared/preferences";
 import {
@@ -36,6 +39,7 @@ interface PreferencesValues {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   customStyle: CustomStyleConfig;
   proactiveChatMode: ProactiveChatMode;
+  proactiveDensity: ProactiveDensity;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   proactiveTargetScore: number;
   proactiveQuietStartMinute: number;
@@ -71,6 +75,7 @@ const defaults: PreferencesValues = {
   mobileMessageSegmentation: "off",
   customStyle: DEFAULT_CUSTOM_STYLE,
   proactiveChatMode: "off",
+  proactiveDensity: DEFAULT_PROACTIVE_DENSITY,
   proactiveDeliveryTarget: "local",
   proactiveTargetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
   proactiveQuietStartMinute: DEFAULT_PROACTIVE_QUIET_START_MINUTE,
@@ -97,6 +102,7 @@ function readPreferences(value: unknown): PreferencesValues {
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input.mobileMessageSegmentation),
     customStyle: normalizeCustomStyleConfig(input.customStyle),
     proactiveChatMode: normalizeProactiveChatMode(input.proactiveChatMode),
+    proactiveDensity: normalizeProactiveDensity(input.proactiveDensity),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input.proactiveDeliveryTarget),
     proactiveTargetScore: normalizeProactiveTargetScore(input.proactiveTargetScore),
     proactiveQuietStartMinute: normalizeProactiveQuietStartMinute(input.proactiveQuietStartMinute),
@@ -203,6 +209,7 @@ export function PreferencesSettingsPanel() {
         momentsLiveliness,
         mobileMessageSegmentation,
         proactiveChatMode,
+        proactiveDensity,
         proactiveDeliveryTarget,
         proactiveTargetScore,
         proactiveQuietStartMinute,
@@ -220,6 +227,7 @@ export function PreferencesSettingsPanel() {
         momentsLiveliness,
         mobileMessageSegmentation,
         proactiveChatMode,
+        proactiveDensity,
         proactiveDeliveryTarget,
         proactiveTargetScore,
         proactiveQuietStartMinute,
@@ -319,35 +327,16 @@ export function PreferencesSettingsPanel() {
               </div>}
               {values.proactiveChatMode === "on" && <>
                 <div className="cy-settings-row">
-                  <div className="cy-settings-row__copy">
-                    <strong data-settings-search-id="settingsPage.preferences.proactiveScoreStatus">{t("settingsPage.preferences.proactiveScoreStatus")}</strong>
-                    <span>{proactiveStatus.candidateScore === null
-                      ? t("settingsPage.preferences.proactiveScoreNoCandidate")
-                      : `${proactiveStatus.candidateScore} / ${proactiveStatus.targetScore}`}
-                      {proactiveStatus.sceneId ? ` · ${proactiveStatus.sceneId}` : ""}
-                      {proactiveStatus.evaluatedAt ? ` · ${new Date(proactiveStatus.evaluatedAt).toLocaleString()}` : ""}</span>
-                    {proactiveStatus.explanation && <span>{proactiveStatus.explanation}</span>}
-                    <span>{proactiveReason(proactiveStatus.reason ?? proactiveStatus.state)}</span>
-                    {proactiveStatus.delivery && <span>{t("settingsPage.preferences.proactiveDeliveryStatus")}: {proactiveReason(proactiveStatus.delivery.ready ? "ready" : proactiveStatus.delivery.reason ?? "delivery_unavailable")}</span>}
-                    {proactiveStatus.lastOutcome && <span>{t("settingsPage.preferences.proactiveLastOutcome")}: {proactiveReason(proactiveStatus.lastOutcome.state)}{proactiveStatus.lastOutcome.reason ? ` · ${proactiveReason(proactiveStatus.lastOutcome.reason)}` : ""} · {new Date(proactiveStatus.lastOutcome.at).toLocaleString()}</span>}
-                    {typeof proactiveStatus.unansweredCount === "number" && <span>{t("settingsPage.preferences.proactiveUnanswered", { count: proactiveStatus.unansweredCount })}</span>}
-                    {proactiveStatus.lastProactiveAt && <span>{t("settingsPage.preferences.proactiveLastSent")}: {new Date(proactiveStatus.lastProactiveAt).toLocaleString()}</span>}
-                  </div>
+                  <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveDensity">{t("settingsPage.preferences.proactiveDensity")}</strong><span>{t("settingsPage.preferences.proactiveDensityDescription")}</span></div>
+                  <SettingsSegmented aria-label={t("settingsPage.preferences.proactiveDensity")} value={values.proactiveDensity} options={[
+                    { label: t("settingsPage.preferences.quiet"), value: "quiet" },
+                    { label: t("settingsPage.preferences.natural"), value: "natural" },
+                    { label: t("settingsPage.preferences.proactiveActive"), value: "active" },
+                  ]} onChange={(value) => update("proactiveDensity", value as ProactiveDensity)} />
                 </div>
                 <div className="cy-settings-row">
                   <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.companionPluginSharing">{t("settingsPage.preferences.companionPluginSharing")}</strong><span>{t("settingsPage.preferences.companionPluginSharingDescription")}</span></div>
                   <SettingsSwitch ariaLabel={t("settingsPage.preferences.companionPluginSharing")} checked={values.companionPluginSharingEnabled} onChange={(checked) => update("companionPluginSharingEnabled", checked)} />
-                </div>
-                <div className="cy-settings-row">
-                  <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveTargetScore">{t("settingsPage.preferences.proactiveTargetScore")}</strong><span>{t("settingsPage.preferences.proactiveTargetScoreDescription")}</span></div>
-                  <InputNumber
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={values.proactiveTargetScore}
-                    addonAfter={t("settingsPage.preferences.scoreUnit")}
-                    onChange={(value) => update("proactiveTargetScore", normalizeProactiveTargetScore(value ?? DEFAULT_PROACTIVE_TARGET_SCORE))}
-                  />
                 </div>
                 <div className="cy-settings-row">
                   <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveQuietHours">{t("settingsPage.preferences.proactiveQuietHours")}</strong><span>{t("settingsPage.preferences.proactiveQuietHoursDescription")}</span></div>
@@ -359,8 +348,31 @@ export function PreferencesSettingsPanel() {
                 </div>
                 <div className="cy-settings-row">
                   <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveDailyLimit">{t("settingsPage.preferences.proactiveDailyLimit")}</strong><span>{t("settingsPage.preferences.proactiveDailyLimitDescription")}</span></div>
-                  <InputNumber min={0} max={24} step={1} value={values.proactiveDailyLimit} addonAfter={t("settingsPage.preferences.messageUnit")} onChange={(value) => update("proactiveDailyLimit", normalizeProactiveDailyLimit(value ?? DEFAULT_PROACTIVE_DAILY_LIMIT))} />
+                  <InputNumber aria-label={t("settingsPage.preferences.proactiveDailyLimit")} min={0} max={24} step={1} value={values.proactiveDailyLimit} addonAfter={t("settingsPage.preferences.messageUnit")} onChange={(value) => update("proactiveDailyLimit", normalizeProactiveDailyLimit(value ?? DEFAULT_PROACTIVE_DAILY_LIMIT))} />
                 </div>
+                <details className="cy-settings-proactive-diagnostics">
+                  <summary>{t("settingsPage.preferences.proactiveDiagnostics")}</summary>
+                  <div className="cy-settings-row">
+                    <div className="cy-settings-row__copy">
+                      <strong data-settings-search-id="settingsPage.preferences.proactiveScoreStatus">{t("settingsPage.preferences.proactiveScoreStatus")}</strong>
+                      <span>{proactiveStatus.candidateScore === null
+                        ? t("settingsPage.preferences.proactiveScoreNoCandidate")
+                        : `${proactiveStatus.candidateScore} / ${proactiveStatus.targetScore}`}
+                        {proactiveStatus.sceneId ? ` · ${proactiveStatus.sceneId}` : ""}
+                        {proactiveStatus.evaluatedAt ? ` · ${new Date(proactiveStatus.evaluatedAt).toLocaleString()}` : ""}</span>
+                      {proactiveStatus.explanation && <span>{proactiveStatus.explanation}</span>}
+                      <span>{proactiveReason(proactiveStatus.reason ?? proactiveStatus.state)}</span>
+                      {proactiveStatus.delivery && <span>{t("settingsPage.preferences.proactiveDeliveryStatus")}: {proactiveReason(proactiveStatus.delivery.ready ? "ready" : proactiveStatus.delivery.reason ?? "delivery_unavailable")}</span>}
+                      {proactiveStatus.lastOutcome && <span>{t("settingsPage.preferences.proactiveLastOutcome")}: {proactiveReason(proactiveStatus.lastOutcome.state)}{proactiveStatus.lastOutcome.reason ? ` · ${proactiveReason(proactiveStatus.lastOutcome.reason)}` : ""} · {new Date(proactiveStatus.lastOutcome.at).toLocaleString()}</span>}
+                      {typeof proactiveStatus.unansweredCount === "number" && <span>{t("settingsPage.preferences.proactiveUnanswered", { count: proactiveStatus.unansweredCount })}</span>}
+                      {proactiveStatus.lastProactiveAt && <span>{t("settingsPage.preferences.proactiveLastSent")}: {new Date(proactiveStatus.lastProactiveAt).toLocaleString()}</span>}
+                    </div>
+                  </div>
+                  <div className="cy-settings-row">
+                    <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveTargetScore">{t("settingsPage.preferences.proactiveTargetScore")}</strong><span>{t("settingsPage.preferences.proactiveTargetScoreDescription")}</span></div>
+                    <InputNumber aria-label={t("settingsPage.preferences.proactiveTargetScore")} min={0} max={100} step={1} value={values.proactiveTargetScore} addonAfter={t("settingsPage.preferences.scoreUnit")} onChange={(value) => update("proactiveTargetScore", normalizeProactiveTargetScore(value ?? DEFAULT_PROACTIVE_TARGET_SCORE))} />
+                  </div>
+                </details>
               </>}
             </Card>
           </section>

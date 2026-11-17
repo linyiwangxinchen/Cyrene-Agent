@@ -17,6 +17,7 @@ export function defaultProactiveState(): ProactiveState {
     lastFiredAt: {},
     dailyMessageDate: undefined,
     dailyMessageCount: 0,
+    dailyQuestionCount: 0,
   };
 }
 
@@ -45,6 +46,10 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
     sceneCooldownMs: value.candidate.sceneCooldownMs,
     ...(typeof value.candidate.momentId === "string" ? { momentId: value.candidate.momentId.slice(0, 200) } : {}),
     ...(typeof value.candidate.momentSummary === "string" ? { momentSummary: value.candidate.momentSummary.slice(0, 1000) } : {}),
+    ...(typeof value.candidate.opportunityId === "string" ? { opportunityId: value.candidate.opportunityId.slice(0, 300) } : {}),
+    ...(typeof value.candidate.sourceEventId === "string" ? { sourceEventId: value.candidate.sourceEventId.slice(0, 300) } : {}),
+    ...(typeof value.candidate.evidenceVersion === "string" ? { evidenceVersion: value.candidate.evidenceVersion.slice(0, 100) } : {}),
+    ...(["none", "light", "question"].includes(value.candidate.replyBurden as string) ? { replyBurden: value.candidate.replyBurden as ProactiveCandidate["replyBurden"] } : {}),
   };
   const context = value.deliveryContext;
   const deliveryContext: ProactiveDeliveryContext | undefined = isRecord(context) && Number.isSafeInteger(context.relationshipRevision)
@@ -76,6 +81,9 @@ export function loadProactiveState(): ProactiveState {
     const {
       pendingCommitIntent: _pendingCommitIntent,
       proactiveCommitSequence: _proactiveCommitSequence,
+      recentProactiveAt: _recentProactiveAt,
+      lastProactiveSourceEventId: _lastProactiveSourceEventId,
+      dailyQuestionCount: _dailyQuestionCount,
       ...legacyFields
     } = raw;
     const proactiveCommitSequence = typeof raw.proactiveCommitSequence === "number"
@@ -89,8 +97,11 @@ export function loadProactiveState(): ProactiveState {
       ...legacyFields,
       affinity: { ...base.affinity, ...(raw.affinity ?? {}) },
       lastFiredAt: { ...(raw.lastFiredAt ?? {}) },
+      ...(Array.isArray(raw.recentProactiveAt) ? { recentProactiveAt: raw.recentProactiveAt.filter(at => typeof at === "number" && Number.isFinite(at)).slice(-4) } : {}),
+      ...(typeof raw.lastProactiveSourceEventId === "string" ? { lastProactiveSourceEventId: raw.lastProactiveSourceEventId.slice(0, 300) } : {}),
       ...(typeof raw.dailyMessageDate === "string" && raw.dailyMessageDate.length <= 20 ? { dailyMessageDate: raw.dailyMessageDate } : {}),
       ...(Number.isSafeInteger(raw.dailyMessageCount) && (raw.dailyMessageCount as number) >= 0 ? { dailyMessageCount: raw.dailyMessageCount as number } : {}),
+      ...(Number.isSafeInteger(raw.dailyQuestionCount) && (raw.dailyQuestionCount as number) >= 0 ? { dailyQuestionCount: raw.dailyQuestionCount as number } : {}),
       ...(proactiveCommitSequence !== undefined ? { proactiveCommitSequence } : {}),
       ...(pendingCommitIntent !== undefined ? { pendingCommitIntent } : {}),
     };

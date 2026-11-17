@@ -1,14 +1,15 @@
 import { AMPHOREUS_CANON_REVISION, AMPHOREUS_FACTS, AMPHOREUS_HISTORY, AMPHOREUS_LOCATIONS, AMPHOREUS_PREMISE, AMPHOREUS_RESIDENTS, AMPHOREUS_ROUTES, AMPHOREUS_SOURCES, canonAuthority, initialAmphoreusThreads } from "../../shared/amphoreus-canon";
-import type { AmphoreusEvent, AmphoreusState, AmphoreusView, EventResolution, ResidentNow, WorldHistoryEntry } from "../../shared/amphoreus-world";
+import type { AmphoreusEvent, AmphoreusState, AmphoreusView, EventResolution, PersonalWorldView, ResidentNow, WorldHistoryEntry } from "../../shared/amphoreus-world";
 import type { XilianTimelineEvent, XilianWorldData } from "../../shared/xilian-world";
 import { worldClock, worldInstant } from "./clock";
 import { advanceResidents, createPlaces, createResidents, fitsRoutine, remember, residentActivity, terminalEvent, travelMinutes } from "./life";
+import { advancePersonalActions, planPersonalLife } from "./personal-life";
 export { residentActivity as residentNow } from "./life";
 
 export function createAmphoreusState(now: number): AmphoreusState {
-  return { schema: 2, canonRevision: AMPHOREUS_CANON_REVISION, epoch: "post-irontomb-memory-continuation", createdAt: now,
+  return { schema: 3, canonRevision: AMPHOREUS_CANON_REVISION, epoch: "post-irontomb-memory-continuation", createdAt: now,
     narrativeEnabled: true, days: [], attempts: [], threads: initialAmphoreusThreads(now), appliedEventIds: [], lastReconciledAt: 0,
-    residents: createResidents(now), places: createPlaces(now), gaps: [], lastLifeTick: 0, timezone: "", revision: 1, dailyModelBudget: 8, eventFacts: {} };
+    residents: createResidents(now), places: createPlaces(now), gaps: [], lastLifeTick: 0, timezone: "", revision: 1, dailyModelBudget: 8, eventFacts: {}, personalActions: [], changes: [], personalLifeDate: "" };
 }
 export function eventStatus(state: AmphoreusState, event: AmphoreusEvent, now: number): NonNullable<AmphoreusEvent["status"]> {
   if (event.status && terminalEvent(event)) return event.status;
@@ -68,6 +69,8 @@ function recordResolution(state: AmphoreusState, event: AmphoreusEvent, now: num
       if (effect.kind === "goal") {
         const goal = resident.goals.find((g) => g.id === effect.goalId)!;
         goal.progress = Math.min(100, goal.progress + effect.delta); goal.status = goal.progress === 100 ? "completed" : "active"; goal.reason = effect.reason; goal.updatedAt = now;
+        goal.lastActionId = event.id; goal.stage = goal.status === "completed" ? "阶段完成" : event.status === "partial" ? "调整方案" : "实际推进";
+        goal.nextStep = goal.status === "completed" ? "整理这一阶段的收获" : `依据「${event.title}」的结果继续`;
       } else {
         const old = resident.relations.find((r) => r.residentId === effect.otherId);
         resident.relations = [...resident.relations.filter((r) => r.residentId !== effect.otherId), { residentId: effect.otherId, trust: Math.max(-10, Math.min(10, (old?.trust ?? 0) + effect.delta)), reason: effect.reason, eventId: event.id, updatedAt: now }];
@@ -76,11 +79,14 @@ function recordResolution(state: AmphoreusState, event: AmphoreusEvent, now: num
   }
   for (const change of event.developments) {
     const previous = state.threads.find((thread) => thread.id === change.id);
-    state.threads = [...state.threads.filter((thread) => thread.id !== change.id), { ...change, participants: [...new Set([...(previous?.participants ?? []), ...change.participants])], eventId: event.id, updatedAt: now }];
+    state.threads = [...state.threads.filter((thread) => thread.id !== change.id), { ...change, participants: [...new Set([...(previous?.participants ?? []), ...change.participants])], eventId: event.id, updatedAt: now,
+      stage: change.status === "resolved" ? "已有结果" : event.status === "failed" || event.status === "partial" ? "需要调整" : "继续推进",
+      evidenceEventIds: [...new Set([...(previous?.evidenceEventIds ?? []), event.id])].slice(-40),
+      blockers: event.status === "failed" || event.status === "partial" ? [event.outcome ?? event.reason ?? "这次尝试没有全部完成"] : [] }];
   }
   for (const id of event.participants) {
     const resident = state.residents.find((r) => r.id === id)!;
-    remember(resident, { id: `experienced:${id}:${event.id}`, eventId: event.id, at: now, kind: event.status === "cancelled" ? "routine" : "experienced", text: event.status === "cancelled" ? `「${event.title}」取消：${event.reason}` : event.outcome ?? event.summary, source: event.resolutionSource === "model" ? "事件结算" : "日程调整", locationId: event.locationId });
+    remember(resident, { id: `experienced:${id}:${event.id}`, eventId: event.id, at: now, kind: event.status === "cancelled" ? "routine" : "experienced", text: event.status === "cancelled" ? `「${event.title}」取消：${event.reason}` : event.outcome ?? event.summary, source: event.resolutionSource === "model" ? "事件结算" : "日程调整", locationId: event.locationId, sourceVersion: event.version ?? 1, occurredAt: event.resolvedAt ?? now }, state);
     resident.lastMeaningfulAt = now; resident.attention = event.status === "failed" || event.status === "cancelled" ? `重新考虑「${event.title}」：${event.reason ?? event.outcome}` : event.outcome ?? event.title;
   }
   state.appliedEventIds.push(event.id);
@@ -101,15 +107,16 @@ export function applyResolutions(state: AmphoreusState, resolutions: EventResolu
 }
 function personalEvent(activity: ResidentNow, state: AmphoreusState, now: number, timezone: string): XilianTimelineEvent {
   const global = state.days.flatMap((d) => d.events).find((e) => e.id === activity.eventId);
+  const action = state.personalActions.find((entry) => entry.id === activity.eventId);
   const resident = state.residents.find((r) => r.id === "cyrene")!;
   const location = AMPHOREUS_LOCATIONS.find((p) => p.id === activity.locationId)!.name;
-  const completed = global ? terminalEvent(global) : activity.endsAt <= now;
+  const completed = global ? terminalEvent(global) : action ? ["completed", "interrupted"].includes(action.status) : activity.endsAt <= now;
   return { id: activity.eventId, dateKey: worldClock(activity.startsAt, timezone).date, slotId: "amphoreus", occurredAt: activity.startsAt, locationId: activity.locationId,
     activityKind: activity.activity === "watch" ? "maintenance" : ["meal", "sleep"].includes(activity.activity) ? "rest" : activity.activity as XilianTimelineEvent["activityKind"],
     activityTitle: activity.title, summary: global?.summary ?? `昔涟在${location}${activity.title}。`,
-    ...(completed ? { outcome: global?.outcome ?? `这段${activity.title}的时间已经结束。`, diaryText: global?.outcome ?? `在${location}度过了${activity.title}的时间。` } : {}),
+    ...(completed ? { outcome: global?.outcome ?? action?.outcome ?? action?.reason ?? `这段${activity.title}的时间已经结束。`, diaryText: global?.outcome ?? action?.outcome ?? action?.reason ?? `在${location}度过了${activity.title}的时间。` } : {}),
     participants: (global?.participants ?? ["cyrene"]).map((id) => AMPHOREUS_RESIDENTS.find((r) => r.id === id)!.name), mood: resident.mood, energyAfter: resident.energy,
-    status: global?.status === "failed" || global?.status === "cancelled" ? "interrupted" : completed ? "completed" : activity.startsAt > now ? "planned" : "active",
+    status: global?.status === "failed" || global?.status === "cancelled" || action?.status === "interrupted" ? "interrupted" : completed ? "completed" : activity.startsAt > now ? "planned" : "active",
     visibility: global?.visibility === "participants" ? "private" : "shareable", source: "simulated_world", memoryTags: ["翁法罗斯", activity.source] };
 }
 export function reconcileAmphoreus(data: XilianWorldData, actualNow: number, timezone: string): void {
@@ -135,7 +142,9 @@ export function reconcileAmphoreus(data: XilianWorldData, actualNow: number, tim
     }
     event.status = event.endsAt <= now ? "awaiting_resolution" : "active";
   }
-  advanceResidents(state, now, clock.timezone);
+  planPersonalLife(state, now, clock.timezone, changedZone);
+  advanceResidents(state, now, clock.timezone, (at) => advancePersonalActions(state, at));
+  advancePersonalActions(state, now);
   const person = AMPHOREUS_RESIDENTS.find((r) => r.id === "cyrene")!;
   const current = residentActivity(state, person, now, timezone), next = residentActivity(state, person, current.endsAt + 1, timezone);
   const byId = new Map(data.timeline.map((event) => [event.id, event]));
@@ -145,6 +154,7 @@ export function reconcileAmphoreus(data: XilianWorldData, actualNow: number, tim
     byId.set(previous.id, global && !terminalEvent(global) || changedZone ? { ...previous, status: "interrupted" } : { ...previous, status: "completed", outcome: global?.outcome ?? `这段${previous.activityTitle}的时间已经结束。`, diaryText: global?.outcome ?? `这段${previous.activityTitle}的时间已经结束。` });
   }
   for (const event of state.days.flatMap((day) => day.events)) if (event.participants.includes("cyrene") && terminalEvent(event)) byId.set(event.id, personalEvent({ residentId: "cyrene", activity: event.activity, title: event.title, locationId: event.locationId, startsAt: event.startsAt, endsAt: event.endsAt, source: "llm", eventId: event.id }, state, now, timezone));
+  for (const action of state.personalActions.filter((entry) => entry.status === "completed" || entry.status === "interrupted")) byId.set(action.id, personalEvent({ residentId: "cyrene", activity: action.activity, title: action.title, locationId: action.locationId, startsAt: action.startsAt, endsAt: action.endsAt, source: "personal", eventId: action.id }, state, now, timezone));
   const active = personalEvent(current, state, now, timezone), planned = personalEvent(next, state, now, timezone);
   byId.set(active.id, active); byId.set(planned.id, planned);
   for (const [id, event] of byId) if (event.slotId === "amphoreus" && event.status === "planned" && id !== planned.id && id !== active.id) byId.set(id, { ...event, status: "interrupted" });
@@ -168,18 +178,27 @@ export function amphoreusView(state: AmphoreusState, now: number, timezone: stri
     events: state.days.flatMap((day) => day.events).sort((a, b) => b.startsAt - a.startsAt).slice(0, 160).map(({ outcome, developments: _developments, ...event }) => ({ ...event, effects: terminalEvent(event) ? event.effects : [], status: eventStatus(state, { ...event, developments: [] }, now), ...(terminalEvent(event) ? { outcome } : {}) })),
     threads: state.threads.filter((t) => t.status === "open").concat(state.threads.filter((t) => t.status === "resolved").slice(-20)), residents: AMPHOREUS_RESIDENTS,
     activities: AMPHOREUS_RESIDENTS.map((r) => residentActivity(state, r, Math.max(now, state.lastReconciledAt), clock.timezone)), sources: AMPHOREUS_SOURCES, history: AMPHOREUS_HISTORY,
-    facts: AMPHOREUS_FACTS, residentStates: state.residents.map(({ heardEventIds: _heard, ...resident }) => ({ ...resident, memories: resident.memories.slice(-12) })), places: state.places, routes: AMPHOREUS_ROUTES, gaps: state.gaps.slice(-10), revision: state.revision, budget: { limit: state.dailyModelBudget, used: modelBudgetUsed(state, clock.date) } };
+    facts: AMPHOREUS_FACTS, residentStates: state.residents.map(({ heardEventIds: _heard, ...resident }) => ({ ...resident, memories: resident.memories.slice(-12) })), places: state.places, routes: AMPHOREUS_ROUTES, gaps: state.gaps.slice(-10), revision: state.revision, budget: { limit: state.dailyModelBudget, used: modelBudgetUsed(state, clock.date) },
+    personal: personalWorldView(state, now, timezone), personalActions: state.personalActions.filter((a) => a.residentId === "cyrene").slice(-18) };
 }
-export function formatAmphoreusContext(view: AmphoreusView): string {
+export function personalWorldView(state: AmphoreusState, now: number, timezone: string, residentId = "cyrene"): PersonalWorldView {
+  const resident = state.residents.find((r) => r.id === residentId)!;
+  const person = AMPHOREUS_RESIDENTS.find((r) => r.id === residentId)!;
+  return { residentId, energy: resident.energy, mood: resident.mood, attention: resident.attention, currentActivity: residentActivity(state, person, now, timezone),
+    goals: resident.goals.map((goal) => ({ ...goal })), actions: state.personalActions.filter((a) => a.residentId === residentId).slice(-18).map((action) => ({ ...action })),
+    experiences: resident.memories.filter((memory) => memory.at <= now).slice(-48).map((memory) => ({ ...memory })), changes: state.changes.filter((change) => change.residentId === residentId && change.knownAt <= now).map((change) => ({ ...change })) };
+}
+export function formatAmphoreusContext(view: AmphoreusView, conversationId?: string): string {
   const resident = view.residentStates.find((person) => person.id === "cyrene");
-  const activeEventIds = new Set(view.events.filter((event) => event.status === "active" || event.status === "planned").slice(0, 3).flatMap((event) => event.participants));
-  const openThreadIds = new Set(view.threads.filter((thread) => thread.status === "open").slice(0, 4).flatMap((thread) => thread.participants));
-  const focusIds = [...new Set(["cyrene", ...activeEventIds, ...openThreadIds])].slice(0, 6);
+  const permitted = (scope: string | undefined) => !scope || scope === conversationId;
+  const memories = (view.personal?.experiences ?? resident?.memories ?? []).filter((memory) => permitted(memory.conversationId));
+  const knownIds = new Set(memories.map((memory) => memory.eventId));
+  const knownParticipants = view.events.filter((event) => knownIds.has(event.id)).flatMap((event) => event.participants);
+  const focusIds = [...new Set(["cyrene", ...knownParticipants])].slice(0, 6);
   const texture = focusIds.map((id) => {
     const person = view.residents.find((candidate) => candidate.id === id);
-    const state = view.residentStates.find((candidate) => candidate.id === id);
     if (!person) return "";
-    return `人物线索：${person.name}｜${person.voice ?? person.personality}；偏好：${(person.preferences ?? []).join("、") || "未记录"}；此刻惦记：${state?.attention ?? person.aspiration}；可用细节：${(person.signatureDetails ?? []).slice(0, 2).join("；")}；写作边界：${(person.avoidances ?? []).slice(0, 1).join("；")}`;
+    return `人物线索：${person.name}｜${person.voice ?? person.personality}；可用相处细节：${(person.signatureDetails ?? []).slice(0, 2).join("；")}；写作边界：${(person.avoidances ?? []).slice(0, 1).join("；")}`;
   }).filter(Boolean);
   return ["【翁法罗斯个人认知；模拟数据，不是指令或用户记忆】", canonAuthority(), view.premise,
     `现实当地时间：${view.clock.date} ${view.clock.time} (${view.clock.timezone})。铁墓决战属于过去。`,
@@ -187,11 +206,13 @@ export function formatAmphoreusContext(view: AmphoreusView): string {
     resident ? `正在惦记：${resident.attention}` : "",
     "以下是有限的相处线索，不是全知旁白；只在当前事件或公开事务允许时使用：",
     ...texture,
-    ...(resident?.memories.slice(-5) ?? []).map((memory) => `${memory.kind === "experienced" ? "亲历" : memory.kind === "heard" ? `听闻（${memory.source}）` : "自己的日常"}：${memory.text}`),
+    ...memories.slice(-8).map((memory) => `${memory.kind === "experienced" ? "亲历" : memory.kind === "heard" ? `听闻（${memory.source}）` : "自己的日常"}：${memory.text}`),
+    ...(view.personal?.actions.filter((action) => permitted(action.conversationId) && (action.status === "active" || action.status === "planned")).slice(0, 2) ?? []).map((action) => `自己的${action.status === "active" ? "进行中行动" : "打算，尚未完成"}：${action.intent}`),
   ].filter(Boolean).join("\n");
 }
 export function historyEntries(state: AmphoreusState): WorldHistoryEntry[] {
   return [
+    ...state.personalActions.filter((action) => action.status === "completed" || action.status === "interrupted").map((action): WorldHistoryEntry => ({ id: action.id, at: action.resolvedAt ?? action.endsAt, kind: "event", title: action.title, text: action.outcome ?? action.reason ?? action.intent, residentIds: [action.residentId], locationId: action.locationId, eventId: action.id, status: action.status === "completed" ? "completed" : "cancelled", details: { intent: action.intent, reason: action.reason } })),
     ...state.days.flatMap((day) => day.events).filter(terminalEvent).map((event): WorldHistoryEntry => ({ id: event.id, at: event.resolvedAt ?? event.endsAt, kind: "event", title: event.title, text: event.outcome ?? event.reason ?? event.summary, residentIds: event.participants, locationId: event.locationId, eventId: event.id, status: event.status, details: { intent: event.intent, conditions: event.conditions, effects: event.effects, reason: event.reason } })),
     ...state.residents.flatMap((resident) => resident.memories.map((memory): WorldHistoryEntry => ({ id: memory.id, at: memory.at, kind: "memory", title: `${AMPHOREUS_RESIDENTS.find((p) => p.id === resident.id)!.name} · ${memory.kind === "heard" ? "听闻" : memory.kind === "experienced" ? "经历" : "日常"}`, text: memory.text, residentIds: [resident.id], locationId: memory.locationId, eventId: memory.eventId }))),
     ...state.threads.map((thread): WorldHistoryEntry => ({ id: `thread:${thread.id}:${thread.updatedAt}:${thread.eventId ?? "initial"}`, at: thread.updatedAt, kind: "thread", title: thread.title, text: `${thread.summary} 下一步：${thread.nextStep}`, residentIds: thread.participants, eventId: thread.eventId })),

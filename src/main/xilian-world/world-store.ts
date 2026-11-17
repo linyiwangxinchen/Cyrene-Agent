@@ -19,7 +19,8 @@ import { AMPHOREUS_LOCATIONS } from "../../shared/amphoreus-canon";
 import type { AmphoreusState } from "../../shared/amphoreus-world";
 import { amphoreusView, createAmphoreusState, reconcileAmphoreus } from "../amphoreus-world/engine";
 import { FutureWorldVersion, readAmphoreusState } from "../amphoreus-world/narrative";
-import { archiveWorld, queryHistory } from "../amphoreus-world/archive";
+import { archiveWorld, hasArchivedWorldEntry, queryHistory } from "../amphoreus-world/archive";
+import { personalIntentionId, planPersonalIntention, type PersonalIntentionInput } from "../amphoreus-world/personal-life";
 import type { WorldHistoryQuery } from "../../shared/amphoreus-world";
 
 const MAX_TIMELINE_EVENTS = 2_000;
@@ -300,8 +301,9 @@ export class XilianWorldStore {
         if (document.version === 3 && !document.amphoreus) throw new Error("Missing world state");
       }
       const data = normalizeData(raw, dateKey, at);
-      if (path.basename(this.filePath) === "amphoreus-world.json" && (raw as { amphoreus?: { schema?: number } }).amphoreus?.schema === 1) {
-        const backup = `${this.filePath}.schema1-backup.json`;
+      const oldSchema = (raw as { amphoreus?: { schema?: number } }).amphoreus?.schema;
+      if (path.basename(this.filePath) === "amphoreus-world.json" && (oldSchema === 1 || oldSchema === 2)) {
+        const backup = `${this.filePath}.schema${oldSchema}-backup.json`;
         if (!fs.existsSync(backup)) fs.copyFileSync(this.filePath, backup, fs.constants.COPYFILE_EXCL);
         this.writeData(data);
         return data;
@@ -443,6 +445,20 @@ export class XilianWorldStore {
       data.amphoreus.appliedEventIds = [...new Set(data.amphoreus.appliedEventIds)].filter((id) => retained.has(id));
       data.version = 3; this.save(data);
     }
+  }
+
+  /** A caller must explicitly supply a structured suggestion; chat is not auto-executed. */
+  addPersonalIntention(input: PersonalIntentionInput) {
+    let result: import("../../shared/amphoreus-world").PersonalAction | undefined;
+    this.updateAmphoreus((world) => {
+      const id = personalIntentionId(input);
+      if (!world.personalActions.some((action) => action.id === id) && hasArchivedWorldEntry(path.join(path.dirname(this.filePath), "amphoreus-history.sqlite"), id)) return false;
+      const count = world.personalActions.length;
+      result = planPersonalIntention(world, input, this.now(), this.worldTime?.timezone ?? systemTimezone());
+      if (world.personalActions.length === count) return false;
+      world.revision++; return true;
+    });
+    return result ? clone(result) : undefined;
   }
 
   queryWorldHistory(input: WorldHistoryQuery = {}) {

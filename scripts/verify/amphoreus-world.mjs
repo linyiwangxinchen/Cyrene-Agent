@@ -90,6 +90,9 @@ try {
   if (fixtureError) throw fixtureError;
   const first = await invoke('companion:world:get');
   assert.equal(first.amphoreus.residents.length, 21);
+  assert.equal(first.amphoreus.personal.residentId, 'cyrene');
+  assert.ok(Array.isArray(first.amphoreus.personal.actions));
+  assert.ok(first.amphoreus.personal.changes.every(change => change.residentId === 'cyrene' && change.knownAt <= Date.now()));
   assert.equal(first.amphoreus.events.length, 3);
   assert.equal(modelCalls, 1);
   assert.equal((await invoke('settings:get-general')).proactiveChatMode, 'off');
@@ -129,7 +132,7 @@ try {
   assert.equal(modelCalls, 2);
   const saved = JSON.parse(await readFile(path.join(dataDir, 'amphoreus-world.json'), 'utf8'));
   assert.equal(saved.version, 3);
-  assert.equal(saved.amphoreus.schema, 2);
+  assert.equal(saved.amphoreus.schema, 3);
   const history = await invoke('companion:world:history', { limit: 2 });
   assert.equal(history.entries.length, 2); assert.ok(history.next);
   const older = await invoke('companion:world:history', { ...history.next, limit: 80 });
@@ -153,6 +156,8 @@ try {
       assert.equal(await page.evaluate(() => typeof window.companion.getWorldUpdate), 'function');
       assert.equal(await page.getByRole('heading', { name: '翁法罗斯', exact: true }).count(), 1);
       assert.ok(await page.getByRole('button', { name: '翁法罗斯', exact: true }).isVisible());
+      assert.ok(await page.locator('.cy-amphoreus__personal').isVisible());
+      assert.ok(await page.locator('.cy-amphoreus__personal-now').textContent());
       await page.screenshot({ path: '.build-temp/amphoreus-desktop.png' });
       await page.getByRole('tab', { name: '居民', exact: true }).click();
       await page.getByRole('tabpanel', { name: '居民', exact: true }).locator('article').first().waitFor();
@@ -175,6 +180,7 @@ try {
       await page.getByRole('tab', { name: '地点', exact: true }).click();
       await page.setViewportSize({ width: 390, height: 844 });
       await page.screenshot({ path: '.build-temp/amphoreus-mobile.png' });
+      assert.ok(await page.locator('.cy-amphoreus__personal').isVisible());
       await page.locator('.cy-amphoreus__map').scrollIntoViewIfNeeded();
       await page.screenshot({ path: '.build-temp/amphoreus-map-mobile.png' });
       const client = await context.newCDPSession(page);

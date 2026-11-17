@@ -6,6 +6,7 @@ import "./amphoreus-world-panel.css";
 import type { SettingsSearchItem } from "./settings-search-index";
 import { AmphoreusHistory } from "./AmphoreusHistory";
 import { AmphoreusMap } from "./AmphoreusMap";
+import { AmphoreusPersonalLife } from "./AmphoreusPersonalLife";
 
 const VISIT_KEY = "cyrene:amphoreus:last-visit";
 function lastVisit(): number | undefined { try { const at = Number(localStorage.getItem(VISIT_KEY)); return at > 0 && at < Date.now() ? at : undefined; } catch { return undefined; } }
@@ -98,6 +99,7 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
       </section>
       {visitedAt && <Button className="cy-amphoreus__visit" onClick={() => openHistory("", "", visitedAt)}>{label("sinceVisit")}</Button>}
       {world.gaps.length > 0 && <details><summary>{label("offlineContinuity")}</summary><p>{world.gaps.at(-1)!.summary}</p></details>}
+      <div data-settings-search-id="settingsPage.amphoreus.cyreneLife"><AmphoreusPersonalLife world={world} location={location} time={time} onHistory={() => openHistory("cyrene")} /></div>
       <Tabs destroyOnHidden activeKey={activeTab} onChange={setActiveTab} items={[
         { key: "events", label: label("events"), children: <>
           <div className="cy-amphoreus__filters" aria-label={label("eventFilter")}>{["today", "recent", "major"].map((key) => <Button key={key} type={filter === key ? "primary" : "default"} aria-pressed={filter === key} onClick={() => setFilter(key)}>{label(key)}</Button>)}</div>
@@ -114,7 +116,7 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
             <small>{event.participants.map(resident).join(" · ")} · {label("generated")}</small>
           </article>)}</div>
           <h2 data-settings-search-id="settingsPage.amphoreus.threads">{label("threads")}</h2>
-          <div className="cy-amphoreus__grid">{world.threads.slice().sort((a, b) => b.updatedAt - a.updatedAt).map((thread) => <article key={thread.id}><Tag color={thread.status === "resolved" ? "green" : undefined}>{label(thread.status)}</Tag><h3>{thread.title}</h3><p>{thread.summary}</p><small>{label("next")} {thread.nextStep}</small><small>{thread.participants.map(resident).join(" · ")}</small></article>)}</div>
+          <div className="cy-amphoreus__grid">{world.threads.slice().sort((a, b) => b.updatedAt - a.updatedAt).map((thread) => <article key={thread.id}><Tag color={thread.status === "resolved" ? "green" : undefined}>{label(thread.status)}</Tag>{thread.stage && <Tag>{thread.stage}</Tag>}<h3>{thread.title}</h3><p>{thread.summary}</p><small>{label("next")} {thread.nextStep}</small>{thread.blockers?.map((blocker, index) => <p key={index}>{label("blockedBy")} {blocker}</p>)}<small>{thread.participants.map(resident).join(" · ")}</small></article>)}</div>
         </> },
         { key: "residents", label: label("residents"), children: <>
           <p data-settings-search-id="settingsPage.amphoreus.residents">{label("residentHint")}</p>

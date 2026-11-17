@@ -118,6 +118,23 @@ describe("设置搜索", () => {
     dispose();
   });
 
+  it("搜索高级设置时展开所在详情而不修改设置值", () => {
+    vi.useFakeTimers();
+    vi.spyOn(HTMLElement.prototype, "getClientRects").mockImplementation(function (this: HTMLElement) {
+      return (this.closest("details")?.open ? [{}] : []) as unknown as DOMRectList;
+    });
+    HTMLElement.prototype.scrollIntoView = vi.fn();
+    const container = document.createElement("div");
+    container.innerHTML = '<details><summary>诊断</summary><div class="cy-settings-row"><strong data-settings-search-id="advanced">评分</strong><input value="73" /></div></details>';
+    const unavailable = vi.fn();
+    const dispose = locateSettingsSearchTarget(container, "advanced", unavailable);
+    expect(container.querySelector("details")!.open).toBe(true);
+    expect(container.querySelector(".cy-settings-search-highlight")).not.toBeNull();
+    expect(container.querySelector("input")!.value).toBe("73");
+    expect(unavailable).not.toHaveBeenCalled();
+    dispose();
+  });
+
   it("仅高亮分组卡片内的目标项目或模型字段，不影响相邻项目", () => {
     vi.spyOn(HTMLElement.prototype, "getClientRects").mockReturnValue([{}] as unknown as DOMRectList);
     HTMLElement.prototype.scrollIntoView = vi.fn();

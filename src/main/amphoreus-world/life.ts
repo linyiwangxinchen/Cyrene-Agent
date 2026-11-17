@@ -21,7 +21,7 @@ export function routineSlots(person: AmphoreusResident, state?: ResidentState, d
   const profile = routineProfile(person.id);
   const day = Math.floor(Date.parse(date || "2026-01-01") / 86_400_000);
   const goals = state?.goals.filter((g) => g.status === "active") ?? [];
-  const goal = goals.length ? goals[Math.abs(day + Math.floor((100 - (state?.energy ?? 80)) / 20)) % goals.length] : undefined;
+  const goal = goals.length ? goals[Math.abs(day) % goals.length] : undefined;
   const title = goal?.title ?? person.occupation;
   const tired = (state?.energy ?? 80) < 28;
   return [
@@ -73,6 +73,8 @@ export function residentActivity(state: AmphoreusState, person: AmphoreusResiden
   if (!["sleep", "meal", "rest"].includes(slot.activity)) {
     const current = today.find((event) => event.startsAt <= now && event.endsAt > now && !terminalEvent(event));
     if (current) return { residentId: person.id, activity: current.activity, title: current.title, locationId: current.locationId, startsAt: current.startsAt, endsAt: current.endsAt, source: "llm", eventId: current.id };
+    const personal = state.personalActions.find((action) => action.residentId === person.id && action.status !== "interrupted" && action.startsAt <= now && action.endsAt > now);
+    if (personal) return { residentId: person.id, activity: personal.activity, title: personal.title, locationId: personal.locationId, startsAt: personal.startsAt, endsAt: personal.endsAt, source: "personal", eventId: personal.id };
     const first = today[0], last = today.at(-1);
     if (first && last) {
       const duration = travelMinutes(person.home, first.locationId, state.places) * 60_000;
@@ -93,17 +95,25 @@ export function residentActivity(state: AmphoreusState, person: AmphoreusResiden
     if (event.endsAt <= now && event.endsAt > startsAt) startsAt = event.endsAt;
     if (event.startsAt > now && event.startsAt < endsAt) endsAt = event.startsAt;
   }
+  for (const action of state.personalActions.filter((entry) => entry.residentId === person.id && entry.status !== "interrupted")) {
+    if (action.endsAt <= now && action.endsAt > startsAt) startsAt = action.endsAt;
+    if (action.startsAt > now && action.startsAt < endsAt) endsAt = action.startsAt;
+  }
   return { residentId: person.id, activity: slot.activity, title: slot.title, locationId, startsAt, endsAt, source: "routine", eventId: `amphoreus:routine:${person.id}:${startsAt}` };
 }
 
-export function remember(resident: ResidentState, memory: ResidentMemory): void {
+export function remember(resident: ResidentState, memory: ResidentMemory, state?: AmphoreusState): void {
   if (resident.memories.some((entry) => entry.id === memory.id)) return;
   resident.memories.push(memory);
   resident.updatedAt = Math.max(resident.updatedAt, memory.at);
+  if (state) {
+    const id = `knowledge:${resident.id}:${memory.id}:${memory.sourceVersion ?? 1}`;
+    if (!state.changes.some((change) => change.id === id)) state.changes.push({ id, eventId: memory.eventId, version: memory.sourceVersion ?? 1, residentId: resident.id, kind: memory.kind, occurredAt: memory.occurredAt ?? memory.at, knownAt: memory.at, text: memory.text, source: memory.source, locationId: memory.locationId, ...(memory.conversationId ? { conversationId: memory.conversationId } : {}) });
+  }
 }
 
 /** Half-hour checkpoints keep physiology persistent without writing on each minute. */
-export function advanceResidents(state: AmphoreusState, now: number, timezone: string): void {
+export function advanceResidents(state: AmphoreusState, now: number, timezone: string, advancePersonal?: (at: number) => void): void {
   const bucket = Math.floor(now / HALF_HOUR) * HALF_HOUR;
   if (bucket <= state.lastLifeTick) return;
   const previous = state.lastLifeTick || now;
@@ -119,11 +129,39 @@ export function advanceResidents(state: AmphoreusState, now: number, timezone: s
     const resident = state.residents.find((r) => r.id === person.id)!;
     const visits = publicEvents.filter((event) => event.participants.includes(person.id) && event.status !== "cancelled" && event.endsAt >= bucket - 24 * 3_600_000);
     for (const sample of samples) {
+      if (person.id === "cyrene") advancePersonal?.(sample.at + 1);
       const slot = routineSlots(person, resident, sample.date).find((s) => s.start <= sample.minute && s.end > sample.minute)!;
       const event = visits.find((e) => e.startsAt <= sample.at && e.endsAt > sample.at);
-      const activity = !["meal", "sleep", "rest"].includes(slot.activity) && event ? event.activity : slot.activity;
+      const privateAction = state.personalActions.find((action) => action.residentId === person.id && action.status !== "interrupted" && action.startsAt <= sample.at && action.endsAt > sample.at);
+      const activity = !["meal", "sleep", "rest"].includes(slot.activity) ? event?.activity ?? privateAction?.activity ?? slot.activity : slot.activity;
+      const travellingForAppointment = visits.some((visit) => {
+        const travel = travelMinutes(person.home, visit.locationId, state.places) * 60_000;
+        return (sample.at >= visit.startsAt - travel && sample.at < visit.startsAt) || (sample.at >= visit.endsAt && sample.at < visit.endsAt + travel);
+      });
       const delta = activity === "sleep" ? 5 : activity === "meal" ? 6 : activity === "rest" ? 3 : activity === "social" ? -1 : -2;
       resident.energy = Math.max(10, Math.min(100, resident.energy + delta));
+      // Progress requires an actually simulated productive interval, not a dinner-time bonus.
+      // Cyrene's richer personal projects advance only through their explicit action records.
+      if (person.id !== "cyrene" && resident.energy >= 28 && !event && !travellingForAppointment && !["sleep", "meal", "rest", "social"].includes(activity)) {
+        if (resident.goals.length && resident.goals.every((goal) => goal.status === "completed") && resident.energy >= 40) {
+          const goal = resident.goals[Math.abs(Math.floor(Date.parse(sample.date) / 86_400_000)) % resident.goals.length];
+          goal.cycle = (goal.cycle ?? 1) + 1; goal.progress = 0; goal.status = "active"; goal.stage = `第${goal.cycle}阶段：新的实践`;
+          goal.nextStep = "带着之前的经验继续尝试"; goal.reason = "上一阶段已有结果，开始下一段实际实践"; goal.updatedAt = sample.at + 1; goal.practiceMinutes = 0; goal.dailyProgress = 0;
+        }
+        const goal = resident.goals.filter((g) => g.status === "active").find((g) => g.title === slot.title);
+        if (goal) {
+          if (goal.practiceDate !== sample.date) { goal.practiceDate = sample.date; goal.dailyProgress = 0; goal.practiceMinutes = 0; }
+          goal.practiceMinutes = (goal.practiceMinutes ?? 0) + 30;
+          if (goal.practiceMinutes >= 60 && (goal.dailyProgress ?? 0) < 6) {
+            goal.practiceMinutes -= 60; goal.dailyProgress = (goal.dailyProgress ?? 0) + 2;
+            goal.progress = Math.min(100, goal.progress + 2); goal.status = goal.progress === 100 ? "completed" : "active";
+            goal.updatedAt = sample.at + 1; goal.stage = goal.progress === 100 ? "阶段完成" : "持续实践";
+            goal.lastActionId = `practice:${person.id}:${sample.at + 1}`; goal.reason = `为「${goal.title}」实际练习了一小时`;
+            goal.nextStep = goal.status === "completed" ? "整理这一阶段的收获" : "接着上次的记录继续尝试";
+            remember(resident, { id: goal.lastActionId, eventId: goal.lastActionId, at: sample.at + 1, kind: "routine", text: goal.reason, source: "实际作息行动", locationId: residentActivity(state, person, sample.at, timezone).locationId }, state);
+          }
+        }
+      }
     }
     const activity = residentActivity(state, person, now, timezone);
     resident.locationId = activity.locationId;
@@ -133,18 +171,25 @@ export function advanceResidents(state: AmphoreusState, now: number, timezone: s
     resident.attention = affair ? `${affair.title}：${affair.nextStep}` : personal?.title ?? person.aspiration;
     if (clock.minute >= routineProfile(person.id).dinner && resident.lastRoutineDate !== clock.date) {
       const goal = resident.goals.filter((g) => g.status === "active").sort((a, b) => a.progress - b.progress)[0];
-      const progress = resident.energy < 30 ? 0 : 3;
-      if (goal) { goal.progress = Math.min(100, goal.progress + progress); goal.status = goal.progress === 100 ? "completed" : "active"; goal.updatedAt = now; goal.reason = progress ? "今天按自己的节奏留出了一段时间" : "今天先照顾休息需求"; }
+      const progress = goal?.updatedAt && worldClock(goal.updatedAt, timezone).date === clock.date && !!goal.lastActionId;
       const id = `routine:${person.id}:${clock.date}`;
       remember(resident, { id, eventId: id, at: now, kind: "routine", locationId: person.home, source: "本地作息",
-        text: progress ? `今天为「${goal?.title ?? person.occupation}」留出了一段时间。${goal?.status === "completed" ? "这一阶段的小目标已经完成。" : "还想按自己的节奏继续。"}` : "今天有些疲倦，暂缓了手边的事，把时间留给休息。" });
+        text: progress ? `今天为「${goal?.title ?? person.occupation}」实际做了一些事。${goal?.status === "completed" ? "这一阶段的小目标已经完成。" : "还想按自己的节奏继续。"}` : "今天没有新的目标成果，先把日常安排和休息照顾好。" });
       resident.lastRoutineDate = clock.date;
       resident.lastMeaningfulAt = now;
     }
     if (["social", "meal"].includes(activity.activity)) {
       for (const event of publicEvents) {
         if (!terminalEvent(event) || !event.outcome || event.visibility === "participants" || !event.resolvedAt || event.resolvedAt + 2 * 3_600_000 > now || event.participants.includes(person.id) || resident.heardEventIds.includes(event.id)) continue;
-        remember(resident, { id: `heard:${person.id}:${event.id}`, eventId: event.id, at: now, kind: "heard", text: event.outcome, source: "城邦公开消息", locationId: event.locationId });
+        const teller = AMPHOREUS_RESIDENTS.find((other) => {
+          if (other.id === person.id) return false;
+          const knowledge = state.residents.find((r) => r.id === other.id)?.memories.find((m) => m.eventId === event.id && m.at < now);
+          if (!knowledge) return false;
+          const otherActivity = residentActivity(state, other, now, timezone);
+          return ["meal", "social"].includes(otherActivity.activity) && otherActivity.locationId === activity.locationId;
+        });
+        const source = teller ? `${teller.name}在${AMPHOREUS_LOCATIONS.find((p) => p.id === activity.locationId)!.name}转述的公开消息` : "城邦公开消息";
+        remember(resident, { id: `heard:${person.id}:${event.id}`, eventId: event.id, at: now, kind: "heard", text: event.outcome, source, locationId: event.locationId, sourceVersion: event.version ?? 1, occurredAt: event.resolvedAt }, state);
         resident.heardEventIds.push(event.id);
       }
     }

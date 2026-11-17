@@ -5,42 +5,30 @@ import type {
   ProactiveState,
 } from "./proactive-types";
 
-export const NORMAL_QUIET_MS = 30 * 60 * 1000;
-export const GLOBAL_PROACTIVE_INTERVAL_MS = 2 * 60 * 60 * 1000;
-export const FOLLOWUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// These are anti-flood bounds only. Passing them must never create an opportunity.
+export const NORMAL_QUIET_MS = 3 * 60 * 1000;
+export const GLOBAL_PROACTIVE_INTERVAL_MS = 3 * 60 * 1000;
+export const FOLLOWUP_INTERVAL_MS = 15 * 60 * 1000;
+export const HOURLY_PROACTIVE_LIMIT = 4;
 export const NIGHT_ACTIVE_IDLE_LIMIT_SEC = 60;
-// Generic scenes keep a high follow-up bar; a conversation follow-up has its
-// own lower floor because it carries a concrete recent topic.
+// A score cannot substitute for a new source and a low response burden.
 export const FOLLOWUP_MIN_SCORE = 80;
-const HIGH_FREQUENCY_INTERVAL_MS = 30 * 60 * 1000;
-const MEDIUM_FREQUENCY_INTERVAL_MS = 60 * 60 * 1000;
-const LIGHT_FREQUENCY_INTERVAL_MS = 90 * 60 * 1000;
-const HIGH_FREQUENCY_FOLLOWUP_INTERVAL_MS = 2 * 60 * 60 * 1000;
-const MEDIUM_FREQUENCY_FOLLOWUP_INTERVAL_MS = 3 * 60 * 60 * 1000;
-const LIGHT_FREQUENCY_FOLLOWUP_INTERVAL_MS = 4 * 60 * 60 * 1000;
 
 /**
- * The daily setting is a cap, but it must also affect pacing. Previously the
- * hard-coded two-hour gate made a value such as 20 almost indistinguishable
- * from the default three-message setting.
+ * The daily setting is only a cap. Natural pacing is chosen from concrete
+ * opportunities; increasing a cap no longer installs a shorter fixed timer.
  */
-export function getGlobalProactiveIntervalMs(dailyLimit?: number): number {
-  if (dailyLimit !== undefined && dailyLimit > 10) return HIGH_FREQUENCY_INTERVAL_MS;
-  if (dailyLimit !== undefined && dailyLimit > 6) return MEDIUM_FREQUENCY_INTERVAL_MS;
-  if (dailyLimit !== undefined && dailyLimit > 3) return LIGHT_FREQUENCY_INTERVAL_MS;
+export function getGlobalProactiveIntervalMs(_dailyLimit?: number): number {
   return GLOBAL_PROACTIVE_INTERVAL_MS;
 }
 
-export function getFollowupIntervalMs(dailyLimit?: number): number {
-  if (dailyLimit !== undefined && dailyLimit > 10) return HIGH_FREQUENCY_FOLLOWUP_INTERVAL_MS;
-  if (dailyLimit !== undefined && dailyLimit > 6) return MEDIUM_FREQUENCY_FOLLOWUP_INTERVAL_MS;
-  if (dailyLimit !== undefined && dailyLimit > 3) return LIGHT_FREQUENCY_FOLLOWUP_INTERVAL_MS;
+export function getFollowupIntervalMs(_dailyLimit?: number): number {
   return FOLLOWUP_INTERVAL_MS;
 }
 
-/** Context follow-ups remain deliberately easier to reach than generic scenes. */
+/** New grounded shares can be adopted; a timed context follow-up is not evidence. */
 function followupScoreFloor(candidate: ProactiveCandidate): number {
-  return candidate.sceneId === "conversation_followup" || candidate.sceneId.startsWith("followup:")
+  return candidate.sourceEventId && candidate.replyBurden === "none"
     ? 60
     : FOLLOWUP_MIN_SCORE;
 }
@@ -87,7 +75,11 @@ export function canStartProactiveGeneration(
   if (snapshot.dailyLimit === 0) return block("daily_limit");
   if (snapshot.dailyLimit !== undefined && snapshot.localDate && state.dailyMessageDate === snapshot.localDate
     && (state.dailyMessageCount ?? 0) >= snapshot.dailyLimit) return block("daily_limit");
+  if (candidate.replyBurden === "question" && snapshot.localDate && state.dailyMessageDate === snapshot.localDate
+    && (state.dailyQuestionCount ?? 0) >= 3) return block("daily_question_limit");
   if (state.unansweredCount >= 2) return block("unanswered_limit");
+  const recent = state.recentProactiveAt ?? (state.lastProactiveAt === null ? [] : [state.lastProactiveAt]);
+  if (recent.filter(at => at > snapshot.now - 3_600_000 && at <= snapshot.now).length >= HOURLY_PROACTIVE_LIMIT) return block("hourly_limit");
 
   if (
     state.lastNormalConversationEndedAt !== null &&
@@ -110,6 +102,8 @@ export function canStartProactiveGeneration(
       state.lastProactiveAt !== null &&
       snapshot.now - state.lastProactiveAt < getFollowupIntervalMs(snapshot.dailyLimit)
     ) return block("followup_cooldown");
+    if (!candidate.sourceEventId || candidate.replyBurden !== "none"
+      || candidate.sourceEventId === state.lastProactiveSourceEventId) return block("followup_requires_new_content");
     if (state.lastProactiveScene === candidate.sceneId) return block("followup_same_scene");
     if (candidate.score < followupScoreFloor(candidate)) return block("followup_score_too_low");
   }
@@ -151,11 +145,14 @@ export function markProactiveCommitted(
   state.unansweredCount = Math.min(2, state.unansweredCount + 1) as 0 | 1 | 2;
   state.lastProactiveAt = now;
   state.lastProactiveScene = candidate.sceneId;
+  state.lastProactiveSourceEventId = candidate.sourceEventId;
+  state.recentProactiveAt = [...(state.recentProactiveAt ?? []), now].filter(at => at > now - 3_600_000 && at <= now).slice(-HOURLY_PROACTIVE_LIMIT);
   state.lastFiredAt[candidate.sceneId] = now;
   state.globalDesire = 0;
   if (localDate) {
     const previousDate = state.dailyMessageDate;
     state.dailyMessageDate = localDate;
     state.dailyMessageCount = previousDate === localDate ? (state.dailyMessageCount ?? 0) + 1 : 1;
+    state.dailyQuestionCount = (previousDate === localDate ? state.dailyQuestionCount ?? 0 : 0) + (candidate.replyBurden === "question" ? 1 : 0);
   }
 }

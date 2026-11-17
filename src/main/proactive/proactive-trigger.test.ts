@@ -437,7 +437,7 @@ describe("conversation follow-ups without desktop activity", () => {
     night.setSnapshot({ now: Date.UTC(2026, 9, 14, 15), localHour: 23, idleSec: 10000 });
     await night.trigger.evaluateNow(); expect(night.evaluateCandidate).not.toHaveBeenCalled();
   });
-  it("keeps the final follow-up reachable without a desktop return and preserves hard policy", async () => {
+  it("does not treat elapsed conversation time as a new independent source after one unanswered message", async () => {
     const now = Date.UTC(2026, 9, 14, 6);
     const ctx = setup({ getConversationLastActivity: async () => now - 12 * 60 * 60 * 1000 });
     ctx.setSnapshot({ now, localHour: 14, idleSec: 100000 });
@@ -446,7 +446,7 @@ describe("conversation follow-ups without desktop activity", () => {
     const candidate = ctx.evaluateCandidate.mock.calls[0][0];
     expect(candidate.score).toBe(82);
     const { canStartProactiveGeneration } = await import("./proactive-policy");
-    expect(canStartProactiveGeneration(ctx.snapshot, ctx.state, candidate).allowed).toBe(true);
+    expect(canStartProactiveGeneration(ctx.snapshot, ctx.state, candidate).reason).toBe("followup_requires_new_content");
     ctx.state.unansweredCount = 2;
     expect(canStartProactiveGeneration(ctx.snapshot, ctx.state, candidate).reason).toBe("unanswered_limit");
   });
@@ -467,5 +467,132 @@ describe("conversation follow-ups without desktop activity", () => {
     expect(onEvaluation).toHaveBeenLastCalledWith(expect.objectContaining({ state: "suppressed", reason: "wechat_context_missing" }));
     blocked = undefined;
     await ctx.trigger.evaluateNow(); expect(ctx.evaluateCandidate).toHaveBeenCalledOnce();
+  });
+});
+
+describe("evidence-backed opportunity mode", () => {
+  it.each([false, true])("cancels an asynchronous scan stopped during source discovery (restart=%s)", async restart => {
+    let release!: () => void;
+    let entered!: () => void;
+    const discovering = new Promise<void>(resolve => { entered = resolve; });
+    const continueDiscovery = new Promise<void>(resolve => { release = resolve; });
+    const onCandidateSuppressed = vi.fn();
+    const selected = { sceneId: "life:discovery", score: 90, sceneCooldownMs: 0,
+      opportunityId: "selected-source", sourceEventId: "source", evidenceVersion: "1", replyBurden: "none" as const,
+      reason: "刚刚遇到一件想分享的小事" };
+    const legacy = { sceneId: "legacy-clock", score: 85, sceneCooldownMs: 0, reason: "legacy" };
+    const ctx = setup({
+      useEventOpportunitiesOnly: true, onCandidateSuppressed,
+      getAdditionalCandidates: async () => {
+        entered();
+        await continueDiscovery;
+        return [selected, legacy];
+      },
+    });
+    ctx.trigger.start();
+    const evaluation = ctx.trigger.evaluateNow("manual");
+    await discovering;
+    ctx.trigger.stop();
+    if (restart) ctx.trigger.start();
+    release();
+    await evaluation;
+
+    expect(onCandidateSuppressed).toHaveBeenCalledExactlyOnceWith(selected);
+    expect(ctx.evaluateCandidate).not.toHaveBeenCalled();
+    expect(ctx.backoffMap.size).toBe(0);
+    ctx.trigger.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("releases a selected opportunity when policy changes during asynchronous source discovery", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const discovering = new Promise<void>(resolve => { entered = resolve; });
+    const continueDiscovery = new Promise<void>(resolve => { release = resolve; });
+    let blocked: string | undefined;
+    const onCandidateSuppressed = vi.fn();
+    const selected = { sceneId: "life:discovery", score: 90, sceneCooldownMs: 0,
+      opportunityId: "selected-source", sourceEventId: "source", evidenceVersion: "1", replyBurden: "none" as const,
+      reason: "刚刚遇到一件想分享的小事" };
+    const legacy = { sceneId: "legacy-clock", score: 85, sceneCooldownMs: 0, reason: "legacy" };
+    const ctx = setup({
+      useEventOpportunitiesOnly: true, onCandidateSuppressed,
+      getCandidateBlockReason: () => blocked,
+      getAdditionalCandidates: async () => {
+        entered();
+        await continueDiscovery;
+        return [selected, legacy];
+      },
+    });
+    const evaluation = ctx.trigger.evaluateNow("quiet-boundary");
+    await discovering;
+    blocked = "custom_quiet_period";
+    release();
+    await evaluation;
+
+    expect(onCandidateSuppressed).toHaveBeenCalledExactlyOnceWith(selected);
+    expect(ctx.evaluateCandidate).not.toHaveBeenCalled();
+    expect(ctx.backoffMap.size).toBe(0);
+  });
+
+  it("releases a selected opportunity if its score threshold changes before the second filter", async () => {
+    let release!: () => void;
+    let entered!: () => void;
+    const discovering = new Promise<void>(resolve => { entered = resolve; });
+    const continueDiscovery = new Promise<void>(resolve => { release = resolve; });
+    let target = 60;
+    const onCandidateSuppressed = vi.fn();
+    const selected = { sceneId: "life:discovery", score: 76, sceneCooldownMs: 0,
+      opportunityId: "selected-source", sourceEventId: "source", evidenceVersion: "1", replyBurden: "none" as const,
+      reason: "刚刚遇到一件想分享的小事" };
+    const ctx = setup({
+      useEventOpportunitiesOnly: true, onCandidateSuppressed, getTargetScore: () => target,
+      getAdditionalCandidates: async () => {
+        entered();
+        await continueDiscovery;
+        return [selected];
+      },
+    });
+    const evaluation = ctx.trigger.evaluateNow("settings-change");
+    await discovering;
+    target = 90;
+    release();
+    await evaluation;
+
+    expect(onCandidateSuppressed).toHaveBeenCalledExactlyOnceWith(selected);
+    expect(ctx.evaluateCandidate).not.toHaveBeenCalled();
+    expect(ctx.backoffMap.size).toBe(0);
+  });
+
+  it.each([29, 30, 31])("does not manufacture a clock-based opening %i minutes after a conversation", async (minutes) => {
+    const onEvaluation = vi.fn();
+    const additional = vi.fn(async () => []);
+    const ctx = setup({ useEventOpportunitiesOnly: true, getAdditionalCandidates: additional, onEvaluation });
+    ctx.setSnapshot({ now: FIXED_NOW + minutes * 60_000, localHour: 20, idleSec: minutes * 60 });
+    ctx.setState({ lastNormalConversationEndedAt: FIXED_NOW });
+    await ctx.trigger.evaluateNow("after-conversation");
+    expect(additional).toHaveBeenCalledOnce();
+    expect(ctx.evaluateCandidate).not.toHaveBeenCalled();
+    expect(ctx.backoffMap.size).toBe(0);
+    expect(onEvaluation).toHaveBeenLastCalledWith(expect.objectContaining({ state: "no_candidate", sceneId: null, reason: "no_scene" }));
+  });
+
+  it("replays a durable pending candidate even when no new random opportunity can be selected", async () => {
+    const pending: ProactiveCandidate = { sceneId: "life:accepted", score: 0, sceneCooldownMs: 0, opportunityId: "accepted", sourceEventId: "event-accepted", evidenceVersion: "1", replyBurden: "none" };
+    const additional = vi.fn(async () => []);
+    const ctx = setup({ useEventOpportunitiesOnly: true, getAdditionalCandidates: additional, getTargetScore: () => 100, getPendingCandidate: () => pending });
+    ctx.backoffMap.set(pending.sceneId, FIXED_NOW);
+    await ctx.trigger.evaluateNow("restart");
+    expect(ctx.evaluateCandidate).toHaveBeenCalledExactlyOnceWith(pending);
+    expect(additional).not.toHaveBeenCalled();
+    expect(ctx.backoffMap.get(pending.sceneId)).toBe(FIXED_NOW);
+  });
+
+  it("preserves source and evidence identity when forwarding a selected life opportunity", async () => {
+    const selected = { sceneId: "life:new-project", score: 90, sceneCooldownMs: 0, opportunityId: "project-step-2", sourceEventId: "personal-action-2", evidenceVersion: "2", replyBurden: "none" as const, reason: "小项目有了实际进展" };
+    const ctx = setup({ useEventOpportunitiesOnly: true, getAdditionalCandidates: async () => [selected] });
+    await ctx.trigger.evaluateNow("new-evidence");
+    const { reason: _reason, ...candidate } = selected;
+    expect(ctx.evaluateCandidate).toHaveBeenCalledExactlyOnceWith(candidate);
   });
 });

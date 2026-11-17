@@ -16,7 +16,7 @@ const desktopOnly = new Set([
 
 export function isForkSettingsSearchAvailable(id: string, state: ForkSearchAvailability): boolean {
   if (state.isWeb && desktopOnly.has(id)) return false;
-  if (["deliveryTarget", "proactiveScoreStatus", "proactiveTargetScore", "proactiveQuietHours", "proactiveDailyLimit"].some(key => id === `settingsPage.preferences.${key}`))
+  if (["deliveryTarget", "proactiveDensity", "proactiveScoreStatus", "proactiveTargetScore", "proactiveQuietHours", "proactiveDailyLimit"].some(key => id === `settingsPage.preferences.${key}`))
     return state.proactiveEnabled === true;
   if (id === "settingsPage.asr.localTitle") return state.asrEngine === "local";
   return true;

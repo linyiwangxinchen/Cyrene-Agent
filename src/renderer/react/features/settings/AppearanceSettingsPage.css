@@ -215,6 +215,10 @@
   line-height: 24px;
 }
 
+.cy-settings-proactive-diagnostics { border-top: 1px solid var(--rb-border-default); }
+.cy-settings-proactive-diagnostics > summary { cursor: pointer; padding: 16px; color: var(--rb-text-secondary); font: var(--rb-text-small); }
+.cy-settings-proactive-diagnostics > summary:focus-visible { outline: 2px solid var(--rb-accent); outline-offset: -2px; }
+
 /* 关于行里的官网链接：复用消息链接的主题色，hover 才亮下划线 */
 .cy-settings-about__link {
   color: var(--md-link-color);

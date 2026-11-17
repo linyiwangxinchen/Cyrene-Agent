@@ -166,7 +166,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     }
 
     // 主动聊天总开关变化时使现有评估失效（频率档位由 ProactiveChat 内部判定，无需重启）。
-    if ("proactiveChatMode" in tts || "proactiveDeliveryTarget" in tts || "proactiveTargetScore" in tts) {
+    if (["proactiveChatMode", "proactiveDensity", "proactiveDeliveryTarget", "proactiveTargetScore", "proactiveDailyLimit", "proactiveQuietStartMinute", "proactiveQuietEndMinute", "companionPluginSharingEnabled"].some(key => key in tts)) {
       proactiveLifecycle.getProactiveChatService()?.invalidate();
     }
 

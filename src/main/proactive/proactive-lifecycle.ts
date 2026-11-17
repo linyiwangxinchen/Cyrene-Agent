@@ -6,6 +6,7 @@ import { buildPersonaContractPrompt } from "../persona/persona-spec";
 import { buildRelationshipContext, getRelationshipStore, recordCompanionEvent } from "../relationship/relationship-log";
 import { app, powerMonitor } from "electron";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import * as chatsStore from "../chats/chats-store";
 import { broadcastChatsChanged } from "../chats/chats-ipc";
 import type { ConversationJournalService } from "../orchestrator/conversation-journal-service";
@@ -30,11 +31,13 @@ import type {
 } from "./proactive-service";
 import { routeProactiveDelivery } from "./proactive-delivery-routing";
 import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive-prompt";
-import { canCommitProactiveMessage, canStartProactiveGeneration, getGlobalProactiveIntervalMs } from "./proactive-policy";
+import { canCommitProactiveMessage, canStartProactiveGeneration } from "./proactive-policy";
 import { loadProactiveState, saveProactiveState } from "./proactive-state-store";
 import { createProactiveTrigger, getZonedDateParts, type ProactiveOpportunity, type ProactiveTriggerController } from "./proactive-trigger";
 import { runProactiveModel } from "./proactive-model";
-import { DEFAULT_PROACTIVE_TARGET_SCORE } from "../../shared/preferences";
+import { DEFAULT_PROACTIVE_TARGET_SCORE, normalizeProactiveDensity } from "../../shared/preferences";
+import { InitiativeOpportunityStore, type InitiativeOpportunityInput } from "./initiative-opportunities";
+import { worldInitiativeOpportunities, boredomInitiativeOpportunity, relatedConversationOpportunity } from "./world-initiative";
 import type { ProactiveCandidate, ProactiveEvaluationStatus, ProactiveRuntimeSnapshot, ProactiveDeliveryContext } from "./proactive-types";
 import { getSharedXilianWorldStore, type XilianWorldStore } from "../xilian-world/world-store";
 import { buildXilianLifeSnapshot, formatXilianLifeContext } from "../xilian-world/life-context";
@@ -73,6 +76,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   const proactiveBackoffMap = new Map<string, number>();
   const conversationJournal = options.conversationJournal;
   const lifeStore: CompanionLifeStore = createCompanionLifeStore(path.join(app.getPath("userData"), "companion-life.json"));
+  const initiativeStore = new InitiativeOpportunityStore(path.join(app.getPath("userData"), "initiative-opportunities.json"));
   const worldStore: XilianWorldStore = getSharedXilianWorldStore(path.join(app.getPath("userData"), "xilian-world.json"));
   const amphoreus = createAmphoreusRuntime(worldStore);
   let normalConversationBusyCount = 0;
@@ -89,6 +93,42 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     evaluatedAt: null,
     state: "no_candidate",
   };
+
+  function initiativeCandidate(opportunity: InitiativeOpportunityInput, key?: string): ProactiveCandidate {
+    return {
+      sceneId: opportunity.sceneId ?? opportunity.id, score: opportunity.score ?? 70,
+      sceneCooldownMs: opportunity.sceneCooldownMs ?? 0,
+      ...(key ? { opportunityId: key } : {}),
+      sourceEventId: opportunity.sourceEventId, evidenceVersion: String(opportunity.evidenceVersion),
+      replyBurden: opportunity.replyBurden, momentSummary: opportunity.summary,
+      ...(opportunity.momentId ? { momentId: opportunity.momentId } : {}),
+    };
+  }
+
+  function validateInitiative(candidate: ProactiveCandidate): string | undefined {
+    if (!candidate.opportunityId) return undefined;
+    const opportunity = initiativeStore.find(candidate.opportunityId);
+    if (!opportunity || ["dropped", "expired"].includes(opportunity.status)) return "opportunity_unavailable";
+    if (opportunity.source === "moment:plugin" && !options.loadGeneralSettings().companionPluginSharingEnabled) return "plugin_sharing_disabled";
+    const target = options.loadGeneralSettings().proactiveDeliveryTarget;
+    if (opportunity.conversationId && target !== "local") {
+      const route = getProactiveChannelAvailability(target, channelManager);
+      if (!route.available || opportunity.conversationId !== (route.recipient.conversationId ?? route.recipient.sessionId)) return "opportunity_recipient_changed";
+    }
+    // A sent source can only be replayed through its already durable intent.
+    if (["sent", "delivery_review", "delivery_partial", "delivery_unknown"].includes(opportunity.status)) {
+      return loadProactiveState().pendingCommitIntent?.candidate.opportunityId === candidate.opportunityId ? undefined : "opportunity_consumed";
+    }
+    if (opportunity.expiresAt <= Date.now()) return "opportunity_expired";
+    if (opportunity.source === "amphoreus") {
+      const personal = worldStore.worldView().amphoreus?.personal;
+      if (!personal?.changes.some(change => change.eventId === opportunity.sourceEventId && String(change.version) === String(opportunity.evidenceVersion))) return "world_source_changed";
+    }
+    if (["inner_life", "shared_interest"].includes(opportunity.source) && worldStore.worldView().amphoreus?.personal?.currentActivity?.eventId !== opportunity.sourceEventId) return "life_activity_changed";
+    const controls = getRelationshipStore().getControls();
+    if (controls.paused) return "relationship_paused";
+    return undefined;
+  }
 
   function buildProactivePersonaPrompt(): string {
     const parts: string[] = [buildPersonaContractPrompt()];
@@ -115,10 +155,10 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       .map((message) => ({ role: message.role, content: message.content, at: message.at }));
   }
 
-  async function getProactiveHistories(recipient?: RecentProactiveChannelRecipient): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[] }> {
+  async function getProactiveHistories(recipient?: RecentProactiveChannelRecipient): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[]; conversationId?: string }> {
     if (recipient) {
       const projection = await conversationJournal.readProjection(recipient.conversationId ?? recipient.sessionId);
-      return { ordinary: toProactiveHistory(projection.messages), proactive: [] };
+      return { ordinary: toProactiveHistory(projection.messages), proactive: [], conversationId: recipient.conversationId ?? recipient.sessionId };
     }
     // Read the session index once so both projections come from the same
     // snapshot. listSessions is sorted by recent activity, so the first
@@ -134,6 +174,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     return {
       ordinary: toProactiveHistory(ordinaryProjection?.messages ?? []),
       proactive: toProactiveHistory(proactiveProjection?.messages ?? []),
+      ...(ordinaryMeta ? { conversationId: ordinaryMeta.id } : {}),
     };
   }
 
@@ -181,7 +222,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     if (candidate.momentId && !moment) throw new Error("companion_moment_not_pending");
     if (followupId && (!followup || followup.status !== "active" || followup.nextEligibleAt > Date.now() || !companion.relationship.proactiveLifeEnabled)) throw new Error("followup_not_eligible");
     if (followup && generationRecipient && followup.conversationId !== (generationRecipient.conversationId ?? generationRecipient.sessionId)) throw new Error("followup_recipient_changed");
-    const historyTarget = generationRecipient ?? (followup ? { conversationId: followup.conversationId, sessionId: followup.conversationId, targetId: "", updatedAt: 0 } : undefined);
+    const initiative = candidate.opportunityId ? initiativeStore.find(candidate.opportunityId) : undefined;
+    const localConversationId = followup?.conversationId ?? moment?.conversationId ?? initiative?.conversationId;
+    const historyTarget = generationRecipient ?? (localConversationId ? { conversationId: localConversationId, sessionId: localConversationId, targetId: "", updatedAt: 0 } : undefined);
     generationDeliveryContext = { relationshipRevision: companion.revision,
       ...(historyTarget ? { conversationId: historyTarget.conversationId ?? historyTarget.sessionId } : {}),
       ...(generationRecipient ? { sessionId: generationRecipient.sessionId, targetId: generationRecipient.targetId, ...(generationRecipient.threadId ? { threadId: generationRecipient.threadId } : {}) } : {}),
@@ -212,19 +255,21 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       now: snapshot.now,
       timezone,
       energy: lifeState.energy,
+      conversationId: historyTarget?.conversationId ?? historyTarget?.sessionId,
     });
     return buildProactiveMessages({
       basePersona: buildProactivePersonaPrompt() + "\n\n" + await buildRelationshipContext(historyTarget?.conversationId ?? historyTarget?.sessionId ?? "proactive-local"),
       userProfile: profileContext,
-      relevantMemory: [memoryContext, followup ? `用户明确设置的本轮跟进事项：${JSON.stringify(followup.topic)}。只自然关心这件事的近况，不推测结果、不催促、不声称已做任何操作；没有合适话题时可保持安静。` : "", moment ? `这是一条已筛选的陪伴心事，请自然判断是否分享：${moment.summary}` : ""].filter(Boolean).join("\n\n"),
+      relevantMemory: [memoryContext, followup ? `用户明确设置的本轮跟进事项：${JSON.stringify(followup.topic)}。只自然关心这件事的近况，不推测结果、不催促、不声称已做任何操作；没有合适话题时可保持安静。` : ""].filter(Boolean).join("\n\n"),
       ordinaryHistory: histories.ordinary,
       proactiveHistory: histories.proactive,
       sceneId: candidate.sceneId,
       localNow: new Date(snapshot.now),
       idleSec: snapshot.idleSec,
       unansweredCount: state.unansweredCount,
+      replyBurden: candidate.replyBurden,
       timezone,
-      ...(moment ? { momentContext: moment.summary } : {}),
+      ...((moment?.summary ?? candidate.momentSummary) ? { momentContext: moment?.summary ?? candidate.momentSummary } : {}),
       lifeContext: `${formatXilianLifeContext(worldSnapshot)}\n好奇 ${lifeState.curiosity}/100；无聊 ${lifeState.boredom}/100。`,
     });
   }
@@ -247,16 +292,19 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     onUserMessage: () => {
       const now = Date.now();
       lastMessageActivityAt = now;
+      bestEffortConversationStateUpdate("initiative_user_activity", () => initiativeStore.suspend(now));
       bestEffortConversationStateUpdate("life_user_message", () => lifeStore.observeInteraction({ kind: "user_message", now, dateKey: lifeDateKey(now) }));
       bestEffortConversationStateUpdate("user_message", () => proactiveChatService?.invalidateForUserMessage());
     },
     onConversationStarted: () => {
       updateNormalConversationBusy(1);
+      bestEffortConversationStateUpdate("initiative_conversation_busy", () => initiativeStore.suspend(Date.now()));
       bestEffortConversationStateUpdate("conversation_started", () => proactiveChatService?.normalConversationStarted());
     },
     onConversationEnded: () => {
       updateNormalConversationBusy(-1);
       if (normalConversationBusyCount === 0) {
+        bestEffortConversationStateUpdate("initiative_user_returned", () => initiativeStore.resume("user_message", Date.now()));
         bestEffortConversationStateUpdate("conversation_ended", () => proactiveChatService?.normalConversationEnded());
       }
     },
@@ -264,6 +312,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
 
   function getProactiveCommitDecision(candidate: ProactiveCandidate, generationEpoch: number) {
     if (generationRelationshipRevision !== undefined && getRelationshipStore().getControls().revision !== generationRelationshipRevision) return { allowed: false, reason: "stale_epoch" as const };
+    if (validateInitiative(candidate)) return { allowed: false, reason: "stale_epoch" as const };
     return canCommitProactiveMessage(
       getProactiveRuntimeSnapshot(),
       loadProactiveState(),
@@ -436,6 +485,11 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         saveProactiveState(state);
       },
       getSnapshot: getProactiveRuntimeSnapshot,
+      validateCandidate: validateInitiative,
+      beforeModel: candidate => !candidate.opportunityId || initiativeStore.markAttempt(candidate.opportunityId, Date.now(), lifeDateKey(Date.now()), Math.min(60, Math.max(8, (options.loadGeneralSettings().proactiveDailyLimit ?? 3) * 2 + 4))),
+      onOpportunityDecision: (candidate, decision, input) => {
+        if (candidate.opportunityId) initiativeStore.resolve(candidate.opportunityId, decision, input);
+      },
       buildMessages: async (candidate) => buildProactiveAgentMessages(candidate),
       runModel: async (messages, deliveryTarget) => {
         // Resolve the delivery conversation, not whichever ordinary chat is open.
@@ -493,11 +547,13 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
 
     powerMonitor.on("lock-screen", () => {
       proactiveScreenLocked = true;
+      bestEffortConversationStateUpdate("initiative_lock", () => initiativeStore.suspend(Date.now()));
       proactiveChatService?.invalidate();
     });
     powerMonitor.on("unlock-screen", () => { proactiveScreenLocked = false; });
     powerMonitor.on("suspend", () => {
       proactiveScreenLocked = true;
+      bestEffortConversationStateUpdate("initiative_suspend", () => initiativeStore.suspend(Date.now()));
       proactiveChatService?.invalidate();
     });
     powerMonitor.on("resume", () => { proactiveScreenLocked = false; });
@@ -511,6 +567,12 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     }
     const service = proactiveChatService;
     proactiveTrigger = createProactiveTrigger({
+      useEventOpportunitiesOnly: true,
+      onSuppressed: snapshot => initiativeStore.suspend(snapshot.now),
+      getPendingCandidate: () => loadProactiveState().pendingCommitIntent?.candidate,
+      onCandidateSuppressed: candidate => {
+        if (candidate.opportunityId) initiativeStore.resolve(candidate.opportunityId, "hold", { now: Date.now(), resumeOn: "user_message" });
+      },
       evaluateCandidate: (c) => service.evaluateCandidate(c),
       getRuntimeSnapshot: getProactiveRuntimeSnapshot,
       getProactiveState: loadProactiveState,
@@ -533,67 +595,67 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       },
       getAdditionalCandidates: async ctx => {
         const companion = await getRelationshipStore().snapshot();
-        const target = options.loadGeneralSettings().proactiveDeliveryTarget;
+        const settings = options.loadGeneralSettings();
+        const target = settings.proactiveDeliveryTarget;
         const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
+        const conversationId = route?.available ? route.recipient.conversationId ?? route.recipient.sessionId : undefined;
         const ids = route?.available ? [route.recipient.conversationId ?? route.recipient.sessionId]
           : target === "local" ? [...new Set((companion.followups ?? []).map(item => item.conversationId))] : [];
-        const opportunities: ProactiveOpportunity[] = [...relationshipOpportunities(companion.relationship, ctx),
-          ...ids.flatMap(id => followupOpportunities(companion.followups ?? [], companion.relationship, id, ctx))];
-        const lifeState = lifeStore.refreshState({ now: ctx.now, dateKey: ctx.localDate });
-        const timezone = resolveChatContextTimezone(loadUserProfile().timezone);
-        const worldState = worldStore.advance({
-          now: ctx.now,
-          timezone,
-          companion: { energy: lifeState.energy, curiosity: lifeState.curiosity, boredom: lifeState.boredom },
-        });
-        const worldTimeline = worldStore.queryTimeline({ dateKey: worldState.worldDate, order: "desc", limit: 8 });
-        const worldSnapshot = buildXilianLifeSnapshot({ state: worldState, timeline: worldTimeline, now: ctx.now, timezone, energy: lifeState.energy });
-        lifeStore.ensureDailyFictionalMoment({
-          enabled: companion.relationship.innerLifeEnabled && companion.relationship.proactiveLifeEnabled,
-          conversationId: route?.available ? (route.recipient.conversationId ?? route.recipient.sessionId) : undefined,
-          summary: `【虚构角色小记】${worldSnapshot.currentActivity}。${worldSnapshot.mood}。下一计划：${worldSnapshot.nextPlan}。这是昔涟在翁法罗斯延续世界线中的生活记录，不是现实地点或真实行程。`,
-          now: ctx.now,
-          dateKey: ctx.localDate,
-        });
-        lifeStore.ensureIdleMoment({
-          enabled: companion.relationship.innerLifeEnabled && companion.relationship.proactiveLifeEnabled && !companion.relationship.paused,
-          dateKey: ctx.localDate,
-          now: ctx.now,
-          idleSec: ctx.snapshot.idleSec,
-          conversationId: route?.available ? (route.recipient.conversationId ?? route.recipient.sessionId) : undefined,
-        });
-        const pluginSharingEnabled = options.loadGeneralSettings().companionPluginSharingEnabled;
-        const innerLifeEnabled = companion.relationship.innerLifeEnabled;
-        const lifeMoment = !companion.relationship.paused && companion.relationship.proactiveLifeEnabled
-          ? lifeStore.getNextShareable({
-            now: ctx.now,
-            dateKey: ctx.localDate,
-            allow: item => (item.source !== "plugin" || pluginSharingEnabled) && (item.source !== "system" || innerLifeEnabled),
-          })
-          : undefined;
-        if (lifeMoment) opportunities.push({
-          sceneId: `life:${lifeMoment.id}`,
-          score: lifeMoment.kind === "ask" ? 64 : lifeMoment.source === "plugin" ? 70 : 66,
-          sceneCooldownMs: 24 * 60 * 60_000,
-          reason: lifeMoment.kind === "ask" ? "虚拟日常积累了一点无聊感，是否轻轻问候由模型判断" : "有一条已筛选的虚拟日常或插件心事，是否值得轻轻分享由模型判断",
-          momentId: lifeMoment.id,
-          momentSummary: lifeMoment.summary,
-        });
-        // Daytime companionship should have a path even when there is no
-        // morning/evening edge, work-break edge, plugin item, or named
-        // follow-up. This candidate is deliberately low priority: concrete
-        // conversations and life moments win first, while the hard policy,
-        // unanswered guard, model silent decision, and daily cap still apply.
-        const hasSpecificOpportunity = opportunities.some((item) => item.sceneId.startsWith("followup:") || item.sceneId.startsWith("life:") || item.sceneId === "relationship_milestone" || item.sceneId === "shared_goal_checkin");
-        if (!hasSpecificOpportunity && ctx.localHour >= 8 && ctx.localHour < 22) {
-          opportunities.push({
-            sceneId: "ambient_companion",
-            score: 64,
-            sceneCooldownMs: Math.max(60 * 60_000, getGlobalProactiveIntervalMs(ctx.snapshot.dailyLimit) * 2),
-            reason: "白天没有更具体的触发点，留出一次轻量陪伴机会；是否发送仍由模型判断",
-          });
+        const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 24);
+        const opportunities: InitiativeOpportunityInput[] = relationshipOpportunities(companion.relationship, ctx).map(item => ({
+          id: item.sceneId, source: "relationship", sourceEventId: item.sceneId === "relationship_milestone" ? `${item.sceneId}:${ctx.localDate}` : item.sceneId,
+          evidenceVersion: hash(JSON.stringify(item.sceneId === "relationship_milestone" ? companion.relationship.milestones : companion.relationship.sharedGoals)),
+          ...(conversationId ? { conversationId } : {}), motive: "connection", summary: item.reason,
+          occurredAt: ctx.now, expiresAt: ctx.now + 6 * 3_600_000, strengthPerHour: 1, decayPerHour: 0.5,
+          replyBurden: item.sceneId === "relationship_milestone" ? "none" : "question", ...item,
+        }));
+        for (const item of ids.flatMap(id => followupOpportunities(companion.followups ?? [], companion.relationship, id, ctx))) {
+          const followup = companion.followups?.find(followup => followup.id === followupIdFromScene(item.sceneId));
+          if (!followup) continue;
+          opportunities.push({ id: item.sceneId, source: "followup", sourceEventId: item.sceneId,
+            evidenceVersion: String(followup.nextEligibleAt), conversationId: followup.conversationId, motive: "followup",
+            summary: `用户明确希望跟进的事项：${followup.topic}。只自然关心近况，不推测结果，不催答。`,
+            occurredAt: ctx.now, expiresAt: ctx.now + 24 * 3_600_000, strengthPerHour: 2, decayPerHour: 0.1,
+            replyBurden: "question", ...item });
         }
-        return opportunities;
+        const timezone = resolveChatContextTimezone(loadUserProfile().timezone);
+        worldStore.advance({ now: ctx.now, timezone });
+        const world = worldStore.worldView().amphoreus;
+        const personal = world?.personal;
+        const lifeState = lifeStore.refreshState({ now: ctx.now, dateKey: ctx.localDate,
+          ...(personal ? { energy: personal.energy, activity: personal.currentActivity?.activity === "rest" && personal.energy >= 55 ? "idle" : personal.currentActivity?.activity } : {}) });
+        if (!companion.relationship.paused && companion.relationship.proactiveLifeEnabled) {
+          if (companion.relationship.innerLifeEnabled) {
+            opportunities.push(...worldInitiativeOpportunities(world, ctx.now, conversationId));
+            const bored = boredomInitiativeOpportunity(world, lifeState, ctx.now, conversationId);
+            if (bored) opportunities.push(bored);
+            if (ctx.state.unansweredCount === 0 && (route === null || route.available)) {
+              const histories = await getProactiveHistories(route?.available ? route.recipient : undefined);
+              const lastUser = [...histories.ordinary].reverse().find(turn => turn.role === "user");
+              const association = histories.conversationId ? relatedConversationOpportunity(world, lastUser, ctx.now, histories.conversationId) : undefined;
+              if (association) opportunities.push(association);
+            }
+          }
+          for (const moment of lifeStore.listPending(ctx.now)) {
+            if (moment.id.startsWith("daily:") || moment.id.startsWith("idle:")) continue;
+            if (moment.source === "plugin" && !settings.companionPluginSharingEnabled || moment.source === "system" && !companion.relationship.innerLifeEnabled) continue;
+            if (conversationId && moment.conversationId && conversationId !== moment.conversationId) continue;
+            opportunities.push({ id: moment.id, source: `moment:${moment.source}`,
+              sourceEventId: `${moment.pluginId ?? moment.source}:${hash(moment.summary.replace(/\s+/gu, ""))}`, evidenceVersion: 1,
+              ...(moment.conversationId ?? conversationId ? { conversationId: moment.conversationId ?? conversationId } : {}),
+              motive: moment.kind === "followup" ? "followup" : "interesting", summary: moment.summary,
+              occurredAt: moment.occurredAt, expiresAt: moment.expiresAt ?? moment.occurredAt + 6 * 3_600_000,
+              strengthPerHour: 3, decayPerHour: 0.8, replyBurden: moment.kind === "ask" || moment.kind === "checkin" ? "question" : "none",
+              sceneId: `life:${moment.id}`, momentId: moment.id, score: 72, sceneCooldownMs: 0 });
+          }
+        }
+        const selected = initiativeStore.select({ now: ctx.now, opportunities,
+          density: normalizeProactiveDensity(settings.proactiveDensity), dayKey: ctx.localDate,
+          dailyAttemptLimit: Math.min(60, Math.max(8, (settings.proactiveDailyLimit ?? 3) * 2 + 4)),
+          eligible: opportunity => (route === null || route.available)
+            && (opportunity.score ?? 70) >= (settings.proactiveTargetScore ?? DEFAULT_PROACTIVE_TARGET_SCORE)
+            && canStartProactiveGeneration(ctx.snapshot, ctx.state, initiativeCandidate(opportunity)).allowed });
+        return selected ? [{ ...initiativeCandidate(selected, selected.key), reason: selected.summary }] : [];
       },
       onExplanation: explanation => { proactiveStatus.explanation = explanation; },
       onEvaluation: (status: ProactiveEvaluationStatus) => { proactiveStatus = status; },
@@ -608,6 +670,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   }
 
   function stopProactiveTrigger(): void {
+    bestEffortConversationStateUpdate("initiative_stopped", () => initiativeStore.suspend(Date.now()));
+    if (proactiveTrigger) bestEffortConversationStateUpdate("initiative_cancelled", () => proactiveChatService?.invalidate());
     proactiveTrigger?.stop();
     proactiveTrigger = null;
   }

@@ -71,4 +71,23 @@ describe("proactive state durable intent compatibility", () => {
     expect(loadProactiveState().proactiveEpoch).toBe(9);
     expect(fs.existsSync(path.join(mocks.userDataDir, `proactive-state.json.${process.pid}.tmp`))).toBe(false);
   });
+
+  it("restores opportunity evidence and rolling/question budgets across a restart", async () => {
+    const { defaultProactiveState, saveProactiveState, loadProactiveState } = await import("./proactive-state-store");
+    const state = defaultProactiveState();
+    state.recentProactiveAt = [100, 200, 300, 400];
+    state.lastProactiveSourceEventId = "world:event-a";
+    state.dailyMessageDate = "2026-11-17";
+    state.dailyQuestionCount = 3;
+    state.pendingCommitIntent = {
+      intentId: "proactive-intent-1", sequence: 1, generationEpoch: 1, intentAt: 400, source: "model", text: "有一件新事想告诉你",
+      candidate: { sceneId: "world:event-a", score: 76, sceneCooldownMs: 0, opportunityId: "stable-key", sourceEventId: "world:event-a", evidenceVersion: "2", replyBurden: "none" },
+    };
+    saveProactiveState(state);
+    const restored = loadProactiveState();
+    expect(restored.recentProactiveAt).toEqual(state.recentProactiveAt);
+    expect(restored.dailyQuestionCount).toBe(3);
+    expect(restored.pendingCommitIntent?.candidate).toEqual(state.pendingCommitIntent.candidate);
+    expect(restored.lastProactiveSourceEventId).toBe("world:event-a");
+  });
 });

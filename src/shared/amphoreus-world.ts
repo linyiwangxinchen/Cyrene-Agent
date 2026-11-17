@@ -26,8 +26,27 @@ export interface AmphoreusResident {
   avoidances?: string[];
 }
 export interface CanonFact { id: string; subject: string; statement: string; scope: "canon" | "continuation"; sources: string[]; revision: string }
-export interface ResidentGoal { id: string; title: string; progress: number; status: "active" | "completed"; updatedAt: number; reason: string }
-export interface ResidentMemory { id: string; eventId: string; at: number; kind: "experienced" | "heard" | "routine"; text: string; source: string; locationId: string }
+export interface ResidentGoal {
+  id: string; title: string; progress: number; status: "active" | "completed"; updatedAt: number; reason: string;
+  stage?: string; nextStep?: string; lastActionId?: string; practiceMinutes?: number; practiceDate?: string; dailyProgress?: number; cycle?: number;
+}
+export interface ResidentMemory { id: string; eventId: string; at: number; kind: "experienced" | "heard" | "routine"; text: string; source: string; locationId: string; sourceVersion?: number; occurredAt?: number; conversationId?: string }
+export interface PersonalAction {
+  id: string; residentId: string; goalId: string; title: string; intent: string; activity: ResidentActivity;
+  startsAt: number; endsAt: number; locationId: string; status: "planned" | "active" | "completed" | "interrupted";
+  version: number; stage: string; outcome?: string; artifact?: string; reason?: string; resolvedAt?: number;
+  origin?: "local" | "model" | "user_suggestion"; conversationId?: string;
+}
+/** A durable committed change, not an instruction to send a message. */
+export interface WorldSemanticChange {
+  id: string; eventId: string; version: number; residentId: string; kind: ResidentMemory["kind"];
+  occurredAt: number; knownAt: number; text: string; source: string; locationId: string;
+  conversationId?: string;
+}
+export interface PersonalWorldView {
+  residentId: string; energy: number; mood: string; attention: string; currentActivity?: ResidentNow;
+  goals: ResidentGoal[]; actions: PersonalAction[]; experiences: ResidentMemory[]; changes: WorldSemanticChange[];
+}
 export interface ResidentRelation { residentId: string; trust: number; reason: string; eventId?: string; updatedAt: number }
 export interface ResidentState {
   id: string; energy: number; mood: string; attention: string; locationId: string;
@@ -51,6 +70,9 @@ export interface AmphoreusThread {
   status: "open" | "resolved";
   updatedAt: number;
   eventId?: string;
+  stage?: string;
+  evidenceEventIds?: string[];
+  blockers?: string[];
 }
 export interface AmphoreusEvent {
   id: string;
@@ -103,7 +125,7 @@ export interface WorldHistoryEntry { id: string; at: number; kind: "event" | "me
 export interface WorldHistoryQuery { before?: number; beforeId?: string; since?: number; residentId?: string; locationId?: string; limit?: number }
 export interface WorldHistoryPage { entries: WorldHistoryEntry[]; next?: { before: number; beforeId: string } }
 export interface AmphoreusState {
-  schema: 2;
+  schema: 3;
   canonRevision: string;
   epoch: "post-irontomb-memory-continuation";
   createdAt: number;
@@ -121,6 +143,9 @@ export interface AmphoreusState {
   revision: number;
   dailyModelBudget: number;
   eventFacts: Record<string, "completed" | "partial" | "failed" | "cancelled">;
+  personalActions: PersonalAction[];
+  changes: WorldSemanticChange[];
+  personalLifeDate: string;
 }
 export interface AmphoreusClock {
   date: string;
@@ -136,7 +161,7 @@ export interface ResidentNow {
   locationId: string;
   startsAt: number;
   endsAt: number;
-  source: "routine" | "llm";
+  source: "routine" | "llm" | "personal";
   eventId: string;
 }
 export interface AmphoreusView {
@@ -160,4 +185,6 @@ export interface AmphoreusView {
   gaps: WorldGap[];
   revision: number;
   budget: { limit: number; used: number };
+  personal?: PersonalWorldView;
+  personalActions?: PersonalAction[];
 }

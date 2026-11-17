@@ -21,6 +21,10 @@ export interface ProactiveCandidate {
   /** Optional durable life moment selected by the proactive trigger. */
   momentId?: string;
   momentSummary?: string;
+  opportunityId?: string;
+  sourceEventId?: string;
+  evidenceVersion?: string;
+  replyBurden?: "none" | "light" | "question";
 }
 
 export type ProactiveEvaluationState = "candidate" | "no_candidate" | "suppressed" | "backoff";
@@ -75,10 +79,14 @@ export interface ProactiveState {
   /** Counter scoped to the user's local date, used for a durable daily budget. */
   dailyMessageDate?: string;
   dailyMessageCount?: number;
+  dailyQuestionCount?: number;
   /** At most one durable commit can be awaiting delivery completion. */
   pendingCommitIntent?: ProactiveCommitIntent;
   /** Monotonic durable identity source; absent in legacy state files. */
   proactiveCommitSequence?: number;
+  /** Rolling cap survives restarts; this counts business intents, not bubbles. */
+  recentProactiveAt?: number[];
+  lastProactiveSourceEventId?: string;
 }
 
 export type ProactiveBlockReason =
@@ -90,6 +98,8 @@ export type ProactiveBlockReason =
   | "night_inactive"
   | "custom_quiet_period"
   | "daily_limit"
+  | "daily_question_limit"
+  | "hourly_limit"
   | "normal_quiet_period"
   | "global_cooldown"
   | "scene_cooldown"
@@ -97,6 +107,7 @@ export type ProactiveBlockReason =
   | "followup_cooldown"
   | "followup_same_scene"
   | "followup_score_too_low"
+  | "followup_requires_new_content"
   | "stale_epoch";
 
 export interface ProactiveCommitDecision {

@@ -28,6 +28,8 @@ describe("共享设置搜索的 Web 与插件适配", () => {
       expect(isSettingsSearchAvailable(item.id, { proactiveEnabled: true })).toBe(true);
     }
     expect(isSettingsSearchAvailable("settingsPage.preferences.deliveryTarget", {})).toBe(false);
+    expect(isSettingsSearchAvailable("settingsPage.preferences.proactiveDensity", {})).toBe(false);
+    expect(isSettingsSearchAvailable("settingsPage.preferences.proactiveDensity", { proactiveEnabled: true })).toBe(true);
     expect(isSettingsSearchAvailable("settingsPage.preferences.proactiveChat", {})).toBe(true);
   });
 

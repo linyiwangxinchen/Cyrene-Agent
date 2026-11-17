@@ -1,7 +1,7 @@
 import type { XilianWorldStore } from "../xilian-world/world-store";
 import type { AmphoreusState, NarrativeAttempt } from "../../shared/amphoreus-world";
 import { worldClock } from "./clock";
-import { InvalidNarrative, narrativeMessages, parseDailyPlan, parseResolutions, resolutionMessages, reviewMessages } from "./narrative";
+import { InvalidNarrative, narrativeMessages, parseDailyPlan, parsePersonalPlans, parseResolutions, resolutionMessages, reviewMessages } from "./narrative";
 import { reviewAccepted } from "./canon-guard";
 import { applyResolutions, modelBudgetUsed } from "./engine";
 import type { WorldMessages } from "./prompts";
@@ -38,6 +38,9 @@ export function createAmphoreusService(options: AmphoreusServiceOptions) {
     let state = options.store.readDataSnapshot().amphoreus;
     if (!state || stopped || !state.narrativeEnabled || modelBudgetUsed(state, clock.date) >= state.dailyModelBudget) return;
     const due = state.days.flatMap((day) => day.events).filter((event) => event.status === "awaiting_resolution").sort((a, b) => a.endsAt - b.endsAt).slice(0, 6);
+    // Every resolution can propose an access change. Keep a review slot before paying
+    // for a result that would otherwise have to be discarded unreviewed.
+    if (due.length && state.dailyModelBudget - modelBudgetUsed(state, clock.date) < 2) return;
     const purpose = due.length ? "resolve" : "plan";
     if (purpose === "plan" && state.days.some((day) => day.date >= clock.date)) return;
     const key = purpose === "plan" ? `plan:${clock.date}` : `resolve:${clock.date}:${due.map((event) => `${event.id}@${event.version}`).join(",")}`;
@@ -66,6 +69,7 @@ export function createAmphoreusService(options: AmphoreusServiceOptions) {
       const output = await request(purpose === "plan" ? narrativeMessages(state, started, clock.timezone) : resolutionMessages(state, due, started), requestController);
       if (!valid()) { next = { ...attempt, status: "cancelled", error: "interrupted", retryAt: now() + RETRY_MS }; return; }
       const plan = purpose === "plan" ? parseDailyPlan(output, clock.date, clock.timezone, now(), state) : undefined;
+      const personalPlans = plan ? parsePersonalPlans(output, state, clock.date, clock.timezone, now(), plan.events) : undefined;
       const resolutions = purpose === "resolve" ? parseResolutions(output, due, state) : undefined;
       if (resolutions && (due.some((event) => event.severity === "major") || resolutions.some((r) => r.effects.some((effect) => effect.kind === "access")))) {
         const reviewKey = `review:${started}:${attempt.count}`;
@@ -88,6 +92,10 @@ export function createAmphoreusService(options: AmphoreusServiceOptions) {
         if (plan) {
           if (world.days.some((day) => day.date === clock.date)) return false;
           world.days = [...world.days, plan].sort((a, b) => a.date.localeCompare(b.date)); world.revision++;
+          if (personalPlans !== undefined) {
+            world.personalActions = world.personalActions.filter((action) => action.status !== "planned" || action.origin === "user_suggestion" || action.startsAt < started || worldClock(action.startsAt, clock.timezone).date !== clock.date);
+            world.personalActions.push(...personalPlans.filter((action) => !world.personalActions.some((existing) => existing.startsAt < action.endsAt && existing.endsAt > action.startsAt && existing.status !== "interrupted")));
+          }
         } else if (!resolutions || !applyResolutions(world, resolutions, now(), expectedRevision)) return false;
         next = { ...attempt, status: "success", retryAt: 0 }; put(world, next); committed = true; return true;
       });

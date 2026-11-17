@@ -10,9 +10,9 @@ describe("CompanionLifeStore", () => {
 
   it("uses the active daily budget while leaving policy guards to the proactive gate", () => {
     expect(DEFAULT_COMPANION_LIFE_LIMITS).toEqual({
-      dailyMessages: 8,
+      dailyMessages: Number.MAX_SAFE_INTEGER,
       dailyQuestions: 3,
-      dailyPluginShares: 6,
+      dailyPluginShares: Number.MAX_SAFE_INTEGER,
     });
   });
 
@@ -71,6 +71,58 @@ describe("CompanionLifeStore", () => {
     expect(after.dateKey).toBe("2026-11-08");
     expect(after.dailyMessageCount).toBe(0);
     expect(after.energy).toBeGreaterThanOrEqual(before.energy);
+  });
+
+  it("retains elapsed fractions across minute and hour polling with world energy as authority", () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "companion-life-elapsed-"));
+    const start = Date.parse("2026-11-17T08:00:00Z");
+    const run = (name: string, interval: number) => {
+      const store = new CompanionLifeStore(path.join(root, name));
+      store.refreshState({ now: start, dateKey: "2026-11-17", activity: "wait", energy: 42 });
+      for (let minute = interval; minute <= 60; minute += interval) store.refreshState({ now: start + minute * 60_000, dateKey: "2026-11-17", energy: 42 });
+      return new CompanionLifeStore(path.join(root, name)).getState({ now: start + 3_600_000, dateKey: "2026-11-17" });
+    };
+    const minute = run("minute.json", 1), hour = run("hour.json", 60);
+    expect(minute.boredom).toBeCloseTo(hour.boredom, 10);
+    expect(minute.curiosity).toBeCloseTo(hour.curiosity, 10);
+    expect(minute.energy).toBe(42);
+    expect(minute.boredom).toBeGreaterThan(20);
+  });
+
+  it("integrates the previous activity before a change and does not treat sending as social feedback", () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "companion-life-activities-"));
+    const start = Date.parse("2026-11-17T08:00:00Z");
+    const store = new CompanionLifeStore(path.join(root, "life.json"));
+    store.refreshState({ now: start, dateKey: "2026-11-17", activity: "wait", energy: 36 });
+    const waiting = store.refreshState({ now: start + 3_600_000, dateKey: "2026-11-17", activity: "study" });
+    expect(waiting.boredom).toBe(34);
+    const studying = store.refreshState({ now: start + 2 * 3_600_000, dateKey: "2026-11-17" });
+    expect(studying.boredom).toBe(24);
+    store.enqueue({ id: "note", kind: "share", source: "system", summary: "一点进展", occurredAt: start });
+    store.consume("note", "consumed", { now: start + 2 * 3_600_000, dateKey: "2026-11-17" });
+    const sent = store.getState({ now: start + 2 * 3_600_000, dateKey: "2026-11-17" });
+    expect(sent.boredom).toBe(studying.boredom);
+    expect(sent.energy).toBe(36);
+  });
+
+  it("allows more than eight shares under the main budget while preserving the question cap", () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "companion-life-budget-"));
+    const now = Date.parse("2026-11-17T08:00:00Z");
+    const store = new CompanionLifeStore(path.join(root, "life.json"));
+    for (let i = 0; i < 10; i++) {
+      store.enqueue({ id: `share:${i}`, kind: "share", source: "system", summary: `进展${i}`, occurredAt: now });
+      expect(store.getNextShareable({ now, dateKey: "2026-11-17", dailyLimit: 20 })).toBeDefined();
+      store.consume(`share:${i}`, "consumed", { now, dateKey: "2026-11-17" });
+    }
+    for (let i = 0; i < 3; i++) {
+      store.enqueue({ id: `ask:${i}`, kind: "ask", source: "system", summary: `问题${i}`, occurredAt: now });
+      store.consume(`ask:${i}`, "consumed", { now, dateKey: "2026-11-17" });
+    }
+    store.enqueue({ id: "last-question", kind: "ask", source: "system", summary: "又一个问题", occurredAt: now });
+    expect(store.getNextShareable({ now, dateKey: "2026-11-17", dailyLimit: 20 })).toBeUndefined();
+    store.enqueue({ id: "last-share", kind: "share", source: "system", summary: "新进展", occurredAt: now });
+    expect(store.getNextShareable({ now, dateKey: "2026-11-17", dailyLimit: 20 })?.id).toBe("last-share");
+    expect(store.getNextShareable({ now, dateKey: "2026-11-17", dailyLimit: 13 })).toBeUndefined();
   });
 
   it("does not let filtered plugin observations hide an eligible daily moment", () => {

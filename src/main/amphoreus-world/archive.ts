@@ -16,6 +16,12 @@ function open(file: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS history_person ON history_residents(resident,entry);`);
   return db;
 }
+export function hasArchivedWorldEntry(file: string, id: string): boolean {
+  if (!fs.existsSync(file)) return false;
+  const db = new DatabaseSync(file, { readOnly: true });
+  try { return !!db.prepare("SELECT 1 FROM history WHERE id = ? LIMIT 1").get(id); }
+  finally { db.close(); }
+}
 export function archiveWorld(file: string, state: AmphoreusState): void {
   const db = open(file);
   try {
@@ -34,6 +40,9 @@ export function archiveWorld(file: string, state: AmphoreusState): void {
   state.days = state.days.filter((day) => recent.has(day.date) || day.events.some((event) => !terminalEvent(event)));
   for (const resident of state.residents) resident.memories = resident.memories.slice(-48);
   state.gaps = state.gaps.slice(-60);
+  const cutoff = Math.max(state.lastReconciledAt, state.createdAt) - 14 * 86_400_000;
+  state.changes = state.changes.filter((change) => change.knownAt >= cutoff).slice(-2000);
+  state.personalActions = state.personalActions.filter((action) => action.endsAt >= cutoff || action.status === "planned" || action.status === "active");
   const retained = new Set(state.days.flatMap((day) => day.events.map((event) => event.id)));
   for (const resident of state.residents) resident.heardEventIds = resident.heardEventIds.filter((id) => retained.has(id));
   state.appliedEventIds = state.appliedEventIds.filter((id) => retained.has(id));

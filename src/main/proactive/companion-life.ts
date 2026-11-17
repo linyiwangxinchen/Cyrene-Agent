@@ -7,11 +7,10 @@ export type CompanionMomentStatus = "pending" | "consumed" | "dismissed" | "deli
 export type CompanionDeliveryReviewStatus = Extract<CompanionMomentStatus, "delivery_partial" | "delivery_unknown">;
 
 export const DEFAULT_COMPANION_LIFE_LIMITS = {
-  // Active enough to feel present across a normal day. The proactive policy
-  // still applies its adaptive global cooldown and unanswered-message guard.
-  dailyMessages: 8,
+  // The user's main daily budget is authoritative; no second hidden share cap.
+  dailyMessages: Number.MAX_SAFE_INTEGER,
   dailyQuestions: 3,
-  dailyPluginShares: 6,
+  dailyPluginShares: Number.MAX_SAFE_INTEGER,
 } as const;
 
 export interface CompanionLifeLimits {
@@ -33,6 +32,9 @@ export interface CompanionLifeState {
   lastMomentAt: number | null;
   lastAdvancedAt: number;
   revision: number;
+  /** Last observed fictional activity; elapsed time is integrated before a change. */
+  activity?: string;
+  activitySince?: number;
 }
 
 export type CompanionLifeObservationKind = "user_message" | "plugin_observation" | "moment_shared";
@@ -63,7 +65,7 @@ interface CompanionLifeData {
 }
 
 function clamp(value: number, min = 0, max = 100): number {
-  return Math.max(min, Math.min(max, Math.floor(value)));
+  return Math.max(min, Math.min(max, value));
 }
 
 function validDateKey(value: unknown): value is string {
@@ -95,13 +97,15 @@ function normalizeLifeState(value: unknown): CompanionLifeState {
     energy: clamp(typeof raw.energy === "number" && Number.isFinite(raw.energy) ? raw.energy : 70),
     curiosity: clamp(typeof raw.curiosity === "number" && Number.isFinite(raw.curiosity) ? raw.curiosity : 50),
     boredom: clamp(typeof raw.boredom === "number" && Number.isFinite(raw.boredom) ? raw.boredom : 20),
-    dailyMessageCount: clamp(typeof raw.dailyMessageCount === "number" && Number.isFinite(raw.dailyMessageCount) ? raw.dailyMessageCount : 0, 0, 1000),
-    dailyQuestionCount: clamp(typeof raw.dailyQuestionCount === "number" && Number.isFinite(raw.dailyQuestionCount) ? raw.dailyQuestionCount : 0, 0, 1000),
-    dailyPluginShareCount: clamp(typeof raw.dailyPluginShareCount === "number" && Number.isFinite(raw.dailyPluginShareCount) ? raw.dailyPluginShareCount : 0, 0, 1000),
+    dailyMessageCount: Math.floor(clamp(typeof raw.dailyMessageCount === "number" && Number.isFinite(raw.dailyMessageCount) ? raw.dailyMessageCount : 0, 0, 1000)),
+    dailyQuestionCount: Math.floor(clamp(typeof raw.dailyQuestionCount === "number" && Number.isFinite(raw.dailyQuestionCount) ? raw.dailyQuestionCount : 0, 0, 1000)),
+    dailyPluginShareCount: Math.floor(clamp(typeof raw.dailyPluginShareCount === "number" && Number.isFinite(raw.dailyPluginShareCount) ? raw.dailyPluginShareCount : 0, 0, 1000)),
     lastInteractionAt: typeof raw.lastInteractionAt === "number" && Number.isFinite(raw.lastInteractionAt) ? raw.lastInteractionAt : null,
     lastMomentAt: typeof raw.lastMomentAt === "number" && Number.isFinite(raw.lastMomentAt) ? raw.lastMomentAt : null,
     lastAdvancedAt: typeof raw.lastAdvancedAt === "number" && Number.isFinite(raw.lastAdvancedAt) ? raw.lastAdvancedAt : 0,
     revision: Number.isSafeInteger(raw.revision) && Number(raw.revision) > 0 ? Number(raw.revision) : 1,
+    ...(typeof raw.activity === "string" ? { activity: raw.activity.slice(0, 80) } : {}),
+    ...(typeof raw.activitySince === "number" && Number.isFinite(raw.activitySince) ? { activitySince: raw.activitySince } : {}),
   };
 }
 
@@ -178,25 +182,27 @@ export class CompanionLifeStore {
       state = {
         ...state,
         dateKey: key,
-        energy: clamp(state.energy + (firstDate ? 0 : 15)),
-        curiosity: clamp(state.curiosity + (firstDate ? 0 : 10)),
-        boredom: firstDate ? state.boredom : 20,
         dailyMessageCount: 0,
         dailyQuestionCount: 0,
         dailyPluginShareCount: 0,
-        lastAdvancedAt: now,
+        lastAdvancedAt: firstDate ? now : state.lastAdvancedAt,
         revision: state.revision + 1,
       };
       changed = true;
     }
     const elapsed = Math.max(0, now - state.lastAdvancedAt);
-    if (elapsed >= 60_000) {
-      const halfHours = Math.floor(elapsed / (30 * 60_000));
+    if (elapsed > 0) {
+      // Fractional values preserve elapsed time even when polled every minute.
+      // Long offline gaps only resume a bounded amount of known routine.
+      const hours = Math.min(elapsed, 6 * 3_600_000) / 3_600_000;
+      const boredomRate = ({ sleep: -30, social: -18, study: -10, watch: -8, travel: -4,
+        meal: -6, rest: 1, work: 2, idle: 8, wait: 14 } as Record<string, number>)[state.activity ?? ""] ?? 6;
+      const curiosityRate = ({ sleep: -5, social: 4, study: 6, watch: 4, travel: 3,
+        meal: 0, rest: 1, work: 2, idle: 2, wait: 1 } as Record<string, number>)[state.activity ?? ""] ?? 2;
       state = {
         ...state,
-        energy: clamp(state.energy - Math.min(20, Math.floor(halfHours / 2) * 3)),
-        curiosity: clamp(state.curiosity + Math.min(15, halfHours * 2)),
-        boredom: clamp(state.boredom + Math.min(35, halfHours * 5)),
+        curiosity: clamp(state.curiosity + hours * curiosityRate),
+        boredom: clamp(state.boredom + hours * boredomRate),
         lastAdvancedAt: now,
         revision: state.revision + 1,
       };
@@ -207,11 +213,18 @@ export class CompanionLifeStore {
   }
 
   /** Advance short-term virtual feelings and persist daily rollover. */
-  refreshState(input: { now?: number; dateKey?: string } = {}): CompanionLifeState {
+  refreshState(input: { now?: number; dateKey?: string; activity?: string; energy?: number } = {}): CompanionLifeState {
     const now = input.now ?? this.now();
     const data = this.read();
     const before = JSON.stringify(data.state);
-    const state = this.advanceState(data, now, input.dateKey);
+    let state = this.advanceState(data, now, input.dateKey);
+    if (typeof input.activity === "string" && input.activity !== state.activity) {
+      state = { ...state, activity: input.activity.slice(0, 80), activitySince: now, revision: state.revision + 1 };
+    }
+    if (typeof input.energy === "number" && Number.isFinite(input.energy) && clamp(input.energy) !== state.energy) {
+      state = { ...state, energy: clamp(input.energy), revision: state.revision + 1 };
+    }
+    data.state = state;
     if (JSON.stringify(state) !== before) {
       data.revision++;
       this.write(data);
@@ -219,7 +232,7 @@ export class CompanionLifeStore {
     return { ...state };
   }
 
-  getState(input: { now?: number; dateKey?: string } = {}): CompanionLifeState {
+  getState(input: { now?: number; dateKey?: string; activity?: string; energy?: number } = {}): CompanionLifeState {
     return this.refreshState(input);
   }
 
@@ -233,10 +246,10 @@ export class CompanionLifeStore {
     this.advanceState(data, now, input.dateKey);
     const state = data.state;
     const next = input.kind === "user_message"
-      ? { ...state, energy: clamp(state.energy + 12), curiosity: clamp(state.curiosity + 8), boredom: clamp(state.boredom - 25), lastInteractionAt: now }
+      ? { ...state, curiosity: clamp(state.curiosity + 8), boredom: clamp(state.boredom - 25), lastInteractionAt: now }
       : input.kind === "plugin_observation"
         ? { ...state, curiosity: clamp(state.curiosity + 5), boredom: clamp(state.boredom - 3) }
-        : { ...state, energy: clamp(state.energy - 3), boredom: clamp(state.boredom - 12), lastMomentAt: now };
+        : { ...state, lastMomentAt: now };
     data.state = { ...next, lastAdvancedAt: now, revision: state.revision + 1 };
     data.revision++;
     this.write(data);
@@ -252,10 +265,11 @@ export class CompanionLifeStore {
       .map((item) => ({ ...item }));
   }
 
-  getNextShareable(input: { now?: number; dateKey?: string; limits?: CompanionLifeLimits; allow?: (moment: CompanionMoment) => boolean } = {}): CompanionMoment | undefined {
+  getNextShareable(input: { now?: number; dateKey?: string; dailyLimit?: number; limits?: Partial<CompanionLifeLimits>; allow?: (moment: CompanionMoment) => boolean } = {}): CompanionMoment | undefined {
     const now = input.now ?? this.now();
     const state = this.getState({ now, dateKey: input.dateKey });
-    const limits = input.limits ?? DEFAULT_COMPANION_LIFE_LIMITS;
+    const limits = { ...DEFAULT_COMPANION_LIFE_LIMITS, ...input.limits,
+      ...(input.dailyLimit !== undefined ? { dailyMessages: input.dailyLimit } : {}) };
     const pending = this.listPending(now).filter((item) => {
       if (input.allow && !input.allow(item)) return false;
       if (state.dailyMessageCount >= limits.dailyMessages) return false;
@@ -288,8 +302,6 @@ export class CompanionLifeStore {
     if (status === "consumed") {
       data.state = {
         ...data.state,
-        energy: clamp(data.state.energy - 3),
-        boredom: clamp(data.state.boredom - 12),
         dailyMessageCount: data.state.dailyMessageCount + 1,
         dailyQuestionCount: data.state.dailyQuestionCount + (item.kind === "ask" || item.kind === "checkin" ? 1 : 0),
         dailyPluginShareCount: data.state.dailyPluginShareCount + (item.source === "plugin" ? 1 : 0),
@@ -342,8 +354,6 @@ export class CompanionLifeStore {
     if (outcome === "consumed") {
       data.state = {
         ...data.state,
-        energy: clamp(data.state.energy - 3),
-        boredom: clamp(data.state.boredom - 12),
         dailyMessageCount: data.state.dailyMessageCount + 1,
         dailyQuestionCount: data.state.dailyQuestionCount + (item.kind === "ask" || item.kind === "checkin" ? 1 : 0),
         dailyPluginShareCount: data.state.dailyPluginShareCount + (item.source === "plugin" ? 1 : 0),

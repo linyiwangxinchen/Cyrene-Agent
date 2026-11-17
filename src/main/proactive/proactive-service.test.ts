@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createDefaultProactiveState, FOLLOWUP_INTERVAL_MS } from "./proactive-policy";
-import { createProactiveChatService } from "./proactive-service";
+import { createProactiveChatService, type ProactiveCommitInput } from "./proactive-service";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive-types";
 import { ConversationJournalService } from "../orchestrator/conversation-journal-service";
 import { ConversationTranscriptStore } from "../orchestrator/conversation-transcript-store";
@@ -29,7 +29,7 @@ function setup(overrides: Record<string, unknown> = {}) {
     generationBusy: false,
     screenLocked: false,
   };
-  const commitMessage = vi.fn(async () => ({ kind: "committed" as const }));
+  const commitMessage = vi.fn(async (_input: ProactiveCommitInput) => ({ kind: "committed" as const }));
   const saveState = vi.fn((next: typeof state) => {
     for (const key of Object.keys(state) as Array<keyof typeof state>) {
       if (!(key in next)) delete state[key];
@@ -109,12 +109,32 @@ describe("proactive chat service", () => {
 
     ctx.state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
     ctx.state.lastProactiveScene = "morning";
-    await ctx.service.evaluateCandidate({ ...candidate, sceneId: "rainy_day" });
+    await ctx.service.evaluateCandidate({ ...candidate, sceneId: "rainy_day", sourceEventId: "independent-world-event", replyBurden: "none" });
     expect(ctx.state.unansweredCount).toBe(2);
 
     ctx.state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
     await ctx.service.evaluateCandidate({ ...candidate, sceneId: "sunny_day" });
     expect(ctx.commitMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    {},
+    { sourceEventId: "new-source" },
+    { replyBurden: "none" as const },
+    { sourceEventId: "new-source", replyBurden: "question" as const },
+    { sourceEventId: "already-shared", replyBurden: "none" as const },
+  ])("does not ask the model for a second unanswered opening without independent low-pressure content: %j", async (fields) => {
+    const ctx = setup();
+    ctx.state.unansweredCount = 1;
+    ctx.state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
+    ctx.state.lastProactiveScene = "earlier-scene";
+    ctx.state.lastProactiveSourceEventId = "already-shared";
+    await ctx.service.evaluateCandidate({ ...candidate, ...fields });
+    expect(ctx.runModel).not.toHaveBeenCalled();
+    expect(ctx.getFallback).not.toHaveBeenCalled();
+    expect(ctx.commitMessage).not.toHaveBeenCalled();
+    expect(ctx.state.unansweredCount).toBe(1);
+    expect(ctx.state.pendingCommitIntent).toBeUndefined();
   });
 
   it("passes a stable intent timestamp to commit retries", async () => {
@@ -371,5 +391,102 @@ describe("proactive chat service", () => {
     expect(ctx.state.proactiveEpoch).toBe(1);
     expect(ctx.state.unansweredCount).toBe(0);
     expect(ctx.state.lastProactiveAt).toBe(NOW);
+  });
+
+  it.each([
+    { kind: "hold" as const, resumeOn: "user_message" as const },
+    { kind: "hold" as const, resumeOn: "evidence_change" as const },
+    { kind: "drop" as const },
+  ])("acknowledges $kind without fallback, delivery or consuming an opening", async (decision) => {
+    const onOpportunityDecision = vi.fn();
+    const ctx = setup({ runModel: vi.fn(async () => decision), onOpportunityDecision });
+    await ctx.service.evaluateCandidate({ ...candidate, opportunityId: "thought-1" });
+    expect(onOpportunityDecision).toHaveBeenCalledWith(expect.objectContaining({ opportunityId: "thought-1" }), decision.kind, expect.objectContaining({ now: NOW, ...(decision.kind === "hold" ? { resumeOn: decision.resumeOn } : {}) }));
+    expect(ctx.getFallback).not.toHaveBeenCalled();
+    expect(ctx.commitMessage).not.toHaveBeenCalled();
+    expect(ctx.state.lastProactiveAt).toBeNull();
+    expect(ctx.state.unansweredCount).toBe(0);
+    expect(ctx.state.pendingCommitIntent).toBeUndefined();
+  });
+
+  it("does not request the model or fallback when the durable attempt budget rejects it", async () => {
+    const beforeModel = vi.fn(() => false);
+    const onOpportunityDecision = vi.fn();
+    const ctx = setup({ beforeModel, onOpportunityDecision });
+    await ctx.service.evaluateCandidate(candidate);
+    expect(beforeModel).toHaveBeenCalledWith(candidate);
+    expect(ctx.runModel).not.toHaveBeenCalled();
+    expect(ctx.getFallback).not.toHaveBeenCalled();
+    expect(ctx.commitMessage).not.toHaveBeenCalled();
+    expect(ctx.state.pendingCommitIntent).toBeUndefined();
+    expect(ctx.state.unansweredCount).toBe(0);
+    expect(ctx.service.isGenerating()).toBe(false);
+    expect(onOpportunityDecision).toHaveBeenCalledWith(candidate, "hold", expect.objectContaining({ now: NOW }));
+  });
+
+  it("discards a generated message when its source changes while the model is running", async () => {
+    const pending = deferred<{ kind: "send"; text: string }>();
+    const modelStarted = deferred<void>();
+    let sourceValid = true;
+    const validateCandidate = vi.fn(() => sourceValid ? undefined : "source_changed");
+    const onOpportunityDecision = vi.fn();
+    const ctx = setup({
+      validateCandidate, onOpportunityDecision,
+      runModel: vi.fn(() => { modelStarted.resolve(); return pending.promise; }),
+    });
+    const sourced = { ...candidate, opportunityId: "world-thought", sourceEventId: "world-event", evidenceVersion: "1" };
+    const evaluation = ctx.service.evaluateCandidate(sourced);
+    await modelStarted.promise;
+    sourceValid = false;
+    pending.resolve({ kind: "send", text: "这个结果已经过时" });
+    await evaluation;
+    expect(validateCandidate).toHaveBeenCalledTimes(2);
+    expect(ctx.commitMessage).not.toHaveBeenCalled();
+    expect(ctx.getFallback).not.toHaveBeenCalled();
+    expect(onOpportunityDecision).toHaveBeenCalledWith(sourced, "drop", { now: NOW });
+    expect(ctx.state.pendingCommitIntent).toBeUndefined();
+    expect(ctx.state.unansweredCount).toBe(0);
+  });
+
+  it("retains the accepted intent after a failed opportunity acknowledgement and replays it after restart", async () => {
+    const sourced = { ...candidate, opportunityId: "thought-ack", sourceEventId: "world-ack", evidenceVersion: "1" };
+    const acknowledgement = vi.fn().mockImplementationOnce(() => { throw new Error("opportunity write failed"); });
+    const ctx = setup({ onOpportunityDecision: acknowledgement });
+    await expect(ctx.service.evaluateCandidate(sourced)).rejects.toThrow("opportunity write failed");
+    expect(ctx.state.pendingCommitIntent).toMatchObject({ intentId: "proactive-intent-1", candidate: sourced, text: "休息一下吧♪" });
+    expect(ctx.state.unansweredCount).toBe(0);
+    const buildMessages = vi.fn(async () => []);
+    const beforeModel = vi.fn(() => false);
+    const restarted = createProactiveChatService({
+      loadState: () => ctx.state, saveState: ctx.saveState,
+      getSnapshot: () => ({ now: NOW + 60_000, localHour: 14, enabled: true, idleSec: 0, conversationBusy: false, generationBusy: false, screenLocked: false }),
+      buildMessages, runModel: ctx.runModel, getFallback: ctx.getFallback, commitMessage: ctx.commitMessage,
+      beforeModel, onOpportunityDecision: acknowledgement,
+    });
+    await restarted.evaluateCandidate({ sceneId: "no-new-random-opportunity", score: 0, sceneCooldownMs: 0 });
+    expect(ctx.runModel).toHaveBeenCalledOnce();
+    expect(buildMessages).not.toHaveBeenCalled();
+    expect(beforeModel).not.toHaveBeenCalled();
+    expect(ctx.commitMessage).toHaveBeenCalledTimes(2);
+    expect(ctx.commitMessage.mock.calls[1]?.[0]).toMatchObject({ intentId: "proactive-intent-1", candidate: sourced, text: "休息一下吧♪", intentAt: NOW });
+    expect(ctx.state.pendingCommitIntent).toBeUndefined();
+    expect(ctx.state.proactiveCommitSequence).toBe(1);
+    expect(ctx.state.unansweredCount).toBe(1);
+  });
+
+  it("drops a pending intent if the original source is no longer valid on recovery", async () => {
+    let valid = true;
+    const onOpportunityDecision = vi.fn();
+    const commitMessage = vi.fn().mockRejectedValueOnce(new Error("delivery interrupted"));
+    const ctx = setup({ validateCandidate: () => valid ? undefined : "source_changed", onOpportunityDecision, commitMessage });
+    await expect(ctx.service.evaluateCandidate(candidate)).rejects.toThrow("delivery interrupted");
+    expect(ctx.state.pendingCommitIntent).toBeDefined();
+    valid = false;
+    await ctx.service.evaluateCandidate(candidate);
+    expect(commitMessage).toHaveBeenCalledOnce();
+    expect(ctx.runModel).toHaveBeenCalledOnce();
+    expect(onOpportunityDecision).toHaveBeenCalledWith(candidate, "drop", { now: NOW });
+    expect(ctx.state.pendingCommitIntent).toBeUndefined();
+    expect(ctx.state.unansweredCount).toBe(0);
   });
 });

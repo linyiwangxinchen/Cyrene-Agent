@@ -14,6 +14,7 @@ export interface XilianLifeContextInput {
   now: number;
   timezone: string;
   energy?: number;
+  conversationId?: string;
   world?: import("../../shared/amphoreus-world").AmphoreusView;
 }
 
@@ -68,22 +69,31 @@ function recentCompleted(input: XilianLifeContextInput, current: XilianTimelineE
 }
 
 export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLifeSnapshot {
-  const current = currentEvent(input);
+  const restricted = (event: XilianTimelineEvent | undefined): boolean => {
+    if (!event?.id.startsWith("amphoreus:personal:user:")) return false;
+    const action = (input.world?.personal?.actions ?? input.world?.personalActions ?? []).find((action) => action.id === event.id);
+    return !action || !!action.conversationId && action.conversationId !== input.conversationId;
+  };
+  const rawCurrent = currentEvent(input);
+  const current = restricted(rawCurrent) && rawCurrent ? { ...rawCurrent, activityTitle: "留一点自己的时间，做一件私人的小事", summary: "正在照顾自己的安排" } : rawCurrent;
   const recent = recentCompleted(input, current);
-  const next = input.state.nextPlannedEvent;
+  const rawNext = input.state.nextPlannedEvent;
+  const next = restricted(rawNext) && rawNext ? { ...rawNext, activityTitle: "为自己的私事留一点时间" } : rawNext;
   const location = eventLocation(current);
   const arc = XILIAN_WORLD_ARCS[input.state.activeArcId];
+  const personal = input.world?.personal;
+  const knownExperiences = personal?.experiences.filter((memory) => !memory.conversationId || memory.conversationId === input.conversationId);
   return {
     worldDate: getXilianDateKey(new Date(input.now), input.timezone),
     localTime: localTime(input.now, input.timezone),
     season: input.state.seasonId.startsWith("翁法罗斯") ? input.state.seasonId : arc?.title ?? input.state.seasonId,
-    ...(input.world ? { worldContext: formatAmphoreusContext(input.world) } : {}),
+    ...(input.world ? { worldContext: formatAmphoreusContext(input.world, input.conversationId) } : {}),
     location,
     currentActivity: current?.activityTitle ?? "还在决定今天先从哪一页开始",
-    recentEvent: recent?.outcome ?? recent?.summary ?? "今天还没有完成可以回看的生活事件",
+    recentEvent: knownExperiences?.at(-1)?.text ?? (!restricted(recent) ? recent?.outcome ?? recent?.summary : undefined) ?? "今天还没有完成可以回看的生活事件",
     nextPlan: next?.activityTitle ?? "晚上留一点安静时间整理心情",
-    mood: current?.mood ?? "平稳，带着一点期待",
-    energy: Math.max(0, Math.min(100, Math.floor((input.world ? input.world.residentStates.find((r) => r.id === "cyrene")?.energy : input.energy) ?? current?.energyAfter ?? 70))),
+    mood: personal?.mood ?? current?.mood ?? "平稳，带着一点期待",
+    energy: Math.max(0, Math.min(100, Math.floor((personal?.energy ?? (input.world ? input.world.residentStates.find((r) => r.id === "cyrene")?.energy : input.energy)) ?? current?.energyAfter ?? 70))),
     outfit: chooseOutfit(input, current),
     selfieReason: selfieReason(current),
     visualAnchors: [

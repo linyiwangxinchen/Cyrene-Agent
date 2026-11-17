@@ -32,7 +32,15 @@ export function locateSettingsSearchTarget(container: HTMLElement, id: string, o
       ? container.querySelector<HTMLElement>("h1")
       : Array.from(container.querySelectorAll<HTMLElement>("[data-settings-search-id]"))
         .find((node) => node.dataset.settingsSearchId === id);
-    if (element && element.getClientRects().length) { highlight(element); return; }
+    if (element) {
+      // Advanced diagnostics stay collapsed until explicitly selected or found by search.
+      let parent = element.parentElement;
+      while (parent && parent !== container) {
+        if (parent instanceof HTMLDetailsElement) parent.open = true;
+        parent = parent.parentElement;
+      }
+      if (element.getClientRects().length) { highlight(element); return; }
+    }
     // 面板完成加载后才能判定条件项缺失，不用等待固定超时。
     if (container.querySelector('[data-settings-search-loading="false"]')) unavailable();
   }

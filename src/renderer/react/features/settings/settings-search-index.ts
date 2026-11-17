@@ -67,6 +67,7 @@ const sections: {
       "settingsPage.preferences.mobileSegmentation",
       "settingsPage.preferences.customStyle",
       "settingsPage.preferences.proactiveChat",
+      "settingsPage.preferences.proactiveDensity",
       "settingsPage.preferences.deliveryTarget",
       "settingsPage.preferences.companionPluginSharing",
       "settingsPage.preferences.moments",
@@ -234,7 +235,7 @@ const sections: {
     section: "amphoreus", category: "agent",
     titleKey: "settingsPage.amphoreus.title",
     source: "src/renderer/react/features/settings/AmphoreusWorldPanel.tsx",
-    items: ["settingsPage.amphoreus.narrative", "settingsPage.amphoreus.residents", "settingsPage.amphoreus.threads"],
+    items: ["settingsPage.amphoreus.narrative", "settingsPage.amphoreus.cyreneLife", "settingsPage.amphoreus.residents", "settingsPage.amphoreus.threads"],
   },
   {
     section: "cyrene", category: "agent",
