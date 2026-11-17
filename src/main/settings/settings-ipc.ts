@@ -98,7 +98,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   }));
   ipc.handle(IPC.SETTINGS_MODEL_PROFILE_SAVE, (_event, profile) => {
     const saved = saveModelProfile(profile as Parameters<typeof saveModelProfile>[0]);
-    if (saved.added && saved.settings.defaultModelProfileId === saved.settings.modelProfiles?.at(-1)?.id) {
+    if (saved.added) {
       broadcastModelConfigChanged(saved.settings);
     }
     return { added: saved.added, profiles: listSavedModelProfiles(saved.settings), defaultModelProfileId: saved.settings.defaultModelProfileId };

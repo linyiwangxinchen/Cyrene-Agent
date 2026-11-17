@@ -555,7 +555,13 @@ export function saveModelProfile(input: Omit<SavedModelProfile, "id"> & { id?: s
   if (input.id) {
     const updated = updateModelProfile(listSavedModelProfiles(existing), profile);
     if (updated) {
-      const settings = saveModelSettings({ modelProfiles: updated });
+      // Legacy consumers still read the current provider mirror. Editing its
+      // default profile must update that mirror in the same persisted write.
+      const isDefault = resolveDefaultModelProfile(updated, existing.defaultModelProfileId)?.id === profile.id;
+      const settings = saveModelSettings({
+        modelProfiles: updated,
+        ...(isDefault ? { ...profile, perProvider: { [profile.provider]: profile } } : {}),
+      });
       return { settings, added: true };
     }
     // id 不存在（档案已被删除等）→ 落到新增路径，用现有 id 保存
@@ -571,7 +577,7 @@ export function setDefaultModelProfile(id: string): ModelSettings {
   const existing = loadModelSettings();
   const profile = listSavedModelProfiles(existing).find((item) => item.id === id);
   if (!profile) throw new Error("模型不存在");
-  return saveModelSettings({ ...profile, defaultModelProfileId: id });
+  return saveModelSettings({ ...profile, perProvider: { [profile.provider]: profile }, defaultModelProfileId: id });
 }
 
 let modelSettingsCache: ModelSettings | null = null;
@@ -656,6 +662,7 @@ export function saveModelSettings(settings: Partial<ModelSettings>): ModelSettin
   const foldedReasoning = foldReasoning(chosenReasoningRaw, incomingProfile.reasoning, chosenReasoningHasKey);
 
   perProvider[currentProvider] = {
+    ...incomingProfile,
     baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl.trim() : incomingProfile.baseUrl,
     model: typeof settings.model === "string" ? settings.model.trim() : incomingProfile.model,
     apiKey: typeof settings.apiKey === "string" ? settings.apiKey.trim() : incomingProfile.apiKey,
@@ -685,12 +692,13 @@ export function getPublicModelConfig(settings = loadModelSettings()): PublicMode
   const hasSavedModel = listSavedModelProfiles(settings).some((profile) => (
     Boolean(profile.model?.trim()) && Boolean(profile.apiKey?.trim())
   ));
+  const effective = resolveModelSettingsProfile(settings);
   return {
     mode: settings.mode,
-    provider: settings.provider,
-    displayName: settings.displayName,
-    shortName: getVendorShortName(settings.provider) ?? settings.provider,
-    model: settings.model,
+    provider: effective.provider,
+    displayName: effective.displayName,
+    shortName: getVendorShortName(effective.provider) ?? effective.provider,
+    model: effective.model,
     connected: hasSavedModel,
     runtimeSync: settings.runtimeSync,
     stickerSize: settings.stickerSize,

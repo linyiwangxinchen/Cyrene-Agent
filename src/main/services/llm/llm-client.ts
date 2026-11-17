@@ -105,7 +105,7 @@ export function createLlmClient(): LlmClient {
     const startTime = Date.now();
     if (logTiming) {
       console.log(
-        `[TIMING] ${label} START timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`,
+        `[TIMING] ${label} START model=${JSON.stringify(settings.model)} timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`,
       );
     }
 
@@ -197,7 +197,7 @@ export function createLlmClient(): LlmClient {
 
     const startTime = Date.now();
     console.log(
-      `[TIMING] ${label} START (non-stream) timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`,
+      `[TIMING] ${label} START (non-stream) model=${JSON.stringify(settings.model)} timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`,
     );
 
     try {

@@ -1,6 +1,6 @@
 import { CitaService, ContextStore, RemoteSemanticEngine } from "../../cita";
 import { loadGeneralSettings } from "../../settings/settings-facade";
-import { loadModelSettings } from "../../settings/model-settings";
+import { loadModelSettings, resolveModelSettingsProfile } from "../../settings/model-settings";
 import { getAdapterForConfig } from "../../orchestrator/vendors";
 import type { VendorConfig } from "../../orchestrator/vendors";
 import {
@@ -20,7 +20,7 @@ export function createCitaService(deps: CitaServiceDeps): CitaService {
     store: new ContextStore(),
     engine: new RemoteSemanticEngine(
       async (request, signal) => {
-        const settings = loadModelSettings();
+        const settings = resolveModelSettingsProfile(loadModelSettings());
         // Kimi k2.6 只允许特定 temperature（0.6），传 0 会被拒。
         // 省略让服务端用默认值，其他模型继续 temperature=0 保证确定性。
         const citaTemp = settings.model.match(/^kimi-k2\.6(?:$|-)/i) ? undefined : 0;
@@ -46,7 +46,7 @@ export function createCitaService(deps: CitaServiceDeps): CitaService {
         timeoutMs: 8_000,
         systemPrompt: loadPromptFile("cita_system.md"),
         getProfile: () => {
-          const settings = loadModelSettings();
+          const settings = resolveModelSettingsProfile(loadModelSettings());
           const cfg: VendorConfig = {
             provider: settings.provider,
             baseUrl: settings.baseUrl,

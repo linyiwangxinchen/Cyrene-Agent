@@ -41,7 +41,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../llm-queue", () => ({ enqueueLLMTask: mocks.enqueueLLMTask }));
 vi.mock("../settings/settings-facade", () => ({ loadGeneralSettings: mocks.loadGeneralSettings }));
-vi.mock("../settings/model-settings", () => ({ loadModelSettings: mocks.loadModelSettings }));
+vi.mock("../settings/model-settings", async (original) => ({
+  ...await original<typeof import("../settings/model-settings")>(),
+  loadModelSettings: mocks.loadModelSettings,
+}));
 vi.mock("../orchestrator/sticker-settings", () => ({ loadStickerSettings: mocks.loadStickerSettings }));
 // sticker-storage 引 electron，且 resolveMomentStickerMedia 要读用户贴图 manifest——mock 掉
 vi.mock("../sticker-storage", () => ({
@@ -345,6 +348,7 @@ interface HarnessOptions {
 
 // 全局默认：worldbook / 图片校验 mock 返回空，真闭包安全降级；个别用例按需覆盖
 beforeEach(() => {
+  mocks.loadModelSettings.mockReset().mockReturnValue({ modelProfiles: [] });
   mocks.getPermanentWorldbookEntries.mockReset().mockReturnValue([]);
   mocks.getKeywordMatchedWorldbookEntries.mockReset().mockReturnValue([]);
   mocks.validateCaptionImagePath.mockReset();
@@ -1627,7 +1631,7 @@ describe("moments worldbook 注入与图片读取", () => {
     mocks.getPermanentWorldbookEntries.mockReset().mockReturnValue([]);
     mocks.getKeywordMatchedWorldbookEntries.mockReset().mockReturnValue([]);
     mocks.validateCaptionImagePath.mockReset();
-    mocks.loadModelSettings.mockReset();
+    mocks.loadModelSettings.mockReset().mockReturnValue({ modelProfiles: [] });
   });
 
   describe("buildMomentsWorldbookContext", () => {
@@ -1647,6 +1651,22 @@ describe("moments worldbook 注入与图片读取", () => {
   });
 
   describe("loadUserMomentPostImages", () => {
+    it("图片能力跟随默认档案，忽略顶层遗留的纯文本标记", () => {
+      mocks.loadModelSettings.mockReturnValue({
+        multimodal: false,
+        defaultModelProfileId: "selected",
+        modelProfiles: [{
+          id: "selected", provider: "chatgpt", baseUrl: "https://fixture.test/v1",
+          apiKey: "fixture-only", model: "gpt-6.1-sol", multimodal: true,
+        }],
+      });
+      mocks.validateCaptionImagePath.mockReturnValue({ ok: true, buffer: Buffer.from("ABC"), mime: "image/jpeg" });
+
+      expect(loadUserMomentPostImages(makePost({
+        media: [{ id: "m1", type: "image", origin: "user_attachment", ref: "1.jpg" }],
+      }))).toEqual([{ name: "1.jpg", dataUrl: "data:image/jpeg;base64,QUJD" }]);
+    });
+
     it("user_attachment 副本读取成功时转 base64 dataUrl", () => {
       mocks.validateCaptionImagePath.mockReturnValue({
         ok: true,

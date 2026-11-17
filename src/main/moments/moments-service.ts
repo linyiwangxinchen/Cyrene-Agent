@@ -18,7 +18,7 @@
 import { app } from "electron";
 import { enqueueLLMTask } from "../llm-queue";
 import { loadGeneralSettings } from "../settings/settings-facade";
-import { loadModelSettings } from "../settings/model-settings";
+import { loadModelSettings, resolveModelSettingsProfile } from "../settings/model-settings";
 import { resolveImageRoute } from "../orchestrator/image-router";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import { pluginPromptRegistry } from "../../plugins/prompts";
@@ -772,7 +772,7 @@ function buildMomentsPersonaPrompt(): string {
 }
 
 function loadMomentsVendorConfig(): VendorConfig | null {
-  const settings = loadModelSettings();
+  const settings = resolveModelSettingsProfile(loadModelSettings());
   if (!settings.apiKey) return null;
   return {
     provider: settings.provider,
@@ -828,7 +828,7 @@ export function loadUserMomentPostImages(post: MomentPost): MomentPostImage[] {
   // 图片路由统一收口在 image-router。moments 只直发不转述：
   // direct 照常带图；caption（纯文本主模型 + 已配独立视觉模型）维持不带图现状；
   // reject（纯文本主模型 + 未配视觉模型）给出人话错误而非静默丢图。
-  const settings = loadModelSettings();
+  const settings = resolveModelSettingsProfile(loadModelSettings());
   const route = settings ? resolveImageRoute("moments", settings) : { mode: "direct" as const };
   const hasUserImage = post.media.some((media) => media.origin === "user_attachment");
   if (route.mode === "reject") {

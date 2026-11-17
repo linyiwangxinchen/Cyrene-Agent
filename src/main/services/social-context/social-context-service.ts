@@ -1,6 +1,6 @@
 import path from "node:path";
 import { app } from "electron";
-import { loadModelSettings } from "../../settings/model-settings";
+import { loadModelSettings, resolveModelSettingsProfile } from "../../settings/model-settings";
 import { getAdapterForConfig } from "../../orchestrator/vendors";
 import type { StructuredOutputRequest, VendorConfig } from "../../orchestrator/vendors";
 import {
@@ -41,7 +41,7 @@ export function createSocialContextService(deps: SocialContextServiceDeps): Soci
         retryRateLimit: false,
       }),
     generate: async (input, repair) => {
-      const settings = loadModelSettings();
+      const settings = resolveModelSettingsProfile(loadModelSettings());
       const config: VendorConfig = {
         provider: settings.provider,
         baseUrl: settings.baseUrl,

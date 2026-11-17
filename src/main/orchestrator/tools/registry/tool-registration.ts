@@ -1,5 +1,5 @@
 import { loadGeneralSettings } from "../../../settings/settings-facade";
-import { loadModelSettings } from "../../../settings/model-settings";
+import { loadModelSettings, resolveModelSettingsProfile } from "../../../settings/model-settings";
 import type { GeneralSettings } from "../../../settings/general-settings";
 import { registerEmailTools } from "../email-tools";
 import { registerGmailTools } from "../gmail-tools";
@@ -38,7 +38,7 @@ export function registerAllTools(deps: { lspManager: LspManager; gmailService?: 
   registerDocumentTools();
 
   setTranslateConfig(() => {
-    const s = loadModelSettings();
+    const s = resolveModelSettingsProfile(loadModelSettings());
     return s.apiKey
       ? { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, explicitTransport: s.explicitTransport }
       : null;

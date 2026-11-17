@@ -332,7 +332,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
 
   function buildOnRunFinishedDeps(): OnRunFinishedDeps {
     return {
-      loadModelSettings: () => rawDeps.loadModelSettings(),
+      loadModelSettings: () => resolveModelSettingsProfile(rawDeps.loadModelSettings()),
       scheduleMemoryWrite,
       scheduleSummaryTurn: rawDeps.scheduleSummaryTurn ?? ((input) => scheduleSummaryTurn(input)),
       scheduleWikiTurn: rawDeps.scheduleWikiTurn ?? ((input) => scheduleWikiTurn(input)),
