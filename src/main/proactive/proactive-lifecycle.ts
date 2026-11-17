@@ -61,6 +61,7 @@ export interface ProactiveLifecycle {
   queryWorldTimeline: (input?: { dateKey?: string; from?: number; to?: number; limit?: number; order?: "asc" | "desc" }) => XilianTimelineEvent[];
   getWorldView: (input?: { now?: number; timezone?: string; limit?: number }) => XilianWorldView;
   setWorldNarrativeEnabled: (enabled: boolean) => void;
+  retryWorldNarrative: () => void;
   enqueueCompanionMoment: (moment: Omit<CompanionMoment, "status">) => CompanionMoment;
   observeCompanionActivity: (kind: CompanionLifeObservationKind) => void;
   proactiveConversationLifecycle: {
@@ -678,6 +679,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
 
   return {
     setWorldNarrativeEnabled: (enabled) => amphoreus.setNarrativeEnabled(enabled),
+    retryWorldNarrative: () => amphoreus.retryNarrative(),
     startWorld: () => amphoreus.start(),
     stopWorld: () => amphoreus.stop(),
     initializeProactiveChatService,

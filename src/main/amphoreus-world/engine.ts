@@ -4,6 +4,7 @@ import type { XilianTimelineEvent, XilianWorldData } from "../../shared/xilian-w
 import { worldClock, worldInstant } from "./clock";
 import { advanceResidents, createPlaces, createResidents, fitsRoutine, remember, residentActivity, terminalEvent, travelMinutes } from "./life";
 import { advancePersonalActions, planPersonalLife } from "./personal-life";
+import { narrativeRecovery } from "./narrative-recovery";
 export { residentActivity as residentNow } from "./life";
 
 export function createAmphoreusState(now: number): AmphoreusState {
@@ -172,13 +173,15 @@ export function reconcileAmphoreus(data: XilianWorldData, actualNow: number, tim
 export function modelBudgetUsed(state: AmphoreusState, date: string): number { return state.attempts.filter((attempt) => attempt.date === date).reduce((sum, attempt) => sum + attempt.count, 0); }
 export function amphoreusView(state: AmphoreusState, now: number, timezone: string): AmphoreusView {
   const clock = worldClock(now, timezone);
+  const narrative = state.attempts.filter((attempt) => attempt.date === clock.date && !attempt.key?.startsWith("review:")).sort((a, b) => b.attemptedAt - a.attemptedAt)[0] ?? null;
+  const used = modelBudgetUsed(state, clock.date);
   return { name: "翁法罗斯", canonRevision: state.canonRevision, premise: AMPHOREUS_PREMISE, clock, narrativeEnabled: state.narrativeEnabled,
-    narrative: state.attempts.filter((attempt) => attempt.date === clock.date).sort((a, b) => b.attemptedAt - a.attemptedAt)[0] ?? null,
+    narrative, narrativeRecovery: narrativeRecovery(state, narrative, now, used),
     lastSuccessfulDate: state.days.at(-1)?.date ?? null,
     events: state.days.flatMap((day) => day.events).sort((a, b) => b.startsAt - a.startsAt).slice(0, 160).map(({ outcome, developments: _developments, ...event }) => ({ ...event, effects: terminalEvent(event) ? event.effects : [], status: eventStatus(state, { ...event, developments: [] }, now), ...(terminalEvent(event) ? { outcome } : {}) })),
     threads: state.threads.filter((t) => t.status === "open").concat(state.threads.filter((t) => t.status === "resolved").slice(-20)), residents: AMPHOREUS_RESIDENTS,
     activities: AMPHOREUS_RESIDENTS.map((r) => residentActivity(state, r, Math.max(now, state.lastReconciledAt), clock.timezone)), sources: AMPHOREUS_SOURCES, history: AMPHOREUS_HISTORY,
-    facts: AMPHOREUS_FACTS, residentStates: state.residents.map(({ heardEventIds: _heard, ...resident }) => ({ ...resident, memories: resident.memories.slice(-12) })), places: state.places, routes: AMPHOREUS_ROUTES, gaps: state.gaps.slice(-10), revision: state.revision, budget: { limit: state.dailyModelBudget, used: modelBudgetUsed(state, clock.date) },
+    facts: AMPHOREUS_FACTS, residentStates: state.residents.map(({ heardEventIds: _heard, ...resident }) => ({ ...resident, memories: resident.memories.slice(-12) })), places: state.places, routes: AMPHOREUS_ROUTES, gaps: state.gaps.slice(-10), revision: state.revision, budget: { limit: state.dailyModelBudget, used },
     personal: personalWorldView(state, now, timezone), personalActions: state.personalActions.filter((a) => a.residentId === "cyrene").slice(-18) };
 }
 export function personalWorldView(state: AmphoreusState, now: number, timezone: string, residentId = "cyrene"): PersonalWorldView {

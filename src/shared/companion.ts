@@ -132,7 +132,7 @@ export type CompanionCommand = { expectedRevision: number } & (
 export interface CompanionApi {
   get(): Promise<CompanionSnapshot>;
   getWorld(): Promise<XilianWorldView>;
-  configureWorld(options: { narrativeEnabled: boolean }): Promise<void>;
+  configureWorld(options: { narrativeEnabled: boolean; retryNarrative?: boolean }): Promise<void>;
   getWorldHistory(query?: WorldHistoryQuery): Promise<WorldHistoryPage>;
   getWorldUpdate(cursor?: string): Promise<{ cursor: string; clock?: import("./amphoreus-world").AmphoreusClock; view?: XilianWorldView }>;
   getWorldArtifact(id: string): Promise<{ dataUrl: string } | null>;

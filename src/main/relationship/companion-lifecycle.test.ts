@@ -104,6 +104,8 @@ describe("companion lifecycle and transport", () => {
       getWorldSnapshot: () => ({ worldDate: "2026-11-07" } as any),
       queryWorldTimeline: () => [],
       getWorldView: () => ({ state: { worldDate: "2026-11-07" }, timeline: [], diary: [], artifacts: [], locations: [] } as any),
+      setWorldNarrativeEnabled: vi.fn(),
+      retryWorldNarrative: vi.fn(),
     });
     const snapshot = await handlers.get(IPC.COMPANION_GET)!() as Awaited<ReturnType<typeof store.snapshot>>;
     await handlers.get(IPC.COMPANION_UPDATE)!({}, { type: "repair", expectedRevision: snapshot.revision, note: "先回答问题，再关心情绪" });
@@ -111,5 +113,25 @@ describe("companion lifecycle and transport", () => {
     expect(JSON.parse(await handlers.get(IPC.COMPANION_EXPORT)!() as string).format).toBe("cyrene.relationship.v1");
     expect(await handlers.get(IPC.COMPANION_WORLD_GET)!()).toEqual({ state: { worldDate: "2026-11-07" }, timeline: [], diary: [], artifacts: [], locations: [] });
     await expect(Promise.resolve(handlers.get(IPC.COMPANION_UPDATE)!({}, { type: "repair", note: "missing revision" }))).rejects.toThrow();
+  });
+  it("routes explicit narrative retries without toggling or accepting malformed retry commands", () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    const ipc = { handle: (id: string, fn: (...args: any[]) => unknown) => { handlers.set(id, fn); }, on() {}, dispose() {}, removeHandler() {} };
+    const setWorldNarrativeEnabled = vi.fn(), retryWorldNarrative = vi.fn();
+    registerCompanionIpc(ipc, store, {
+      getWorldSnapshot: () => ({ worldDate: "2026-11-07" } as any), queryWorldTimeline: () => [],
+      getWorldView: () => ({ state: { worldDate: "2026-11-07" }, timeline: [], diary: [], artifacts: [], locations: [] } as any),
+      setWorldNarrativeEnabled, retryWorldNarrative,
+    });
+    const configure = handlers.get(IPC.COMPANION_WORLD_CONFIGURE)!;
+    expect(() => configure({}, { narrativeEnabled: true, retryNarrative: "true" })).toThrow("Invalid world settings");
+    expect(() => configure({}, { narrativeEnabled: false, retryNarrative: true })).toThrow("World retry unavailable");
+    configure({}, { narrativeEnabled: true, retryNarrative: true });
+    expect(retryWorldNarrative).toHaveBeenCalledTimes(1);
+    expect(setWorldNarrativeEnabled).not.toHaveBeenCalled();
+    configure({}, { narrativeEnabled: false });
+    expect(setWorldNarrativeEnabled).toHaveBeenCalledWith(false);
+    registerCompanionIpc(ipc, store);
+    expect(() => handlers.get(IPC.COMPANION_WORLD_CONFIGURE)!({}, { narrativeEnabled: true, retryNarrative: true })).toThrow("World retry unavailable");
   });
 });

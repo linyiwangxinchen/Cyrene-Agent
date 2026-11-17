@@ -914,7 +914,36 @@
       "clockHint": "现实时间决定昼夜与作息。公共事件每日续写，发生过的变化会留在世界中。",
       "narrative": "每日世界续写",
       "narrativeHint": "模型按日安排事件，并在活动结束后根据当时的条件确定结果。吃饭、休息与个人生活持续按当地时间运行。",
-      "attempts": "今日尝试",
+      "attempts": "本项尝试次数",
+      "retryNarrative": "重试本次续写",
+      "retryError": "未能启动重试，请刷新状态后再试。",
+      "recovery": {
+        "attempt_limit": "本项自动尝试已达 3 次，今天不再自动重试。",
+        "daily_budget": "今日世界推演额度已用完或不足以完成本次推演，将于当地时间明天恢复。",
+        "cooldown": "暂未到可重试时间，请稍后刷新状态。",
+        "scheduled": "下次自动重试时间：",
+        "manual": "手动重试会继续使用今日剩余额度，不会清零已用次数。"
+      },
+      "failure": {
+        "AUTH": "模型认证失败，请检查供应商密钥。",
+        "PERMISSION": "没有访问该模型的权限，请检查供应商配置。",
+        "BILLING": "供应商计费异常，请检查账户余额。",
+        "QUOTA": "供应商额度不足，请检查账户额度。",
+        "RATE_LIMIT": "模型请求受到限流，请稍后再试。",
+        "INVALID_REQUEST": "供应商未接受请求，请检查模型与接口配置。",
+        "NOT_FOUND": "未找到所配置的模型或接口。",
+        "CONTEXT_LIMIT": "本次请求超过模型上下文限制。",
+        "PAYLOAD_TOO_LARGE": "本次模型请求内容过大。",
+        "CONTENT_POLICY": "供应商未通过本次内容请求。",
+        "CONFLICT": "供应商请求发生冲突。",
+        "TIMEOUT": "模型响应超时，本次续写未完成。",
+        "NETWORK": "无法连接模型供应商，请检查服务器网络。",
+        "OVERLOADED": "模型服务繁忙。",
+        "SERVER_ERROR": "模型供应商服务异常。",
+        "UNAVAILABLE": "模型服务暂不可用。",
+        "CANCELLED": "模型请求已取消。",
+        "UNKNOWN": "模型请求未完成，具体原因尚未确定。"
+      },
       "lastSuccess": "最近续写",
       "events": "世界动态",
       "eventFilter": "事件筛选",
@@ -964,7 +993,7 @@
       },
       "error": {
         "invalid_output": "模型返回的计划未通过校验。",
-        "request_failed": "模型请求未完成，将按每日额度稍后重试。",
+        "request_failed": "模型请求未完成，具体原因尚未确定。",
         "interrupted": "运行状态已变化，未采用迟到的回复。"
       },
       "eventStatus": {

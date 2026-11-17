@@ -1,3 +1,7 @@
+import type { ModelErrorCategory } from "./model-error";
+
+export const AMPHOREUS_AUTO_ATTEMPT_LIMIT = 3;
+export const AMPHOREUS_REQUEST_TIMEOUT_MS = 180_000;
 export type ResidentActivity = "work" | "study" | "meal" | "rest" | "sleep" | "travel" | "social" | "watch";
 export type EventStatus = "planned" | "deferred" | "active" | "awaiting_resolution" | "completed" | "partial" | "failed" | "cancelled";
 export interface CanonSource { id: string; title: string; url: string; kind: "official" | "transcript" | "community" }
@@ -108,6 +112,11 @@ export interface AmphoreusDay {
 }
 export type NarrativeStatus = "pending" | "generating" | "success" | "failed" | "unconfigured" | "cancelled";
 export type NarrativeError = "invalid_output" | "request_failed" | "interrupted";
+export interface NarrativeRecovery {
+  canRetry: boolean;
+  automaticRetryAt?: number;
+  blockedBy?: "disabled" | "generating" | "daily_budget" | "attempt_limit" | "cooldown";
+}
 export interface NarrativeAttempt {
   date: string;
   timezone: string;
@@ -116,6 +125,7 @@ export interface NarrativeAttempt {
   attemptedAt: number;
   retryAt: number;
   error?: NarrativeError;
+  failure?: { category: ModelErrorCategory; status?: number };
   key?: string;
   purpose?: "plan" | "resolve";
   eventIds?: string[];
@@ -171,6 +181,7 @@ export interface AmphoreusView {
   clock: AmphoreusClock;
   narrativeEnabled: boolean;
   narrative: NarrativeAttempt | null;
+  narrativeRecovery: NarrativeRecovery;
   lastSuccessfulDate: string | null;
   events: Array<Omit<AmphoreusEvent, "outcome" | "developments"> & { status: EventStatus; outcome?: string }>;
   threads: AmphoreusThread[];

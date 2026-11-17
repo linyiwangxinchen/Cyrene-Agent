@@ -16,6 +16,7 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
   const label = (key: string) => t(`settingsPage.amphoreus.${key}`);
   const [view, setView] = useState<XilianWorldView>();
   const [error, setError] = useState(false);
+  const [retryError, setRetryError] = useState(false);
   const [saving, setSaving] = useState(false);
   const [filter, setFilter] = useState("today");
   const [activeTab, setActiveTab] = useState("events");
@@ -59,6 +60,16 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
     } catch { if (mounted.current) setError(true); }
     finally { if (mounted.current) setSaving(false); }
   }
+  async function retryNarrative() {
+    if (saving || !latest.current?.amphoreus?.narrativeEnabled || !latest.current.amphoreus.narrativeRecovery?.canRetry) return;
+    setSaving(true); setRetryError(false);
+    try {
+      await window.companion.configureWorld({ narrativeEnabled: true, retryNarrative: true });
+      await inFlight.current;
+      await reload();
+    } catch { if (mounted.current) setRetryError(true); }
+    finally { if (mounted.current) setSaving(false); }
+  }
   async function showArtifact(id: string) {
     setPreview({ id });
     try {
@@ -67,6 +78,9 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
     } catch { if (mounted.current) setPreview((current) => current?.id === id ? { id, error: true } : current); }
   }
   const world = view?.amphoreus;
+  const recovery = world?.narrativeRecovery;
+  const failure = world?.narrative?.failure;
+  const failureStatus = failure?.status && Number.isInteger(failure.status) && failure.status >= 100 && failure.status <= 599 ? failure.status : undefined;
   const location = (id: string) => view?.locations.find((p) => p.id === id)?.name ?? id;
   const resident = (id: string) => world?.residents.find((r) => r.id === id)?.name ?? id;
   const time = (at: number, date = false) => new Intl.DateTimeFormat(locale, { timeZone: world?.clock.timezone ?? "UTC", ...(date ? { month: "2-digit", day: "2-digit" } as const : {}), hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(at);
@@ -91,11 +105,17 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
         <Switch checked={world.narrativeEnabled} loading={saving} onChange={(enabled) => void configure(enabled)} aria-label={label("narrative")} />
         <div className="cy-amphoreus__generation-status" role="status">
           <Tag color={world.narrative?.status === "success" ? "green" : world.narrative?.status === "failed" ? "orange" : undefined}>{label(`status.${world.narrativeEnabled ? world.narrative?.status ?? "pending" : "disabled"}`)}</Tag>
-          {world.narrative?.error && <span>{label(`error.${world.narrative.error}`)}</span>}
-          {world.narrative && world.narrative.count > 0 && <span>{label("attempts")} {world.narrative.count}/3</span>}
+          {world.narrativeEnabled && world.narrative?.error && <span>{label(failure ? `failure.${failure.category}` : `error.${world.narrative.error}`)}{failureStatus ? ` (HTTP ${failureStatus})` : ""}</span>}
+          {world.narrative && world.narrative.count > 0 && <span>{label("attempts")} {world.narrative.count}</span>}
           {world.lastSuccessfulDate && <span>{label("lastSuccess")} {world.lastSuccessfulDate}</span>}
           <span>{label("dailyBudget")} {world.budget.used}/{world.budget.limit}</span>
+          {world.narrativeEnabled && recovery?.blockedBy === "attempt_limit" && <span>{label("recovery.attempt_limit")}</span>}
+          {world.narrativeEnabled && recovery?.blockedBy === "daily_budget" && <span>{label("recovery.daily_budget")}</span>}
+          {world.narrativeEnabled && recovery?.blockedBy === "cooldown" && <span>{label("recovery.cooldown")}</span>}
+          {world.narrativeEnabled && recovery?.automaticRetryAt && <span>{label("recovery.scheduled")} {time(recovery.automaticRetryAt, true)}</span>}
+          {world.narrativeEnabled && recovery?.canRetry && <><Button loading={saving} onClick={() => void retryNarrative()}>{label("retryNarrative")}</Button><span>{label("recovery.manual")}</span></>}
         </div>
+        {retryError && <Alert type="error" showIcon title={label("retryError")} />}
       </section>
       {visitedAt && <Button className="cy-amphoreus__visit" onClick={() => openHistory("", "", visitedAt)}>{label("sinceVisit")}</Button>}
       {world.gaps.length > 0 && <details><summary>{label("offlineContinuity")}</summary><p>{world.gaps.at(-1)!.summary}</p></details>}

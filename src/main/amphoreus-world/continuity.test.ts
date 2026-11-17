@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { XilianWorldStore } from "../xilian-world/world-store";
 import { AMPHOREUS_FACTS, AMPHOREUS_RESIDENTS } from "../../shared/amphoreus-canon";
 import type { AmphoreusState, WorldEffect } from "../../shared/amphoreus-world";
+import { AMPHOREUS_REQUEST_TIMEOUT_MS } from "../../shared/amphoreus-world";
 import { applyResolutions, formatAmphoreusContext } from "./engine";
 import { parseDailyPlan, parseResolutions } from "./narrative";
 import { residentActivity, routineProfile, travelMinutes } from "./life";
@@ -176,8 +177,8 @@ describe("validated model boundary", () => {
   it("times out a provider that never resolves, releasing its lease", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const runtime = createAmphoreusService({ store, now: () => now, timezone: () => "UTC", configured: () => true, generate: () => new Promise<string>(() => {}) });
-    const pending = runtime.tick(); await vi.advanceTimersByTimeAsync(90_001); await pending; runtime.stop();
-    expect(state().attempts[0]).toMatchObject({ status: "failed", error: "request_failed", count: 1 });
+    const pending = runtime.tick(); await vi.advanceTimersByTimeAsync(AMPHOREUS_REQUEST_TIMEOUT_MS + 1); await pending; runtime.stop();
+    expect(state().attempts[0]).toMatchObject({ status: "failed", error: "request_failed", count: 1, failure: { category: "TIMEOUT" } });
   });
 });
 

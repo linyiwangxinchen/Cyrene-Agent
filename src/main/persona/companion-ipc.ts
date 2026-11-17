@@ -12,7 +12,7 @@ import { worldUpdate } from "../amphoreus-world/world-update";
 export function registerCompanionIpc(
   ipc: IpcScope,
   store: RelationshipLogStore = getRelationshipStore(),
-  world?: Pick<ProactiveLifecycle, "getWorldSnapshot" | "queryWorldTimeline" | "getWorldView" | "setWorldNarrativeEnabled">,
+  world?: Pick<ProactiveLifecycle, "getWorldSnapshot" | "queryWorldTimeline" | "getWorldView" | "setWorldNarrativeEnabled" | "retryWorldNarrative">,
 ): void {
   ipc.handle(IPC.COMPANION_GET, () => store.snapshot());
   const readWorld = () => {
@@ -28,7 +28,13 @@ export function registerCompanionIpc(
   ipc.handle(IPC.COMPANION_WORLD_ARTIFACT, (_event, id) => getSharedXilianWorldStore(path.join(app.getPath("userData"), "amphoreus-world.json")).readWorldArtifact(id));
   ipc.handle(IPC.COMPANION_WORLD_CONFIGURE, (_event, options: unknown) => {
     if (!options || typeof options !== "object" || typeof (options as { narrativeEnabled?: unknown }).narrativeEnabled !== "boolean") throw new Error("Invalid world settings");
-    const enabled = (options as { narrativeEnabled: boolean }).narrativeEnabled;
+    const { narrativeEnabled: enabled, retryNarrative } = options as { narrativeEnabled: boolean; retryNarrative?: unknown };
+    if (retryNarrative !== undefined && typeof retryNarrative !== "boolean") throw new Error("Invalid world settings");
+    if (retryNarrative) {
+      if (!enabled || !world) throw new Error("World retry unavailable");
+      world.retryWorldNarrative();
+      return;
+    }
     if (world) world.setWorldNarrativeEnabled(enabled);
     else getSharedXilianWorldStore(path.join(app.getPath("userData"), "amphoreus-world.json")).updateAmphoreus((state) => { state.narrativeEnabled = enabled; return true; });
   });

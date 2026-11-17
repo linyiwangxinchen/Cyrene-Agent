@@ -71,6 +71,83 @@ it("offers a retry and keeps provider errors out of the page", async () => {
   expect(host.textContent).not.toContain("暂时无法读取世界");
 });
 
+function failedNarrative(count = 3) {
+  view.amphoreus!.narrative = { date: "2026-11-10", timezone: "UTC", status: "failed", count, attemptedAt: Date.parse("2026-11-10T12:00:00Z"), retryAt: Date.parse("2026-11-10T13:00:00Z"), error: "request_failed" };
+  view.amphoreus!.budget = { used: count, limit: 8 };
+  view.amphoreus!.narrativeRecovery = { canRetry: true, blockedBy: "attempt_limit" };
+}
+
+it("explains the automatic limit and retries with remaining budget without resetting the attempt count", async () => {
+  failedNarrative();
+  configureWorld.mockImplementation(async () => {
+    view.amphoreus!.narrative = { ...view.amphoreus!.narrative!, count: 4, status: "generating", error: undefined };
+    view.amphoreus!.budget.used = 4;
+    view.amphoreus!.narrativeRecovery = { canRetry: false, blockedBy: "generating" };
+  });
+  await render();
+  expect(host.textContent).toContain("本项自动尝试已达 3 次，今天不再自动重试");
+  expect(host.textContent).toContain("本项尝试次数 3");
+  expect(host.textContent).toContain("今日世界推演 3/8");
+  expect(host.textContent).not.toContain("将按每日额度稍后重试");
+  expect(host.textContent).not.toContain("下次自动重试时间");
+  expect(host.textContent).toContain("手动重试会继续使用今日剩余额度");
+  await act(async () => button("重试本次续写").click());
+  expect(configureWorld).toHaveBeenCalledExactlyOnceWith({ narrativeEnabled: true, retryNarrative: true });
+  expect(getWorld).toHaveBeenCalledTimes(2);
+  expect(host.textContent).toContain("本项尝试次数 4");
+  expect(host.textContent).toContain("今日世界推演 4/8");
+  expect(host.textContent).not.toContain("4/3");
+  expect(host.textContent).toContain("正在续写");
+  expect(button("重试本次续写")).toBeUndefined();
+});
+
+it("shows exhausted daily budget without offering or promising another retry", async () => {
+  failedNarrative();
+  view.amphoreus!.budget.used = 8;
+  view.amphoreus!.narrativeRecovery = { canRetry: false, blockedBy: "daily_budget" };
+  await render();
+  expect(host.textContent).toContain("今日世界推演 8/8");
+  expect(host.textContent).toContain("将于当地时间明天恢复");
+  expect(host.textContent).not.toContain("下次自动重试时间");
+  expect(button("重试本次续写")).toBeUndefined();
+  expect(configureWorld).not.toHaveBeenCalled();
+});
+
+it("shows a scheduled retry in local time and distinguishes safe model failure categories", async () => {
+  failedNarrative(1);
+  view.amphoreus!.narrative!.failure = { category: "AUTH", status: 401 };
+  Object.assign(view.amphoreus!.narrative!.failure, { message: "private-provider-url-and-key", responseBody: "private-error-body" });
+  view.amphoreus!.narrativeRecovery = { canRetry: true, automaticRetryAt: Date.parse("2026-11-10T13:00:00Z") };
+  await render();
+  expect(host.textContent).toContain("模型认证失败，请检查供应商密钥");
+  expect(host.textContent).toContain("HTTP 401");
+  expect(host.textContent).toContain("下次自动重试时间");
+  expect(host.textContent).toContain("13:00");
+  expect(host.textContent).not.toContain("private-");
+});
+
+it("keeps an unclassified historical failure honest and hides retry actions while disabled", async () => {
+  failedNarrative();
+  await render();
+  expect(host.textContent).toContain("具体原因尚未确定");
+  expect(host.textContent).not.toContain("超时");
+  view.amphoreus!.narrativeEnabled = false;
+  await act(async () => button("刷新").click());
+  expect(host.textContent).toContain("仅按日常作息运行");
+  expect(host.textContent).not.toContain("具体原因尚未确定");
+  expect(button("重试本次续写")).toBeUndefined();
+});
+
+it("reports retry start failures without exposing provider details or promising a scheduled retry", async () => {
+  failedNarrative();
+  configureWorld.mockRejectedValueOnce(new Error("private-provider-retry-error"));
+  await render();
+  await act(async () => button("重试本次续写").click());
+  expect(host.textContent).toContain("未能启动重试，请刷新状态后再试");
+  expect(host.textContent).not.toContain("private-provider");
+  expect(host.textContent).not.toContain("下次自动重试时间");
+});
+
 it("loads history only when opened and applies resident and location filters", async () => {
   await render(); expect(getWorldHistory).not.toHaveBeenCalled();
   await act(async () => tab("居民").click());

@@ -914,7 +914,36 @@
       "clockHint": "Real time guides day, night and daily routines. Daily stories leave lasting changes in the world.",
       "narrative": "Daily world stories",
       "narrativeHint": "The model plans each day and resolves events against current conditions after they end. Meals, rest and personal life follow local time.",
-      "attempts": "Attempts today",
+      "attempts": "Attempts for this task",
+      "retryNarrative": "Retry this story",
+      "retryError": "Could not start the retry. Refresh the status and try again.",
+      "recovery": {
+        "attempt_limit": "This task has reached its 3 automatic attempts. It will not retry automatically today.",
+        "daily_budget": "Today's world budget is exhausted or cannot cover this task. It resets tomorrow in local time.",
+        "cooldown": "Retry is not available yet. Refresh the status later.",
+        "scheduled": "Next automatic attempt:",
+        "manual": "Manual retries use the remaining daily budget and do not reset the used count."
+      },
+      "failure": {
+        "AUTH": "Model authentication failed. Check the provider API key.",
+        "PERMISSION": "Access to this model was denied. Check the provider configuration.",
+        "BILLING": "The provider reported a billing issue. Check the account balance.",
+        "QUOTA": "The provider quota is exhausted. Check the account quota.",
+        "RATE_LIMIT": "The provider rate limited this request. Try again later.",
+        "INVALID_REQUEST": "The provider rejected the request. Check the model and API configuration.",
+        "NOT_FOUND": "The configured model or endpoint was not found.",
+        "CONTEXT_LIMIT": "This request exceeded the model context limit.",
+        "PAYLOAD_TOO_LARGE": "This model request was too large.",
+        "CONTENT_POLICY": "The provider declined this content request.",
+        "CONFLICT": "The provider reported a request conflict.",
+        "TIMEOUT": "The model timed out before completing this story.",
+        "NETWORK": "Could not reach the model provider. Check the server network.",
+        "OVERLOADED": "The model service is busy.",
+        "SERVER_ERROR": "The model provider reported a service error.",
+        "UNAVAILABLE": "The model service is temporarily unavailable.",
+        "CANCELLED": "The model request was cancelled.",
+        "UNKNOWN": "The model request failed. The cause has not been determined."
+      },
       "lastSuccess": "Last story",
       "events": "World events",
       "eventFilter": "Filter events",
@@ -964,7 +993,7 @@
       },
       "error": {
         "invalid_output": "The model plan did not pass validation.",
-        "request_failed": "The model request failed. A later attempt is subject to the daily limit.",
+        "request_failed": "The model request failed. The cause has not been determined.",
         "interrupted": "The runtime changed; the late reply was discarded."
       },
       "eventStatus": {

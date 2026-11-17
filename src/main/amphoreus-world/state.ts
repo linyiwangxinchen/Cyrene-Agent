@@ -4,6 +4,8 @@ import { createAmphoreusState } from "./engine";
 import { worldTimezone } from "./clock";
 import { boundedText as text, check, finite as number, list, record, FutureWorldVersion } from "./canon-guard";
 import { eventFields, parseConditions, parseEffect, parseThread, place } from "./narrative";
+import { MAX_NARRATIVE_ATTEMPTS } from "./narrative-recovery";
+import { isModelFailureInfo } from "../../shared/model-error";
 
 /** Retain completed history; predictions from schema 1 do not become completed facts. */
 export function readAmphoreusState(value: unknown, now: number): AmphoreusState {
@@ -40,12 +42,15 @@ export function readAmphoreusState(value: unknown, now: number): AmphoreusState 
   for (const event of state.days.flatMap((day) => day.events)) if (applied.includes(event.id)) state.eventFacts[event.id] = event.status as "completed" | "partial" | "failed" | "cancelled";
   state.threads = list(raw.threads, 0, 100_000).map((value) => ({ ...parseThread(value, true), updatedAt: number(record(value).updatedAt) }));
   state.attempts = list(raw.attempts, 0, 1500).map((value) => {
-    const entry = record(value), count = number(entry.count); check(Number.isInteger(count) && count >= 0 && count <= 3);
+    const entry = record(value), count = number(entry.count); check(Number.isInteger(count) && count >= 0 && count <= MAX_NARRATIVE_ATTEMPTS);
     check(["pending", "generating", "success", "failed", "unconfigured", "cancelled"].includes(entry.status as string));
     check(entry.error === undefined || ["invalid_output", "request_failed", "interrupted"].includes(entry.error as string));
+    const failure = entry.failure === undefined ? undefined : record(entry.failure);
+    if (failure) check(isModelFailureInfo({ ...failure, provider: "", model: "" }) && (failure.status === undefined || number(failure.status) >= 100 && number(failure.status) <= 599));
     return { date: date(entry.date), timezone: worldTimezone(text(entry.timezone, 100)), count, status: entry.status as AmphoreusState["attempts"][number]["status"], attemptedAt: number(entry.attemptedAt), retryAt: number(entry.retryAt),
       key: typeof entry.key === "string" ? text(entry.key, 300) : `plan:${entry.date}`, purpose: entry.purpose === "resolve" ? "resolve" as const : "plan" as const,
       ...(entry.error ? { error: entry.error as "invalid_output" | "request_failed" | "interrupted" } : {}),
+      ...(failure ? { failure: { category: failure.category as NonNullable<AmphoreusState["attempts"][number]["failure"]>["category"], ...(failure.status !== undefined ? { status: number(failure.status) } : {}) } } : {}),
       ...(Array.isArray(entry.eventIds) ? { eventIds: entry.eventIds.map((id) => text(id, 160)) } : {}),
     };
   });
