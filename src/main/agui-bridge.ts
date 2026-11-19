@@ -43,6 +43,8 @@ import { createRunAdjustmentPoller } from "./chats/pending-adjustment";
 import { broadcastChatsChanged } from "./chats/chats-ipc";
 import { loadModelSettings, resolveSessionModelSettings } from "./settings/model-settings";
 import type { ChatMessage, ConversationMode, PendingChatAttachment } from "../shared/chat-types";
+import { normalizeCompanionReply, type CompanionReplyInput } from "../shared/companion";
+import { isGroupBoundConversation } from "./channels/conversation-binding-store";
 import { normalizeBrowserElementSelection } from "../shared/browser-panel-types";
 import { isModelFailureInfo } from "../shared/model-error";
 import { getTranscriptCompactionDisplayMessage, TRANSCRIPT_COMPACTION_REQUIRED } from "../shared/transcript-compaction-error";
@@ -196,6 +198,8 @@ export interface AguiRunInput {
   promptChannel?: string;
   /** Host-only privacy boundary; never accepted from renderer payload. */
   privateRelationshipContext?: boolean;
+  /** 由主进程从同一待发认领读取，仅用于本次模型请求。 */
+  companionReply?: CompanionReplyInput;
   /** @deprecated 仅保留 Renderer 兼容；主进程按 ChatSession.mode 分流并忽略该值。 */
   executionMode?: ConversationMode | "soul-only" | "collaboration";
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
@@ -220,7 +224,7 @@ export interface AguiRunInput {
 }
 
 /** 调用方（index.ts）注入：把输入转成 agent 需要的 options（含 system prompt 拼接）。 */
-export type BuildOptionsFn = (input: AguiRunInput & { signal?: AbortSignal }) => Promise<{
+export type BuildOptionsFn = (input: import("./orchestrator/build-options").BuildOptionsInput) => Promise<{
   options: CyreneRunOptions;
   /** 跑完后副作用需要的信息。 */
   latestUserText: string;
@@ -848,16 +852,30 @@ export function registerAgUiIpc(
     // ── Chat / Work / Learn / Code：共用 CyreneAgent 外壳 ──
     const agentExecutionMode: AgentExecutionMode = mode === "chat" ? "chat" : "work";
     let built;
+    let privateRelationshipContext = input.privateRelationshipContext;
     try {
     // 运行时拒绝未知的历史旁路字段；类型层已不再声明 renderer messages。
-    const { messages: _ignoredLegacyMessages, ...safeInput } = input as AguiRunInput & Record<string, unknown>;
+    const { messages: _ignoredLegacyMessages, companionReply: _ignoredRendererReply, ...safeInput } = input as AguiRunInput & Record<string, unknown>;
     // 会话级模型解析（consumer #4）：bridge 完成唯一一次解析（binding + effective model），
     // build-options 直接消费，不再按 modelProfileId 重解析（#26：防 effective 被覆盖回默认）
     const sessionModelSettings = resolveSessionModelSettings(loadModelSettings(), session);
     if (!modelContext) await validateRetainedCompletions(sessionId);
+    if (isGroupBoundConversation(sessionId) || session.messages?.some(message => message.channelSource?.chatType === "group")) {
+      privateRelationshipContext = false;
+    }
+    const pendingDispatch = session.pendingDispatch;
+    const companionReply = !background && mode === "chat" && !session.purpose && privateRelationshipContext !== false
+      && !input.channel && input.promptSource !== "plugin-agent" && currentUser
+      ? (pendingDispatch?.messageId === currentUser.turnId && !input.transcriptRewind
+        ? normalizeCompanionReply(pendingDispatch.companionReply) ?? {}
+        : {})
+      : undefined;
     built = await perf.track("build_options", () => buildOptionsFn!({
       ...safeInput,
       mode,
+      skipCurrentUserMood: background || Boolean(session.purpose) || !input.currentUser,
+      ...(privateRelationshipContext !== undefined ? { privateRelationshipContext } : {}),
+      ...(companionReply ? { companionReply } : {}),
       ...(currentUser ? {
         currentUser: {
           ...currentUser,
@@ -1287,6 +1305,7 @@ export function registerAgUiIpc(
               runId,
               assistantEntryId: options.transcriptSink?.getLastAssistantEntryId?.() ?? input.assistantTurnId ?? runId,
               userTurnId: currentUser?.turnId,
+              ...(privateRelationshipContext === false ? { privateRelationshipContext } : {}),
             }));
             if (mode !== "code" && effects?.sticker !== undefined) {
               send({

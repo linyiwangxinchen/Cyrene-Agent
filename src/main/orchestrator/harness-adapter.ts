@@ -73,6 +73,7 @@ export async function runHarnessWithAdapter(
   const harnessInput: HarnessInput = {
     systemPrompt,
     promptLayers: harnessPromptLayers,
+    ...(options.companionReplyContext ? { companionReplyContext: options.companionReplyContext } : {}),
     usageParts: promptLayers.usageParts,
     messages: runMessages,
     runId,

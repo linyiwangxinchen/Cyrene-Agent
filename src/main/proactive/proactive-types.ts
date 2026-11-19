@@ -3,6 +3,7 @@ export interface ProactiveRuntimeSnapshot {
   localHour: number;
   localMinute?: number;
   localDate?: string;
+  timezone?: string;
   /** User-configured quiet window in local minutes. Omit to use legacy policy. */
   quietStartMinute?: number;
   quietEndMinute?: number;
@@ -27,6 +28,24 @@ export interface ProactiveCandidate {
   replyBurden?: "none" | "light" | "question";
 }
 
+/** Fields shared by initial delivery and recovery. Trigger explanations are transient. */
+export function normalizeDurableCandidate(value: Partial<Record<keyof ProactiveCandidate, unknown>>): ProactiveCandidate | undefined {
+  if (typeof value.sceneId !== "string"
+    || typeof value.score !== "number" || !Number.isFinite(value.score)
+    || typeof value.sceneCooldownMs !== "number" || !Number.isFinite(value.sceneCooldownMs)) return undefined;
+  return {
+    sceneId: value.sceneId,
+    score: value.score,
+    sceneCooldownMs: value.sceneCooldownMs,
+    ...(typeof value.momentId === "string" ? { momentId: value.momentId.slice(0, 200) } : {}),
+    ...(typeof value.momentSummary === "string" ? { momentSummary: value.momentSummary.slice(0, 1000) } : {}),
+    ...(typeof value.opportunityId === "string" ? { opportunityId: value.opportunityId.slice(0, 300) } : {}),
+    ...(typeof value.sourceEventId === "string" ? { sourceEventId: value.sourceEventId.slice(0, 300) } : {}),
+    ...(typeof value.evidenceVersion === "string" ? { evidenceVersion: value.evidenceVersion.slice(0, 100) } : {}),
+    ...((value.replyBurden === "none" || value.replyBurden === "light" || value.replyBurden === "question") ? { replyBurden: value.replyBurden } : {}),
+  };
+}
+
 export type ProactiveEvaluationState = "candidate" | "no_candidate" | "suppressed" | "backoff";
 
 /** Runtime snapshot shown in preferences; it is intentionally not persisted. */
@@ -47,6 +66,8 @@ export interface ProactiveEvaluationStatus {
 /** Durable intent captured before delivery; retries must replay this exact payload. */
 export interface ProactiveDeliveryContext {
   relationshipRevision: number;
+  composedAt?: number;
+  timezone?: string;
   conversationId?: string;
   sessionId?: string;
   targetId?: string;

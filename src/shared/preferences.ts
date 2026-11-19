@@ -6,8 +6,8 @@ export type ProactiveDensity = "quiet" | "natural" | "active";
 export type ProactiveDeliveryTarget = "local" | "wechat" | "feishu";
 export const DEFAULT_PROACTIVE_DENSITY: ProactiveDensity = "active";
 export const DEFAULT_PROACTIVE_TARGET_SCORE = 60;
-export const DEFAULT_PROACTIVE_QUIET_START_MINUTE = 22 * 60;
-export const DEFAULT_PROACTIVE_QUIET_END_MINUTE = 8 * 60;
+export const DEFAULT_PROACTIVE_QUIET_START_MINUTE = 5 * 60;
+export const DEFAULT_PROACTIVE_QUIET_END_MINUTE = 9 * 60;
 export const DEFAULT_PROACTIVE_DAILY_LIMIT = 3;
 
 export type { CustomStyleConfig, StyleId } from "./style-sampling";

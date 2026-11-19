@@ -18,8 +18,8 @@ export function getRelationshipStore(): RelationshipLogStore {
 export function recordRelationshipTurn(input: RelationshipTurnInput): Promise<RelationshipLogEntry | null> {
   return getRelationshipStore().recordTurn(input)
 }
-export function buildRelationshipContext(conversationId?: string, privateContext = true): Promise<string> {
-  return getRelationshipStore().buildContext(conversationId, privateContext)
+export function buildRelationshipContext(conversationId?: string, privateContext = true, currentUserText?: string): Promise<string> {
+  return getRelationshipStore().buildContext(conversationId, privateContext, currentUserText)
 }
 export function recordCompanionEvent(event: CompanionEvent) {
   return getRelationshipStore().recordCompanionEvent(event)

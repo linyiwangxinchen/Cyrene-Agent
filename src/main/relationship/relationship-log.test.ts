@@ -34,7 +34,7 @@ describe("relationship log", () => {
     expect(data.dailySummaries[0].summary).toContain("明确边界")
   })
 
-  it("builds a compact context from recent cues", async () => {
+  it("keeps inferred mood and game progress in records instead of scripting the next reply", async () => {
     const { RelationshipLogStore } = await import("./relationship-log")
     const store = new RelationshipLogStore(filePath)
 
@@ -47,12 +47,9 @@ describe("relationship log", () => {
 
     const context = await store.buildContext()
 
-    expect(context).toContain("【近期关系线索】")
-    expect(context).toContain("用户最近状态")
-    expect(context).toContain("疲惫")
-    expect(context).toContain("下次回应提示")
-    expect(context).toContain("关系阶段")
-    expect(context).toContain("昔涟当前感受")
+    expect(context).toContain("【昔涟的相处偏好】")
+    expect(context).not.toMatch(/用户最近状态|疲惫|下次回应提示|关系阶段|昔涟当前感受|羁绊进度/)
+    expect(JSON.parse(await store.exportData()).entries[0].userMood).toBe("疲惫")
   })
 
   it("does not misread common words as boundary signals", async () => {

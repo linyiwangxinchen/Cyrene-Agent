@@ -500,7 +500,7 @@ describe("AgentRuntime 暂存念头的会话边界", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  async function lifeContext(input: Record<string, unknown>, pluginSharing = false) {
+  async function lifeContext(input: Record<string, unknown>, pluginSharing = false, text = "有没有什么想跟我说的？") {
     const buildOptionsModule = await import("./build-options");
     let captured: import("./build-options").BuildOptionsDeps | undefined;
     vi.spyOn(buildOptionsModule, "buildAgentRunOptions").mockImplementation(async (_input, deps) => {
@@ -512,7 +512,7 @@ describe("AgentRuntime 暂存念头的会话边界", () => {
       loadUserProfile: () => ({ timezone: "Asia/Shanghai" }) as never,
     }));
     await runtime.buildOptions(input as never);
-    return captured!.buildXilianLifeContext!();
+    return captured!.buildXilianLifeContext!(text);
   }
 
   it("私聊可读本地生活和本会话念头，不携带其他私聊或停用的插件内容", async () => {
@@ -533,6 +533,7 @@ describe("AgentRuntime 暂存念头的会话边界", () => {
 
   it("启用插件分享后可以在私聊自然提起其保留的发现", async () => {
     expect(await lifeContext({ sessionId: "private-uuid-a" }, true)).toContain(pluginThought);
+    expect(await lifeContext({ sessionId: "private-uuid-a" }, true, "我到家了")).not.toContain(pluginThought);
   });
 });
 

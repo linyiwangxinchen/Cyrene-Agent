@@ -157,7 +157,7 @@ export function getZonedDateParts(
 }
 
 /** 用户时区下的日期字符串 YYYY-MM-DD（用于跨日判断）。 */
-function formatLocalDate(date: Date, timezone: string): string {
+export function formatLocalDate(date: Date, timezone: string): string {
   const p = getZonedDateParts(date, timezone);
   const mm = String(p.month).padStart(2, "0");
   const dd = String(p.day).padStart(2, "0");
@@ -492,8 +492,8 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
     }
 
     const state = deps.getProactiveState();
-    const timezone = deps.getTimezone();
-    const localDate = formatLocalDate(new Date(snapshot.now), timezone);
+    const timezone = snapshot.timezone ?? deps.getTimezone();
+    const localDate = (snapshot.timezone ? snapshot.localDate : undefined) ?? formatLocalDate(new Date(snapshot.now), timezone);
     const localParts = getZonedDateParts(new Date(snapshot.now), timezone);
     const weather = deps.getWeatherContext?.() ?? null;
 

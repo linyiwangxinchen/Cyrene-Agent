@@ -82,6 +82,16 @@ function identity(item: InitiativeOpportunityInput): string {
 }
 function clone(entry: InitiativeOpportunity): InitiativeOpportunity { return { ...entry }; }
 
+function carePriority(source: string): number {
+  switch (source) {
+    case "followup": return 3;
+    case "user_care": return 2;
+    case "relationship":
+    case "standalone_care": return 1;
+    default: return 0;
+  }
+}
+
 /** Persistent, evidence-bound spontaneous intentions. No model or delivery calls. */
 export class InitiativeOpportunityStore {
   private resumed = false;
@@ -187,7 +197,8 @@ export class InitiativeOpportunityStore {
     // All eligible moments compete; one blocked high-scoring item cannot hide another.
     const budgetAvailable = input.dailyAttemptLimit === undefined || data.attemptDate !== input.dayKey || (data.attemptCount ?? 0) < input.dailyAttemptLimit;
     const ready = data.entries.filter(entry => budgetAvailable && entry.status === "pending" && entry.wasEligible && entry.accumulated >= entry.threshold);
-    ready.sort((a, b) => (b.score ?? 0) - (a.score ?? 0) || b.accumulated / b.threshold - a.accumulated / a.threshold || b.occurredAt - a.occurredAt);
+    ready.sort((a, b) => carePriority(b.source) - carePriority(a.source)
+      || (b.score ?? 0) - (a.score ?? 0) || b.accumulated / b.threshold - a.accumulated / a.threshold || b.occurredAt - a.occurredAt);
     const selected = ready[0];
     if (selected) { selected.status = "selected"; selected.lastSelectedAt = now; selected.wasEligible = false; }
     // Keep deduplication tombstones throughout the source replay horizon.
@@ -225,6 +236,20 @@ export class InitiativeOpportunityStore {
     const entries = this.read()?.entries ?? [];
     const entry = entries.find(item => item.key === id) ?? [...entries].reverse().find(item => item.id === id);
     return entry && (now === undefined || entry.expiresAt > now) ? clone(entry) : undefined;
+  }
+
+  /** An unsent draft with stale time context needs to become eligible again before it can retry. */
+  requeue(id: string, now: number): boolean {
+    const data = this.read();
+    const entry = data?.entries.find(item => item.key === id);
+    if (!data || !entry || !finite(now) || entry.status !== "selected" || entry.expiresAt <= now) return false;
+    entry.status = "pending";
+    entry.accumulated = 0;
+    entry.previousRate = 0;
+    entry.lastAdvancedAt = Math.max(entry.lastAdvancedAt, now);
+    entry.wasEligible = false;
+    this.write(data);
+    return true;
   }
 
   /** Count only real model attempts, not selection, suppression or UI reads. */

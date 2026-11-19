@@ -84,6 +84,111 @@ async function buildAgentRunOptions(
 }
 
 describe("build-options", () => {
+  it("当轮纠正以独立请求上下文交给模型，不混入用户消息或历史", async () => {
+    const currentUser = { turnId: "u1", text: "先听我说", visibleContent: "先听我说" };
+    const input = {
+      sessionId: "private", mode: "chat", executionMode: "chat", currentUser,
+      modelContext: { messages: [{ role: "user", content: currentUser.text }], uncertainEffects: [], throughSeq: 1 },
+      companionReply: { mode: "listen", correction: "这次用名字称呼我" },
+    };
+    const result = await buildAgentRunOptions(input, createBuildDeps());
+    expect(result.options.companionReplyContext).toContain("省去建议、分析和追问");
+    expect(result.options.companionReplyContext).toContain("这次用名字称呼我");
+    expect(result.options.soulSystemBaseContent).toContain("为本轮选了回应方式，就照这个心意来");
+    expect(result.options.soulRuntimeContext).not.toContain("这次用名字称呼我");
+    expect(JSON.stringify(result.options.messages)).not.toContain("这次用名字称呼我");
+    expect(result.latestUserText).toBe("先听我说");
+
+    const shared = await buildAgentRunOptions({ ...input, privateRelationshipContext: false }, createBuildDeps());
+    expect(shared.options.companionReplyContext).toBeUndefined();
+    expect(shared.options.soulSystemBaseContent).not.toContain("【私聊怎么说】");
+  });
+
+  it("给微信用户的当轮消息加入口语回复约束，并保留具体生活记录供相关话题使用", async () => {
+    const deps = createBuildDeps();
+    deps.buildXilianLifeContext = () => "【昔涟虚拟生活快照】\n地点：星炉台\n正在做：维护一盏小灯";
+    const currentUser = { turnId: "u1", text: "今天开了三个会，累死了", visibleContent: "今天开了三个会，累死了" };
+    const result = await buildAgentRunOptions({
+      sessionId: "wechat-private", channel: "wechat", executionMode: "chat", privateRelationshipContext: true, currentUser,
+      modelContext: { messages: [{ role: "user", content: currentUser.text }], uncertainEffects: [], throughSeq: 1 },
+    }, deps);
+    expect(result.options.soulSystemBaseContent).toContain("【渠道回复方式】");
+    expect(result.options.soulSystemBaseContent).toContain("先接住用户最后一句的具体意思");
+    expect(result.options.soulSystemBaseContent).toContain("某条记录确实能回应眼前这句话时，才挑有依据的细节说");
+    expect(result.options.soulRuntimeContext).toContain("维护一盏小灯");
+    expect(result.latestUserText).toBe(currentUser.text);
+  });
+
+  it("只把私聊当前用户可见的原话交给语气判断", async () => {
+    const deps = createBuildDeps();
+    deps.buildRelationshipContext = vi.fn(async () => "");
+    const input = {
+      sessionId: "mood",
+      mode: "chat",
+      executionMode: "chat",
+      currentUser: {
+        turnId: "u1",
+        text: "引用：我今天很难过\n我的杯子到了\n【文档内容】今天太累了",
+        visibleContent: "我的杯子到了\n【文档内容】今天太累了",
+      },
+      modelContext: { messages: [{ role: "user", content: "昨天焦虑死了" }], uncertainEffects: [], throughSeq: 1 },
+    };
+    await buildAgentRunOptions(input, deps);
+    await buildAgentRunOptions({ ...input, channel: "wechat" }, deps);
+    await buildAgentRunOptions({
+      ...input,
+      transcriptRewind: { anchorUserTurnId: "u1", disposition: "replace_user" },
+    }, deps);
+    for (const suppressed of [
+      { privateRelationshipContext: false },
+      { promptSource: "plugin-agent" },
+      { mode: "work" },
+      { skipCurrentUserMood: true },
+      { transcriptRewind: { anchorUserTurnId: "u1", disposition: "keep_user" } },
+      { currentUser: undefined },
+    ]) {
+      await buildAgentRunOptions({ ...input, ...suppressed }, deps);
+    }
+    expect(vi.mocked(deps.buildRelationshipContext).mock.calls).toEqual([
+      ["mood", true, "我的杯子到了"],
+      ["mood", true, "我的杯子到了"],
+      ["mood", true, "我的杯子到了"],
+      ["mood", false, undefined],
+      ["mood", false, undefined],
+      ["mood", true, undefined],
+      ["mood", true, undefined],
+      ["mood", true, undefined],
+      ["mood", true, undefined],
+    ]);
+  });
+
+  it("在共享会话的模型请求里隔离私聊资料、相处习惯和朋友圈上下文", async () => {
+    const deps = createBuildDeps();
+    const general = deps.loadGeneralSettings();
+    deps.loadGeneralSettings = () => ({ ...general, chatSocialContextEnabled: true, chatMomentsContextEnabled: true, momentsEnabled: true });
+    deps.loadUserProfile = () => ({ callPreference: "私下称呼", birthday: "2000-01-02", timezone: "Asia/Shanghai" });
+    deps.buildEnvironmentContext = (profile) => JSON.stringify(profile);
+    deps.buildAlwaysOnContext = vi.fn(async () => "PRIVATE_MEMORY");
+    deps.buildRelationshipContext = vi.fn(async (_id, own) => own ? "PRIVATE_RELATIONSHIP" : "");
+    deps.buildXilianLifeContext = vi.fn(() => "PRIVATE_WORLD");
+    deps.buildMomentsContext = vi.fn(() => "PRIVATE_MOMENTS");
+    deps.buildChatSocialContext = vi.fn(async () => ({ contextBlock: "PRIVATE_SOCIAL", retrievedAtoms: [] }));
+    const currentUser = { turnId: "group-message", text: "大家晚上好", visibleContent: "大家晚上好" };
+    const input = {
+      sessionId: "shared", channel: "qq", mode: "chat", executionMode: "chat", currentUser,
+      modelContext: { messages: [{ role: "user", content: currentUser.text }], uncertainEffects: [], throughSeq: 1 },
+    };
+    const group = await buildAgentRunOptions({ ...input, privateRelationshipContext: false }, deps);
+    expect(group.options.soulSystemBaseContent).toContain("【公开聊天】");
+    expect(group.options.soulRuntimeContext).not.toMatch(/PRIVATE_|私下称呼|2000-01-02/);
+    expect(deps.buildAlwaysOnContext).not.toHaveBeenCalled();
+    expect(deps.buildMomentsContext).not.toHaveBeenCalled();
+    const privateTurn = await buildAgentRunOptions(input, deps);
+    expect(privateTurn.options.soulRuntimeContext).toContain("私下称呼");
+    expect(privateTurn.options.soulRuntimeContext).toContain("PRIVATE_MOMENTS");
+    expect(deps.buildMomentsContext).toHaveBeenCalledWith(currentUser.text, "shared");
+  });
+
   it("keeps background facts in model context without treating them as the user's query", async () => {
     const result = await buildAgentRunOptions({ sessionId: "background", mode: "chat", executionMode: "chat",
       messages: [{ role: "user", content: "build the project" },
@@ -1481,7 +1586,7 @@ describe("moments context 注入（Phase 3 Chat Awareness）", () => {
       messages: [{ role: "user", content: "你刚才朋友圈发的是什么意思" }],
     }, deps)
 
-    expect(deps.buildMomentsContext).toHaveBeenCalledWith("你刚才朋友圈发的是什么意思")
+    expect(deps.buildMomentsContext).toHaveBeenCalledWith("你刚才朋友圈发的是什么意思", "moments-chat")
     expect(result.options.soulRuntimeContext).toContain("【近期朋友圈动态】")
   })
 

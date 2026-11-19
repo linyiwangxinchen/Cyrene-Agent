@@ -1,4 +1,5 @@
 import type { AmphoreusView } from "../../shared/amphoreus-world";
+import { isLegacyPersonalOutcome } from "../amphoreus-world/personal-life";
 import type { CompanionLifeState } from "./companion-life";
 import type { InitiativeOpportunityInput } from "./initiative-opportunities";
 
@@ -6,18 +7,23 @@ import type { InitiativeOpportunityInput } from "./initiative-opportunities";
 export function worldInitiativeOpportunities(world: AmphoreusView | undefined, now: number, conversationId?: string): InitiativeOpportunityInput[] {
   const personal = world?.personal;
   if (!personal) return [];
+  const personalActions = new Map(personal.actions.map(action => [action.id, action]));
   return personal.changes.filter(change => change.residentId === personal.residentId && change.knownAt <= now
     && change.knownAt > now - 6 * 3_600_000 && !change.id.startsWith("routine:")
+    && !change.eventId.startsWith("amphoreus:personal:user:")
     && personal.experiences.some(memory => memory.eventId === change.eventId && memory.kind === change.kind))
     .filter(change => {
-      const scope = change.conversationId ?? personal.actions.find(action => action.id === change.eventId)?.conversationId;
-      return !conversationId || !scope || scope === conversationId;
+      const action = personalActions.get(change.eventId);
+      const scope = change.conversationId ?? action?.conversationId;
+      if (scope && scope !== conversationId) return false;
+      if (change.kind !== "routine") return true;
+      // Completing a routine slot is not itself a new detail to share.
+      return action?.status === "completed" && !!action.artifact && !isLegacyPersonalOutcome(change.text);
     })
     .map(change => ({
       id: change.id, source: "amphoreus", sourceEventId: change.eventId, evidenceVersion: change.version,
-      ...((change.conversationId ?? personal.actions.find(action => action.id === change.eventId)?.conversationId ?? conversationId)
-        ? { conversationId: change.conversationId ?? personal.actions.find(action => action.id === change.eventId)?.conversationId ?? conversationId } : {}),
-      motive: personal.actions.some(action => action.id === change.eventId) ? "progress" : "interesting",
+      ...(conversationId ? { conversationId } : {}),
+      motive: personalActions.has(change.eventId) ? "progress" : "interesting",
       summary: `${change.kind === "heard" ? `听闻（${change.source}）` : change.kind === "experienced" ? "亲历" : "自己的生活"}：${change.text}`.slice(0, 1000),
       occurredAt: change.knownAt, expiresAt: change.knownAt + 6 * 3_600_000,
       strengthPerHour: change.kind === "heard" ? 2.5 : 4, decayPerHour: 1,
@@ -28,7 +34,7 @@ export function worldInitiativeOpportunities(world: AmphoreusView | undefined, n
 /** A single ongoing mood episode, anchored to her activity rather than user absence. */
 export function boredomInitiativeOpportunity(world: AmphoreusView | undefined, life: CompanionLifeState, now: number, conversationId?: string): InitiativeOpportunityInput | undefined {
   const activity = world?.personal?.currentActivity;
-  if (!activity || life.boredom < 35 || life.energy < 30 || !["rest", "watch", "work", "travel"].includes(activity.activity)) return undefined;
+  if (!activity || activity.eventId.startsWith("amphoreus:personal:user:") || life.boredom < 35 || life.energy < 30 || !["rest", "watch", "work", "travel"].includes(activity.activity)) return undefined;
   const scope = world?.personal?.actions.find(action => action.id === activity.eventId)?.conversationId;
   if (scope && scope !== conversationId) return undefined;
   const occurredAt = Math.max(activity.startsAt, life.activitySince ?? activity.startsAt);
@@ -55,6 +61,7 @@ export function relatedConversationOpportunity(world: AmphoreusView | undefined,
   now: number, conversationId?: string): InitiativeOpportunityInput | undefined {
   const personal = world?.personal, activity = personal?.currentActivity;
   if (!personal || !activity || !turn || turn.at > now || now - turn.at > 7 * 86_400_000
+    || activity.eventId.startsWith("amphoreus:personal:user:")
     || /不想[再聊谈提]|别(?:聊|再提|说)|不要(?:再)?(?:提|聊|问)|不喜欢|讨厌/u.test(turn.content)
     || ["sleep", "travel"].includes(activity.activity) || activity.endsAt <= now) return undefined;
   const scope = personal.actions.find(action => action.id === activity.eventId)?.conversationId;

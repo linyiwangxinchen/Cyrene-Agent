@@ -93,6 +93,7 @@ export async function resolveWebModel(store: WebStore, input: { sessionId?: stri
 export async function requestSessionModel(store: WebStore, sessionId: string, prompt: string, options: {
   signal?: AbortSignal; onDelta?: (delta: UnifiedStreamDelta) => void;
   persona?: WebPersonaRuntime; styleId?: unknown; legacyStyle?: unknown; channel?: RelationshipChannel; media?: WebMediaStore;
+  currentUserText?: string;
   /** Headless channel inputs are transient and must never be persisted as model history. */
   attachments?: Array<{ name: string; text: string }>;
   imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
@@ -102,7 +103,7 @@ export async function requestSessionModel(store: WebStore, sessionId: string, pr
   const persona = options.persona ?? personaForStore(store);
   const attachmentContext = formatChannelAttachmentContext(options.attachments);
   const modelPrompt = attachmentContext ? `${prompt}\n\n${attachmentContext}` : prompt;
-  const built = await persona.build({ session, settings, config, prompt: modelPrompt, styleId: options.styleId, legacyStyle: options.legacyStyle, channel: options.channel });
+  const built = await persona.build({ session, settings, config, prompt: modelPrompt, currentUserText: options.currentUserText, styleId: options.styleId, legacyStyle: options.legacyStyle, channel: options.channel });
   const messages = addWebImageAttachments(built.messages, options.imageAttachments);
   const timeoutMs = Number(settings.timeout.chatRequestTimeout ?? settings.timeout.requestTimeout) || 300_000;
   const request = { model: config.model, messages, promptLayers: built.metadata, ...built.sampling, stream: Boolean(options.onDelta),

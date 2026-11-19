@@ -45,6 +45,7 @@ interface ChatComposerProps {
   /** 压缩状态机回调：透传给 ContextUsageRing，让消息流渲染「正在触发压缩」占位条。 */
   onCompactPhaseChange?: (phase: "idle" | "running" | "done" | "error") => void;
   pendingQueue?: PendingQueueDockItem[];
+  companionControls?: ReactNode;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   onCancel?: () => void;
@@ -304,6 +305,7 @@ export function ChatComposer({
   modelBusy = false,
   onCompactPhaseChange,
   pendingQueue = [],
+  companionControls,
   onChange,
   onSubmit,
   onCancel,
@@ -707,6 +709,7 @@ export function ChatComposer({
         onRemove={onRemoveQueuedMessage}
       />
       {mainModelFailure && <ModelFailureNotice failure={mainModelFailure} />}
+      {companionControls}
       <div className="cy-composer-shell">
         <input
           ref={fileInputRef}

@@ -16,6 +16,7 @@ import { setChoiceCardSender, setChoiceDismissSender } from "../user-choice";
 import { setAsrConfig } from "../asr/asr-config";
 import { setCallSettings } from "../call/call-manager";
 import { buildCallSystemPrompt } from "../call/call-prompt-builder";
+import { getCallWeatherCity } from "../call/call-weather";
 import { reactChatWindow } from "../windows/window-state";
 
 export interface BootstrapConfigContext {
@@ -152,20 +153,13 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
         ttsMosslandFormat: s.ttsMosslandFormat,
       };
     },
-    // 通话专用 system prompt 构建器
-    async (userText: string) => {
-      const messages = [{ role: "user" as const, content: userText }];
-      return buildCallSystemPrompt(userText, messages);
-    },
-    // 天气快捷处理：正则匹配到天气关键词 → 调 weather 工具的 execute
+    buildCallSystemPrompt,
+    // 通话中明确询问天气时，查询当前天气。
     async (userText: string) => {
       try {
         const weatherTool = toolRegistry.getById("weather");
         if (!weatherTool) return null;
-        // 提取城市名（简单匹配：XX天气 / XX的天气）
-        const cityMatch = userText.match(/([北京上海广州深圳成都杭州南京武汉西安重庆天津苏州长沙郑州青岛大连沈阳哈尔滨长春济南太原合肥南昌福州昆明贵阳拉萨乌鲁木齐呼和浩特]+)/);
-        const city = cityMatch?.[1] ?? "";
-        const result = await weatherTool.execute({ city }, undefined);
+        const result = await weatherTool.execute({ city: getCallWeatherCity(userText) }, undefined);
         return result;
       } catch (err) {
         console.warn("[Call] 天气查询失败:", err);

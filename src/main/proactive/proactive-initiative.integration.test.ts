@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   deps: null as unknown as ProactiveTriggerDependencies,
   controller: null as unknown as ProactiveTriggerController,
   route: { available: false, reason: "channel_offline" } as any,
+  history: [] as Array<{ role: "user" | "model"; at: number; content: string; channelSource?: { chatType: "group" } }>,
 }));
 vi.mock("electron", () => ({ app: { getPath: () => mocks.root }, get powerMonitor() { return mocks.power; } }));
 vi.mock("../chats/chats-store", () => ({ listSessions: async () => [], getSessionRecord: async () => null, getOrCreateSessionByPurpose: async () => ({ id: "fixture-proactive" }) }));
@@ -73,6 +74,7 @@ beforeEach(() => {
   mocks.saveState.mockImplementation(next => { state = structuredClone(next); });
   mocks.runModel.mockResolvedValue({ kind: "hold", resumeOn: "evidence_change" });
   mocks.route = { available: false, reason: "channel_offline" };
+  mocks.history = [];
   random = vi.spyOn(Math, "random").mockReturnValue(0.5);
 });
 afterEach(() => {
@@ -83,13 +85,13 @@ function setup(patch: Partial<GeneralSettings> = {}) {
   const settings = { proactiveChatMode: "on", proactiveDeliveryTarget: "local", proactiveDailyLimit: 20,
     proactiveDensity: "active", proactiveTargetScore: 60, ...patch } as GeneralSettings;
   lifecycle = createProactiveLifecycle({ loadGeneralSettings: () => settings,
-    conversationJournal: { readProjection: async () => ({ messages: [] }) } as unknown as ConversationJournalService });
+    conversationJournal: { readProjection: async (id: string) => ({ messages: id === "bound" ? mocks.history : [] }) } as unknown as ConversationJournalService });
   lifecycle.initializeProactiveChatService(); lifecycle.initializeProactiveTrigger();
   return settings;
 }
-function addKnownStory() {
+function addKnownStory(at = NOW) {
   const change = { id: "knowledge:cyrene:story:1", eventId: "story", version: 1, residentId: "cyrene", kind: "experienced" as const,
-    occurredAt: NOW, knownAt: NOW, text: "整理书页时找到一张旧书签", source: "事件结算", locationId: "okhema" };
+    occurredAt: at, knownAt: at, text: "整理书页时找到一张旧书签", source: "事件结算", locationId: "okhema" };
   mocks.world.personal!.changes = [change];
   mocks.world.personal!.experiences = [{ id: "memory:story", eventId: change.eventId, at: NOW, kind: change.kind,
     text: change.text, source: change.source, locationId: change.locationId }];
@@ -101,7 +103,126 @@ function entries(): InitiativeOpportunity[] {
 async function tick(now: number) { vi.setSystemTime(now); await mocks.controller.evaluateNow("integration"); }
 
 describe("world initiative in the shared lifecycle", () => {
-  it("has no ambient or timed greeting at the thirty-minute conversation boundary", async () => {
+  const boundChannel = () => ({ available: true, recipient: { conversationId: "bound", sessionId: "channel:wechat:fixture", targetId: "fixture", updatedAt: NOW } });
+
+  it("takes care from the private conversation and chooses it before equally ready world news", async () => {
+    mocks.route = boundChannel();
+    mocks.history = [{ role: "user", at: NOW, content: "我今天有点累" }];
+    random.mockReturnValue(0.99);
+    setup({ proactiveDeliveryTarget: "wechat" });
+    await tick(NOW);
+    await tick(NOW + 19 * minute);
+    expect(mocks.runModel).not.toHaveBeenCalled();
+    addKnownStory(NOW + 20 * minute);
+    await tick(NOW + 20 * minute);
+    await tick(NOW + 21 * minute);
+    expect(mocks.runModel).toHaveBeenCalledOnce();
+    expect(entries().find(entry => entry.source === "user_care")).toMatchObject({ conversationId: "bound", status: "held", occurredAt: NOW });
+    expect(entries().find(entry => entry.source === "amphoreus")).toMatchObject({ status: "pending" });
+  });
+
+  it("stays quiet for group history and does not revive a disclosure after a newer reply", async () => {
+    mocks.route = boundChannel();
+    const report = { role: "user" as const, at: NOW, content: "我今天有点累" };
+    mocks.history = [{ ...report, channelSource: { chatType: "group" } }];
+    random.mockReturnValue(0.99);
+    setup({ proactiveDeliveryTarget: "wechat" });
+    await tick(NOW);
+    expect(entries()).toEqual([]);
+    mocks.history = [report];
+    await tick(NOW + minute);
+    expect(entries().find(entry => entry.source === "user_care")).toMatchObject({ status: "pending" });
+    mocks.history.push({ role: "user", at: NOW + 19 * minute, content: "现在好多了" });
+    lifecycle.proactiveConversationLifecycle.onUserMessage();
+    await tick(NOW + 20 * minute);
+    await tick(NOW + 21 * minute);
+    expect(mocks.runModel).not.toHaveBeenCalled();
+  });
+
+  it("considers a low-pressure check-in once the private chat has been quiet for thirty minutes", async () => {
+    mocks.route = boundChannel();
+    mocks.history = [{ role: "user", at: NOW - 30 * minute, content: "我刚冲了杯咖啡" }];
+    random.mockReturnValue(0.9999);
+    setup({ proactiveDeliveryTarget: "wechat" });
+    await tick(NOW - minute);
+    expect(entries()).toEqual([]);
+    await tick(NOW);
+    expect(entries().find(entry => entry.source === "standalone_care")).toMatchObject({ status: "pending" });
+    expect(mocks.runModel).not.toHaveBeenCalled();
+    await tick(NOW + minute);
+
+    const checkIn = entries().find(entry => entry.source === "standalone_care");
+    expect(checkIn).toMatchObject({ conversationId: "bound", sceneId: "standalone_care", replyBurden: "none", status: "held" });
+    expect(String(checkIn?.evidenceVersion)).toContain("2026-11-17");
+    expect(mocks.runModel).toHaveBeenCalledOnce();
+    const messages = mocks.runModel.mock.calls[0][0].messages as Array<{ role: string; content: string }>;
+    expect(messages.find(message => message.role === "system")?.content).toContain("[本轮日常关心]");
+    expect(messages.some(message => String(message.content).includes("我刚冲了杯咖啡"))).toBe(false);
+  });
+
+  it("keeps the previous evening's opportunity across midnight without requiring recent night activity", async () => {
+    const beforeMidnight = Date.UTC(2026, 10, 17, 15, 59); // 用户当地 11 月 17 日 23:59
+    vi.setSystemTime(beforeMidnight);
+    mocks.route = boundChannel();
+    mocks.history = [{ role: "user", at: beforeMidnight - 30 * minute, content: "刚把桌子收拾好" }];
+    random.mockReturnValue(0.9999);
+    setup({ proactiveDeliveryTarget: "wechat" });
+    await tick(beforeMidnight);
+    await tick(beforeMidnight + minute);
+
+    const checkIns = entries().filter(entry => entry.source === "standalone_care");
+    expect(checkIns).toHaveLength(1);
+    expect(checkIns[0]).toMatchObject({ evidenceVersion: "2026-11-17", status: "held" });
+    expect(mocks.runModel).toHaveBeenCalledOnce();
+    const messages = mocks.runModel.mock.calls[0][0].messages as Array<{ role: string; content: string }>;
+    expect(messages.find(message => message.role === "user")?.content).toContain("2026-11-18 00:00");
+  });
+
+  it("keeps overnight check-ins quiet when the configured quiet window crosses midnight", async () => {
+    const beforeMidnight = Date.UTC(2026, 10, 17, 15, 59);
+    vi.setSystemTime(beforeMidnight);
+    mocks.route = boundChannel();
+    mocks.history = [{ role: "user", at: beforeMidnight - 30 * minute, content: "刚把桌子收拾好" }];
+    random.mockReturnValue(0.9999);
+    setup({ proactiveDeliveryTarget: "wechat", proactiveQuietStartMinute: 23 * 60, proactiveQuietEndMinute: 2 * 60 });
+    await tick(beforeMidnight);
+    await tick(beforeMidnight + minute);
+    await tick(beforeMidnight + 2 * minute);
+
+    expect(entries().some(entry => entry.source === "standalone_care" && entry.wasEligible)).toBe(false);
+    expect(mocks.runModel).not.toHaveBeenCalled();
+  });
+
+  it("does not generate an overnight check-in once local time reaches five", async () => {
+    const beforeClosing = Date.UTC(2026, 10, 17, 20, 59); // 用户当地 11 月 18 日 04:59
+    vi.setSystemTime(beforeClosing);
+    mocks.route = boundChannel();
+    mocks.history = [{ role: "user", at: beforeClosing - 30 * minute, content: "刚把桌子收拾好" }];
+    random.mockReturnValue(0.9999);
+    setup({ proactiveDeliveryTarget: "wechat" });
+    await tick(beforeClosing);
+    expect(entries().find(entry => entry.source === "standalone_care")).toMatchObject({ evidenceVersion: "2026-11-17", status: "pending" });
+    await tick(beforeClosing + minute);
+
+    expect(mocks.runModel).not.toHaveBeenCalled();
+  });
+
+  it.each(["group", "unanswered"] as const)("does not start an everyday check-in with %s context", async scenario => {
+    mocks.route = boundChannel();
+    mocks.history = [{ role: "user", at: NOW - 3 * 60 * minute, content: "我刚冲了杯咖啡",
+      ...(scenario === "group" ? { channelSource: { chatType: "group" } } : {}) }];
+    if (scenario === "unanswered") {
+      mocks.saveState({ ...mocks.loadState(), unansweredCount: 1, lastProactiveAt: NOW - 60 * minute });
+    }
+    random.mockReturnValue(0.9999);
+    setup({ proactiveDeliveryTarget: "wechat" });
+    await tick(NOW);
+    await tick(NOW + minute);
+    expect(entries().some(entry => entry.source === "standalone_care")).toBe(false);
+    expect(mocks.runModel).not.toHaveBeenCalled();
+  });
+
+  it("has no standalone check-in at thirty minutes without a private conversation", async () => {
     setup(); lifecycle.proactiveConversationLifecycle.onUserMessage();
     lifecycle.proactiveConversationLifecycle.onConversationStarted(); lifecycle.proactiveConversationLifecycle.onConversationEnded();
     for (const elapsed of [29, 30, 31]) await tick(NOW + elapsed * minute);

@@ -1,4 +1,5 @@
 import { getRelationshipStore } from "../relationship/relationship-log";
+import { isGroupBoundConversation } from "../channels/conversation-binding-store";
 import { getAdapterForConfig } from "../orchestrator/vendors";
 import { modelMessageOrigin } from "../orchestrator/vendors/model-history";
 // 聊天会话 IPC 桥接：把 chats-store 的纯数据 API 暴露给渲染进程。
@@ -493,6 +494,9 @@ export async function registerChatsIpc(
       const entry = payload?.entry as chatsStore.PendingChatMessageInput | undefined;
       if (!sessionId || !entry || typeof entry !== "object") {
         return { ok: false, error: "invalid-payload" };
+      }
+      if (entry.companionReply !== undefined && isGroupBoundConversation(sessionId)) {
+        return { ok: false, error: "invalid-companion-reply" };
       }
       const result = (await chatsStore.enqueuePendingMessage(sessionId, entry));
       if (result.ok && result.enqueued) broadcastChanged(event.sender);

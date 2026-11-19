@@ -15,6 +15,9 @@ describe("unified Xilian persona domain", () => {
     expect(prompt).toContain("虚拟女友");
     expect(prompt).toContain("都是同一个昔涟");
     expect(prompt).toContain("关系亲密度不能自动扩大工具");
+    expect(prompt).toContain("身份被问到时");
+    expect(prompt).toContain("平时直接接话");
+    expect(prompt).toContain("群聊等公开场合照着公开话题聊");
   });
 
   it("creates bounded relationship and affect state", () => {

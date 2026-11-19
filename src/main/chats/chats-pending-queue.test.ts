@@ -61,6 +61,51 @@ describe("chats pending queue store", () => {
     mocks.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-pending-queue-"));
   });
 
+  it("恢复待发回应方式，只在同一认领存在且不写入已发送消息", async () => {
+    let store = await import("./chats-store");
+    await store.initialize();
+    const session = await store.createSession({ mode: "chat" });
+    const payload = entry({ companionReply: { mode: "listen", correction: "  这次先听我说  " } });
+    expect(await store.enqueuePendingMessage(session.id, payload)).toMatchObject({ ok: true, enqueued: true });
+    expect(await store.enqueuePendingMessage(session.id, {
+      ...payload, companionReply: { mode: "help" },
+    })).toEqual({ ok: false, error: "duplicate-id" });
+
+    await closeConversationDatabases();
+    vi.resetModules();
+    store = await import("./chats-store");
+    await store.initialize();
+    const companionReply = { mode: "listen", correction: "这次先听我说" };
+    expect(await store.getPendingMessages(session.id)).toMatchObject([{ companionReply }]);
+    expect(await store.markPendingAdjust(session.id, payload.id, "running")).toMatchObject({
+      ok: false, error: "invalid-companion-reply",
+    });
+    const claimed = await store.claimPendingMessage(session.id);
+    expect(claimed).toMatchObject({
+      claimed: true,
+      userMessage: { content: payload.rawContent },
+      session: { pendingDispatch: { messageId: payload.id, companionReply } },
+    });
+    expect(await store.getPendingDispatch(session.id)).toMatchObject({ companionReply });
+    await store.completePendingDispatch(session.id, payload.id);
+    const restored = await store.getSession(session.id);
+    expect(restored?.pendingDispatch).toBeUndefined();
+    expect(JSON.stringify(restored?.messages)).not.toContain(companionReply.correction);
+  });
+
+  it("拒绝工作会话及无效的回应指导", async () => {
+    const store = await import("./chats-store");
+    await store.initialize();
+    const chat = await store.createSession({ mode: "chat" });
+    const work = await store.createSession({ mode: "work" });
+    expect(await store.enqueuePendingMessage(chat.id, entry({
+      companionReply: { correction: "x".repeat(501) },
+    }))).toEqual({ ok: false, error: "invalid-companion-reply" });
+    expect(await store.enqueuePendingMessage(work.id, entry({
+      companionReply: { mode: "listen" },
+    }))).toEqual({ ok: false, error: "invalid-companion-reply" });
+  });
+
   it("入队后重启（重新 initialize）队列完整恢复，含顺序与附件引用", async () => {
     let store = await import("./chats-store");
     (await store.initialize());
@@ -1232,6 +1277,22 @@ describe("chats pending queue IPC", () => {
     vi.resetModules();
     mocks.handlers.clear();
     mocks.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-pending-ipc-"));
+  });
+
+  it("群聊绑定的会话可继续聊天，但拒绝写入私聊回应指导", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    const { getChannelConversationBindingStore } = await import("../channels/conversation-binding-store");
+    const { IPC } = await import("../../shared/ipc-channels");
+    await registerChatsIpc();
+    const event = { sender: {} };
+    const session = await mocks.handlers.get(IPC.CHATS_CREATE)!(event, { mode: "chat" }) as { id: string };
+    const bindings = getChannelConversationBindingStore();
+    bindings.observe({ sessionId: "qq-group", channel: "qq", chatId: "group", chatType: "group", lastAt: 1 });
+    bindings.bind("qq-group", session.id);
+    const enqueue = mocks.handlers.get(IPC.CHATS_PENDING_ENQUEUE)!;
+    expect(await enqueue(event, { sessionId: session.id, entry: entry({ companionReply: { mode: "listen" } }) }))
+      .toEqual({ ok: false, error: "invalid-companion-reply" });
+    expect(await enqueue(event, { sessionId: session.id, entry: entry() })).toMatchObject({ ok: true, enqueued: true });
   });
 
   it("入队/读取/删除三个 handler 透传结果且校验载荷", async () => {

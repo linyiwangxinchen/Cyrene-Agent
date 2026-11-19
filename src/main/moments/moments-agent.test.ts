@@ -168,14 +168,14 @@ describe("buildReplyMessages", () => {
     };
   }
 
-  it("回复链全量保留并标注回复关系，原始动态与触发摘录都进入上下文", () => {
+  it("公开回复看得清对方是谁，且不把私聊摘录带进评论区", () => {
     const feed = makeFeed();
+    feed.comments[1].author = "风堇";
     const messages = buildReplyMessages({
       persona: PERSONA,
       post: feed.post,
       comments: feed.comments,
       replyTargetId: "c2",
-      triggerExcerpt: "之前聊到的约定",
       localNow: new Date("2026-09-04T11:00:00"),
     });
 
@@ -183,8 +183,9 @@ describe("buildReplyMessages", () => {
     const user = String(messages[1].content);
     expect(user).toContain("[原始动态]");
     expect(user).toContain("昔涟发的动态");
-    expect(user).toContain("用户（回复昔涟）：用户回复昔涟");
-    expect(user).toContain("之前聊到的约定");
+    expect(user).toContain("风堇（回复昔涟）：用户回复昔涟");
+    expect(user).toContain("[本次要回应的评论]\n风堇：用户回复昔涟");
+    expect(user).not.toContain("之前聊到的约定");
     expect(user).toContain('"shouldReply"');
   });
 
@@ -345,7 +346,7 @@ describe("moments worldbook 注入与图片直发", () => {
         modelText: '{"shouldReply":true,"text":"好"}',
         worldbookText: WORLDBOOK,
         feed: {
-          post: makePost({ author: "cyrene", text: "昔涟动态" }),
+          post: makePost({ author: "cyrene", text: "昔涟动态", source: { type: "conversation", triggerConversationId: "private", triggerExcerpt: "只在私聊里谈过的约定" } }),
           comments: [
             makeComment({ id: "c1", author: "user", content: "你知道风堇吗", createdAt: 100 }),
           ],
@@ -357,6 +358,8 @@ describe("moments worldbook 注入与图片直发", () => {
       const scanned = h.buildWorldbookContext!.mock.calls[0][0] as string;
       expect(scanned).toContain("昔涟动态");
       expect(scanned).toContain("风堇");
+      expect(scanned).not.toContain("只在私聊里谈过的约定");
+      expect(h.runModel.mock.calls[0][0][1].content).not.toContain("只在私聊里谈过的约定");
     });
 
     it("generatePost 用会话摘录扫描，命中注入 system", async () => {
@@ -613,18 +616,19 @@ describe("createMomentsAgent 主动发帖", () => {
     return { agent, runModel, commitPost, matchMedia, buildPluginPromptContext, log };
   }
 
-  it("发帖决策成功时提交动态并把摘录固化为 triggerExcerpt", async () => {
+  it("发帖决策成功时按触发会话记录摘录归属", async () => {
     const h = makePostHarness({ modelText: '{"shouldPost":true,"text":"有人终于肯收工啦","wantImage":true}' });
     const posted = await h.agent.generatePost({
       summary: "[23:30] 用户：修完了\n[23:30] 昔涟：太棒了",
       recentCyrenePosts: [],
+      conversationId: "origin-private-chat",
     });
 
     expect(posted).toBe(true);
     expect(h.commitPost).toHaveBeenCalledWith({
       text: "有人终于肯收工啦",
       media: [],
-      source: { type: "conversation", triggerExcerpt: "[23:30] 用户：修完了\n[23:30] 昔涟：太棒了" },
+      source: { type: "conversation", triggerConversationId: "origin-private-chat", triggerExcerpt: "[23:30] 用户：修完了\n[23:30] 昔涟：太棒了" },
     });
   });
 

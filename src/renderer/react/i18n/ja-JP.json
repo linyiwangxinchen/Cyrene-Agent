@@ -27,6 +27,16 @@
     "logoutFailed": "ログアウトできませんでした。もう一度お試しください。"
   },
   "composer": {
+    "companionReply": {
+      "label": "次のメッセージへの応じ方",
+      "natural": "自然に話す",
+      "listen": "まず聞いて",
+      "reflect": "一緒に整理する",
+      "help": "最初の一歩を手伝う",
+      "light": "気軽な話をする",
+      "queued": "返信の指定があるため、新しいターンで送信されます",
+      "unavailable": "この会話では返信の指定を適用できません。応じ方と次の返答への調整を解除してから、再試行してください。"
+    },
     "placeholderChat": "キュレネはあなたとおしゃべりできるのを楽しみにしています♪",
     "greetingMorningEarly": "おはよう、{{name}}。新しい一日の始まりだよ♪",
     "greetingMorning": "おはよう、{{name}}。何か手伝ってほしいことはある？♪",

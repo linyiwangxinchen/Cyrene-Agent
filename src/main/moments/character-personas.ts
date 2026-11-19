@@ -15,11 +15,11 @@ import type { ChatMessage } from "../orchestrator/vendors";
 import {
   MOMENT_MAX_COMMENT_TEXT_LENGTH,
   type CharacterTimeline,
-  type MomentAuthor,
   type MomentComment,
   type MomentPost,
 } from "../../shared/moments-types";
 import { appendImageBlocks, formatClock, formatNow, type MomentPostImage } from "./moments-agent";
+import { formatMomentAuthor as authorLabel } from "./moments-context";
 
 // ── 档位与概率映射 ──────────────────────────────────────────────
 // 三组数值刻意不同：活跃度是"刷到动态"的抽签权重，评论骰是"走模型表态"的概率，
@@ -286,13 +286,6 @@ function loadInjectionHeader(promptDirectories?: string[]): string {
 
 /** 时间线里的动态正文摘要长度：只求"记得大概在聊什么"，不整段复述 */
 const TIMELINE_POST_EXCERPT_CHARS = 60;
-
-/** 评论区显示作者名：用户/昔涟用习惯称呼，角色用本名 */
-function authorLabel(author: MomentAuthor): string {
-  if (author === "user") return "用户";
-  if (author === "cyrene") return "昔涟";
-  return author;
-}
 
 function excerpt(text: string): string {
   const cleaned = text.trim();

@@ -388,6 +388,64 @@
   gap: 3px;
 }
 
+.cy-chat-companion-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  width: 100%;
+  margin-bottom: 6px;
+  padding-inline: 4px;
+  box-sizing: border-box;
+}
+
+.cy-companion-reply-mode {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--rb-border-soft);
+  border-radius: 8px;
+  color: var(--rb-text-secondary);
+}
+
+.cy-companion-reply-mode:hover,
+.cy-companion-reply-mode:focus-within,
+.cy-companion-reply-mode.is-selected {
+  border-color: var(--rb-border-focus);
+  color: var(--rb-accent);
+  background: var(--rb-surface-hover);
+}
+
+.cy-companion-reply-mode select {
+  appearance: none;
+  min-height: 32px;
+  padding: 0 28px 0 31px;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  color: inherit;
+  font: 500 13px/1.2 var(--rb-font-sans, sans-serif);
+  cursor: pointer;
+}
+
+.cy-companion-reply-mode option {
+  color: var(--rb-text-primary);
+  background: var(--rb-surface-elevated);
+}
+
+.cy-companion-reply-mode > svg {
+  position: absolute;
+  pointer-events: none;
+}
+
+.cy-companion-reply-mode > svg:first-child {
+  left: 8px;
+}
+
+.cy-companion-reply-mode > svg:last-child {
+  right: 8px;
+}
+
 .cy-composer__icon-button:disabled {
   color: var(--rb-text-disabled);
   cursor: wait;

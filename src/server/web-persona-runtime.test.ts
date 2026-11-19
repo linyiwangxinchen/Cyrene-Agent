@@ -42,6 +42,47 @@ describe("Web persona parity and continuity", () => {
     expect(built.metadata.stablePrefix).toContain("不得声称已操作文件");
   });
 
+  it("给普通私聊加入口语回复约束，用户这句话仍是最后一条消息", async () => {
+    const f = await fixture();
+    const built = await f.build();
+    expect(built.metadata.stablePrefix).toContain("先接住用户最后一句的具体意思");
+    expect(built.metadata.stablePrefix).not.toContain("三千万篇相似而不相同的故事");
+    expect(built.messages.at(-1)).toMatchObject({ role: "user", content: expect.stringContaining("你好") });
+    await f.features.patchProfile({ callPreference: "私下称呼" });
+    await f.features.patchMemory({ l0: { permanentNote: "私下话题" } });
+    await f.runtime.updateRelationshipPreferences({ userLabel: "专属昵称", relationshipMode: "partner" });
+    const session = (await f.store.get(f.session.id))!;
+    session.messages[0].channelSource = { channel: "qq", chatType: "group" };
+    const group = await f.build({ session, channel: "qq" });
+    expect(group.metadata.stablePrefix).not.toContain("【私聊怎么说】");
+    expect(group.metadata.stablePrefix).toContain("【公开聊天】");
+    const groupContext = JSON.stringify(group.messages);
+    for (const privateText of ["私下称呼", "私下话题", "专属昵称", "【昔涟虚拟生活快照】"]) {
+      expect(groupContext).not.toContain(privateText);
+    }
+  });
+
+  it("只根据当前私聊原话增加语气提示，忽略模型附加内容和历史", async () => {
+    const f = await fixture();
+    const currentUserText = "今天太累了";
+    const session = (await f.store.get(f.session.id))!;
+    session.messages[0].content = "昨天好难过";
+    const prompt = "帮我看一下\n\n【本轮附件内容】今天太累了";
+    const realTurn = await f.build({ session, prompt, currentUserText });
+    expect(JSON.stringify(realTurn.messages)).toContain("【本轮语气参考】");
+    expect(JSON.stringify(realTurn.messages)).toContain("放轻语气，少让对方费力解释");
+
+    for (const options of [
+      { session, prompt },
+      { session, prompt, currentUserText: "帮我看一下" },
+      { session: { ...session, purpose: "proactive-chat" }, prompt, currentUserText },
+      { session: { ...session, mode: "work" }, prompt, currentUserText },
+      { session: { ...session, messages: [{ ...session.messages[0], channelSource: { channel: "wechat", chatType: "group" } }] }, prompt, currentUserText },
+    ]) {
+      expect(JSON.stringify((await f.build(options)).messages)).not.toContain("【本轮语气参考】");
+    }
+  });
+
   it.each(STYLE_IDS)("uses %s style without changing core identity", async styleId => {
     const f = await fixture();
     const baseline = await f.build();
@@ -98,7 +139,7 @@ describe("Web persona parity and continuity", () => {
     const built = await f.build();
     const context = String(built.messages.at(-2)?.content);
     expect(context).toContain("称呼偏好：夏夏"); expect(context).toContain("不喜欢被叫宝宝");
-    expect(context).toContain("菜园项目"); expect(context).toContain("【近期关系线索】");
+    expect(context).toContain("菜园项目"); expect(context).toContain("【昔涟的相处偏好】");
     expect(context).toContain("ja-JP"); expect(context).not.toContain("invalid/timezone");
     const reloaded = new WebPersonaRuntime(f.dataDir);
     expect(String((await f.build({ config: { ...f.config, model: "different-model" } })).metadata.stablePrefix)).toBe(built.metadata.stablePrefix);
@@ -107,7 +148,7 @@ describe("Web persona parity and continuity", () => {
     const settings = await f.store.getSettings(); settings.config.memoryMode = "off";
     const off = String((await f.build({ settings })).messages.at(-2)?.content);
     expect(off).toContain("称呼偏好：夏夏");
-    expect(off).not.toContain("菜园项目"); expect(off).not.toContain("【近期关系线索】");
+    expect(off).not.toContain("菜园项目"); expect(off).toContain("【昔涟的相处偏好】");
   });
 
   it("exposes the same persona contract and user-editable relationship preferences", async () => {

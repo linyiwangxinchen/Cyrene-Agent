@@ -1,7 +1,7 @@
 /** One identity across all task modes and transports. No Electron dependency. */
 import type { BondProgressState } from "./companion-progress";
 import type { XilianWorldView } from "./xilian-world";
-import type { WorldHistoryPage, WorldHistoryQuery } from "./amphoreus-world";
+import type { PersonalAction, WorldHistoryPage, WorldHistoryQuery } from "./amphoreus-world";
 
 export type RelationshipStage = "new" | "familiar" | "close" | "long_term";
 /**
@@ -10,6 +10,26 @@ export type RelationshipStage = "new" | "familiar" | "close" | "long_term";
  */
 export type RelationshipMode = "assistant" | "friend" | "companion" | "partner";
 export type CompanionStyle = "natural" | "gentle" | "lively" | "concise";
+export type CompanionReplyMode = "listen" | "reflect" | "help" | "light";
+export const COMPANION_CORRECTION_MAX_LENGTH = 500;
+
+/** 只影响当前待发消息的回复方式。 */
+export interface CompanionReplyInput {
+  mode?: CompanionReplyMode;
+  correction?: string;
+}
+
+export function normalizeCompanionReply(value: unknown): CompanionReplyInput | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const { mode, correction } = value as Partial<CompanionReplyInput>;
+  if (mode !== undefined && mode !== "listen" && mode !== "reflect" && mode !== "help" && mode !== "light") return undefined;
+  if (correction !== undefined && typeof correction !== "string") return undefined;
+  const note = correction?.trim();
+  if (note && note.length > COMPANION_CORRECTION_MAX_LENGTH) return undefined;
+  if (!mode && !note) return undefined;
+  return { ...(mode ? { mode } : {}), ...(note ? { correction: note } : {}) };
+}
+
 export type CapabilityPreset = "inherit" | "companion" | "basic" | "shared_life" | "full";
 export interface RelationshipState {
   id: string;
@@ -129,6 +149,18 @@ export type CompanionCommand = { expectedRevision: number } & (
   | { type: "commitment_status"; id: string; status: CompanionCommitmentStatus; evidence?: string }
   | { type: "commitment_delete"; id: string }
 );
+
+export interface CompanionWorldSuggestionInput {
+  conversationId: string;
+  id: string;
+  title: string;
+  intent: string;
+}
+
+export type CompanionWorldSuggestion = Pick<PersonalAction, "id" | "title" | "status" | "startsAt" | "endsAt" | "outcome" | "reason">;
+
+export type CompanionWorldSuggestionResult = { action: CompanionWorldSuggestion } | { reason: "unavailable" };
+
 export interface CompanionApi {
   get(): Promise<CompanionSnapshot>;
   getWorld(): Promise<XilianWorldView>;
@@ -136,6 +168,9 @@ export interface CompanionApi {
   getWorldHistory(query?: WorldHistoryQuery): Promise<WorldHistoryPage>;
   getWorldUpdate(cursor?: string): Promise<{ cursor: string; clock?: import("./amphoreus-world").AmphoreusClock; view?: XilianWorldView }>;
   getWorldArtifact(id: string): Promise<{ dataUrl: string } | null>;
+  getWorldSuggestions(conversationId: string): Promise<CompanionWorldSuggestion[]>;
+  suggestWorldAction(input: CompanionWorldSuggestionInput): Promise<CompanionWorldSuggestionResult>;
+  withdrawWorldSuggestion(conversationId: string, actionId: string): Promise<CompanionWorldSuggestion | null>;
   update(command: CompanionCommand): Promise<CompanionSnapshot>;
   export(): Promise<string>;
 }

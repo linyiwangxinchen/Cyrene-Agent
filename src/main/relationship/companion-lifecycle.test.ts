@@ -6,6 +6,13 @@ import { RelationshipLogStore } from "./relationship-log-core";
 import { registerCompanionIpc } from "../persona/companion-ipc";
 import { IPC } from "../../shared/ipc-channels";
 
+vi.mock("../channels/conversation-binding-store", () => ({
+  isGroupBoundConversation: (id: string) => id === "group-mirror",
+}));
+vi.mock("../chats/chats-store", () => ({
+  getSessionRecord: async (id: string) => id === "deleted-chat" ? null : { id },
+}));
+
 describe("companion lifecycle and transport", () => {
   let root: string;
   let file: string;
@@ -57,11 +64,31 @@ describe("companion lifecycle and transport", () => {
   }, 20_000); // 100 real SQLite checkpoints can exceed 5 seconds on Windows disks.
   it("isolates conversations and refuses group writes/injection", async () => {
     await store.recordTurn(turn);
-    expect(await store.buildContext("bound-chat")).toContain("焦虑");
-    expect(await store.buildContext("other-chat")).not.toContain("焦虑");
-    expect(await store.buildContext("bound-chat", false)).toBe("");
+    expect(await store.buildContext("bound-chat")).not.toContain("【本轮语气参考】");
+    expect(await store.buildContext("other-chat")).not.toContain("【本轮语气参考】");
+    expect(await store.buildContext("bound-chat", false, turn.userText)).toBe("");
     expect(await store.recordTurn({ ...turn, sourceEventId: "group", privateContext: false })).toBeNull();
     expect(JSON.parse(await store.exportData()).entries).toHaveLength(1);
+  });
+  it("uses the selected closeness and only the current private message for speaking cues", async () => {
+    await store.recordTurn(turn);
+    await store.updatePreferences({ relationshipMode: "partner", closeness: 0.13, recordHistory: false });
+    const previous = await store.snapshot();
+
+    const context = await store.buildContext("bound-chat", true, "我现在有点累");
+    expect(context).toContain("按对方选的伴侣式相处");
+    expect(context).toContain("内部亲近度 13/100");
+    expect(context).toContain("以对方原话、原话说的时间和明确要求为准");
+    expect(context).toContain("少让对方费力解释");
+    expect(context).not.toContain("担心的事");
+    expect(await store.buildContext("bound-chat", true, "我不累，想随便聊聊")).not.toContain("【本轮语气参考】");
+    expect(await store.buildContext("bound-chat", true, "她说“我好累啊”")).not.toContain("【本轮语气参考】");
+    expect((await store.snapshot()).revision).toBe(previous.revision);
+
+    await store.updatePreferences({ paused: true });
+    const paused = await store.buildContext("bound-chat", true, "我现在有点累");
+    expect(paused).not.toContain("内部亲近度");
+    expect(paused).not.toContain("【本轮语气参考】");
   });
   it("pause and history consent gate recording and context; decay works without another message", async () => {
     vi.useFakeTimers(); vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
@@ -89,14 +116,16 @@ describe("companion lifecycle and transport", () => {
     await restored.command({ type: "reset_relationship", expectedRevision: 3 });
     expect((await restored.snapshot()).permissions).toMatchObject({ paused: true, deniedTools: ["run_shell"] });
   });
-  it("creates at most one labeled fictional diary per day and does not resurrect deleted notes", async () => {
+  it("keeps the fictional diary in settings history and never adds it to a conversation prompt", async () => {
     await store.updatePreferences({ innerLifeEnabled: true });
-    await store.buildContext("a"); await store.buildContext("b");
-    let snapshot = await store.snapshot();
+    expect(await store.buildContext("a")).not.toContain("虚构角色小记");
+    expect(await store.buildContext("b")).not.toContain("虚构角色小记");
+    const snapshot = await store.snapshot();
     const diaries = snapshot.records.filter(item => item.kind === "diary");
     expect(diaries).toHaveLength(1); expect(diaries[0].text).toContain("虚构");
     await store.command({ type: "delete_record", id: diaries[0].id, expectedRevision: snapshot.revision });
     expect(await store.buildContext("a")).not.toContain("虚构角色小记");
+    expect((await store.snapshot()).records.filter(item => item.kind === "diary")).toHaveLength(0);
   });
   it("exposes real shared IPC commands with validation, export and restart persistence", async () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();
@@ -113,6 +142,26 @@ describe("companion lifecycle and transport", () => {
     expect(JSON.parse(await handlers.get(IPC.COMPANION_EXPORT)!() as string).format).toBe("cyrene.relationship.v1");
     expect(await handlers.get(IPC.COMPANION_WORLD_GET)!()).toEqual({ state: { worldDate: "2026-11-07" }, timeline: [], diary: [], artifacts: [], locations: [] });
     await expect(Promise.resolve(handlers.get(IPC.COMPANION_UPDATE)!({}, { type: "repair", note: "missing revision" }))).rejects.toThrow();
+  });
+  it("keeps new repairs and followups confined to existing private conversations", async () => {
+    const handlers = new Map<string, (...args: any[]) => unknown>();
+    registerCompanionIpc({ handle: (id, fn) => { handlers.set(id, fn); }, on() {}, dispose() {}, removeHandler() {} }, store);
+    const update = handlers.get(IPC.COMPANION_UPDATE)!;
+    const expectedRevision = (await store.snapshot()).revision;
+    await expect(update({}, {
+      type: "repair", expectedRevision, conversationId: "group-mirror", note: "私人偏好",
+    })).rejects.toThrow("群聊");
+    await expect(update({}, {
+      type: "followup_save", expectedRevision, conversationId: "group-mirror", topic: "私人事项",
+      nextEligibleAt: Date.now() + 60_000,
+    })).rejects.toThrow("群聊");
+    await expect(update({}, {
+      type: "followup_save", expectedRevision, conversationId: "deleted-chat", topic: "被删除的会话",
+      nextEligibleAt: Date.now() + 60_000,
+    })).rejects.toThrow("会话不存在");
+    expect((await store.snapshot()).revision).toBe(expectedRevision);
+    await update({}, { type: "repair", expectedRevision, conversationId: "private-chat", note: "私人偏好" });
+    expect(await store.buildContext("private-chat")).toContain("私人偏好");
   });
   it("routes explicit narrative retries without toggling or accepting malformed retry commands", () => {
     const handlers = new Map<string, (...args: any[]) => unknown>();

@@ -20,7 +20,11 @@ vi.mock("../orchestrator", () => ({ buildAlwaysOnContext: async () => "", buildM
 vi.mock("../settings-store", () => ({ loadUserProfile: () => ({ timezone: "UTC" }) }));
 vi.mock("../prompts/prompt-loader", () => ({ loadPromptFile: () => "" }));
 vi.mock("./proactive-state-store", () => ({ loadProactiveState: () => mocks.state, saveProactiveState: vi.fn() }));
-vi.mock("./proactive-trigger", () => ({ createProactiveTrigger: vi.fn(), getZonedDateParts: () => ({ year: 2026, month: 11, day: 4, hour: 14, minute: 0 }) }));
+vi.mock("./proactive-trigger", () => ({
+  createProactiveTrigger: vi.fn(),
+  getZonedDateParts: () => ({ year: 2026, month: 11, day: 4, hour: 14, minute: 0 }),
+  formatLocalDate: () => "2026-11-04",
+}));
 vi.mock("./proactive-service", () => ({ createProactiveChatService: (deps: ProactiveChatServiceDeps) => { mocks.deps = deps; return {}; } }));
 
 import { createProactiveLifecycle } from "./proactive-lifecycle";

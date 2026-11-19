@@ -1,0 +1,53 @@
+.cy-chat-followups-trigger {
+  gap: 5px;
+}
+
+.cy-chat-followups-trigger:disabled {
+  color: var(--rb-text-disabled);
+  cursor: default;
+}
+
+.cy-chat-followups {
+  display: grid;
+  gap: 14px;
+}
+
+.cy-chat-followups__description {
+  margin: 0;
+  color: var(--rb-text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.cy-chat-followups__form,
+.cy-chat-followups__form label,
+.cy-chat-followups__record {
+  display: grid;
+  gap: 7px;
+}
+
+.cy-chat-followups__form {
+  gap: 12px;
+}
+
+.cy-chat-followups__actions,
+.cy-chat-followups__record-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.cy-chat-followups__records {
+  max-block-size: min(250px, 34vh);
+  overflow-y: auto;
+}
+
+.cy-chat-followups__record {
+  padding-block: 12px;
+  border-block-start: 1px solid var(--rb-border-subtle);
+  overflow-wrap: anywhere;
+}
+
+.cy-chat-followups__record small {
+  color: var(--rb-text-secondary);
+}

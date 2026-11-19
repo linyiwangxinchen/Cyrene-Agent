@@ -163,6 +163,40 @@ describe("persistent initiative opportunities", () => {
     expect(next?.id).toBe("second");
   });
 
+  it("chooses an agreed follow-up and then user care ahead of ready world content", () => {
+    const store = new InitiativeOpportunityStore(file, () => 0.99);
+    const world = opportunity({ score: 98 });
+    const care = opportunity({ id: "care", source: "user_care", score: 85 });
+    const appointment = opportunity({ id: "appointment", source: "followup", score: 82 });
+    const opportunities = [world, care, appointment];
+    store.select({ now: NOW, opportunities, eligible: true });
+    for (const [index, expected] of [appointment, care, world].entries()) {
+      const now = NOW + (index + 1) * minute;
+      const selected = store.select({ now, opportunities, eligible: true });
+      expect(selected?.id).toBe(expected.id);
+      store.resolve(selected!.key, "send", { now });
+    }
+  });
+
+  it("requeues only unsent selected drafts and retains the consumed daily attempt", () => {
+    const store = new InitiativeOpportunityStore(file, () => 0.99);
+    const item = opportunity();
+    const dayKey = "2026-11-17";
+    const tick = (now: number) => store.select({ now, opportunities: [item], eligible: true, dayKey, dailyAttemptLimit: 2 });
+    tick(NOW);
+    const first = tick(NOW + minute)!;
+    expect(store.markAttempt(first.key, NOW + minute, dayKey, 2)).toBe(true);
+    expect(store.requeue(first.key, NOW + minute)).toBe(true);
+    expect(store.find(first.key)).toMatchObject({ status: "pending", accumulated: 0, threshold: first.threshold });
+    expect(tick(NOW + 2 * minute)).toBeUndefined();
+    const redraft = tick(NOW + 3 * minute)!;
+    expect(redraft.key).toBe(first.key);
+    expect(store.markAttempt(redraft.key, NOW + 3 * minute, dayKey, 2)).toBe(true);
+    expect(store.resolve(redraft.key, "send", { now: NOW + 3 * minute })).toBe(true);
+    expect(store.requeue(redraft.key, NOW + 4 * minute)).toBe(false);
+    expect(store.find(redraft.key)).toMatchObject({ status: "sent" });
+  });
+
   it("holds unchanged evidence without reattempts, exposes read-only thoughts and permits genuine new evidence", () => {
     const random = vi.fn(() => 0.99);
     const store = new InitiativeOpportunityStore(file, random);

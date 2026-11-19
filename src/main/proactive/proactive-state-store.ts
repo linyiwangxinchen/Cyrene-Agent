@@ -3,7 +3,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
-import type { ProactiveCandidate, ProactiveCommitIntent, ProactiveState, ProactiveDeliveryContext } from "./proactive-types";
+import { normalizeDurableCandidate, type ProactiveCommitIntent, type ProactiveState, type ProactiveDeliveryContext } from "./proactive-types";
 
 export function defaultProactiveState(): ProactiveState {
   return {
@@ -36,25 +36,16 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
     || typeof value.intentAt !== "number" || !Number.isFinite(value.intentAt)
     || typeof value.text !== "string" || !value.text
     || (value.source !== "model" && value.source !== "fallback")
-    || !isRecord(value.candidate)
-    || typeof value.candidate.sceneId !== "string"
-    || typeof value.candidate.score !== "number" || !Number.isFinite(value.candidate.score)
-    || typeof value.candidate.sceneCooldownMs !== "number" || !Number.isFinite(value.candidate.sceneCooldownMs)) return undefined;
-  const candidate: ProactiveCandidate = {
-    sceneId: value.candidate.sceneId,
-    score: value.candidate.score,
-    sceneCooldownMs: value.candidate.sceneCooldownMs,
-    ...(typeof value.candidate.momentId === "string" ? { momentId: value.candidate.momentId.slice(0, 200) } : {}),
-    ...(typeof value.candidate.momentSummary === "string" ? { momentSummary: value.candidate.momentSummary.slice(0, 1000) } : {}),
-    ...(typeof value.candidate.opportunityId === "string" ? { opportunityId: value.candidate.opportunityId.slice(0, 300) } : {}),
-    ...(typeof value.candidate.sourceEventId === "string" ? { sourceEventId: value.candidate.sourceEventId.slice(0, 300) } : {}),
-    ...(typeof value.candidate.evidenceVersion === "string" ? { evidenceVersion: value.candidate.evidenceVersion.slice(0, 100) } : {}),
-    ...(["none", "light", "question"].includes(value.candidate.replyBurden as string) ? { replyBurden: value.candidate.replyBurden as ProactiveCandidate["replyBurden"] } : {}),
-  };
+    || !isRecord(value.candidate)) return undefined;
+  const candidate = normalizeDurableCandidate(value.candidate);
+  if (!candidate) return undefined;
   const context = value.deliveryContext;
   const deliveryContext: ProactiveDeliveryContext | undefined = isRecord(context) && Number.isSafeInteger(context.relationshipRevision)
+    && ((context.composedAt === undefined && context.timezone === undefined)
+      || typeof context.composedAt === "number" && Number.isFinite(context.composedAt) && typeof context.timezone === "string" && context.timezone.length <= 100)
     && ["conversationId", "sessionId", "targetId", "threadId", "followupId"].every(key => context[key] === undefined || (typeof context[key] === "string" && context[key].length <= 300))
     ? { relationshipRevision: context.relationshipRevision as number,
+      ...(typeof context.composedAt === "number" && typeof context.timezone === "string" ? { composedAt: context.composedAt, timezone: context.timezone } : {}),
       ...Object.fromEntries(["conversationId", "sessionId", "targetId", "threadId", "followupId"].filter(key => typeof context[key] === "string").map(key => [key, context[key]])) } : undefined;
   if (value.deliveryContext !== undefined && !deliveryContext) return undefined;
   return {

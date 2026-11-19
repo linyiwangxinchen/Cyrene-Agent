@@ -1,0 +1,11 @@
+.cy-chat-companion-correction {
+  display: grid;
+  width: min(320px, calc(100vw - 48px));
+  gap: 8px;
+}
+
+.cy-chat-companion-correction__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

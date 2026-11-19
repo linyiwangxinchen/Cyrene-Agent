@@ -78,6 +78,7 @@ export const WEB_CORE_INVOKE_CHANNELS = new Set<string>([
   IPC.MODEL_CONFIG_GET, IPC.RUNTIME_STATE_GET,
   IPC.EMBEDDING_SET_MODEL, IPC.RERANKER_SET_MODE, IPC.RERANKER_GET_STATUS, IPC.MODEL_GET_INSTALL_STATUS,
   IPC.COMPANION_GET, IPC.COMPANION_WORLD_GET, IPC.COMPANION_WORLD_CONFIGURE, IPC.COMPANION_WORLD_HISTORY, IPC.COMPANION_WORLD_ARTIFACT, IPC.COMPANION_WORLD_UPDATE, IPC.COMPANION_UPDATE, IPC.COMPANION_EXPORT,
+  IPC.COMPANION_WORLD_SUGGESTIONS_GET, IPC.COMPANION_WORLD_SUGGESTION_ADD, IPC.COMPANION_WORLD_SUGGESTION_WITHDRAW,
   IPC.MEMORY_GOVERNANCE_EXPLAIN, IPC.MEMORY_GOVERNANCE_CHANGE, IPC.MEMORY_GOVERNANCE_EXPORT,
   IPC.USER_GET_PROFILE, IPC.USER_SAVE_PROFILE, IPC.USER_GET_AVATAR, IPC.CYRENE_AVATAR_GET, IPC.CYRENE_AVATAR_UPLOAD, IPC.CYRENE_AVATAR_RESET,
   IPC.MEMORY_PANEL_GET_DATA, IPC.MEMORY_PANEL_GET_SUMMARY, IPC.MEMORY_PANEL_SAVE_L0, IPC.MEMORY_PANEL_SAVE_L1,
@@ -608,6 +609,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
       result = await requestSessionModel(store, conversationId, modelPrompt, {
         persona,
         channel: message.channel,
+        currentUserText: message.chatType === "group" ? undefined : message.text,
         media,
         imageAttachments: attachmentInputs.imageAttachments,
       });
@@ -1193,6 +1195,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
         const assistantId = stringValue(body.assistantTurnId, randomBytes(12).toString("hex"));
         const user = body.currentUser && typeof body.currentUser === "object" ? body.currentUser as Record<string, unknown> : {};
         const text = stringValue(user.text, stringValue(user.visibleContent));
+        const currentUserText = body.transcriptRewind ? undefined : stringValue(user.visibleContent);
         const session = await store.get(sessionId);
         if (!session) { writeJson(response, 404, { success: false, error: "SESSION_NOT_FOUND" }); return; }
         if (session.messages.some((message) => message.id === assistantId) || [...running.values()].some((run) => run.sessionId === sessionId && run.assistantId === assistantId)) {
@@ -1234,7 +1237,7 @@ export function createWebServer(options: WebServerOptions = {}): WebServerHandle
           let reasoningStarted = false;
           const state = running.get(runId)!;
           try {
-            const result = await requestSessionModel(store, sessionId, text.trim(), { persona, styleId: body.styleId, legacyStyle: body.style, signal: state.controller.signal, media, onDelta: (delta) => {
+            const result = await requestSessionModel(store, sessionId, text.trim(), { persona, currentUserText, styleId: body.styleId, legacyStyle: body.style, signal: state.controller.signal, media, onDelta: (delta) => {
               if (state.cancelled) return;
               if (delta.type === "text_delta") { accumulated += delta.delta; emit({ type: "TEXT_MESSAGE_CONTENT", messageId: assistantId, delta: delta.delta }); }
               if (delta.type === "reasoning_delta") {

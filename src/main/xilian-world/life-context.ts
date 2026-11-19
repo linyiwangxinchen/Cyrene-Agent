@@ -7,6 +7,7 @@ import {
 } from "../../shared/xilian-world";
 import { getXilianDateKey, getZonedDateParts, xilianStableHash } from "./schedule";
 import { formatAmphoreusContext } from "../amphoreus-world/engine";
+import { isLegacyPersonalOutcome } from "../amphoreus-world/personal-life";
 
 export interface XilianLifeContextInput {
   state: XilianWorldState;
@@ -62,12 +63,6 @@ function currentEvent(input: XilianLifeContextInput): XilianTimelineEvent | unde
     ?? [...input.timeline].filter((event) => event.status === "completed").sort((a, b) => b.occurredAt - a.occurredAt)[0];
 }
 
-function recentCompleted(input: XilianLifeContextInput, current: XilianTimelineEvent | undefined): XilianTimelineEvent | undefined {
-  return [...input.timeline]
-    .filter((event) => event.status === "completed" && event.id !== current?.id)
-    .sort((a, b) => b.occurredAt - a.occurredAt)[0];
-}
-
 export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLifeSnapshot {
   const restricted = (event: XilianTimelineEvent | undefined): boolean => {
     if (!event?.id.startsWith("amphoreus:personal:user:")) return false;
@@ -75,14 +70,19 @@ export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLi
     return !action || !!action.conversationId && action.conversationId !== input.conversationId;
   };
   const rawCurrent = currentEvent(input);
-  const current = restricted(rawCurrent) && rawCurrent ? { ...rawCurrent, activityTitle: "留一点自己的时间，做一件私人的小事", summary: "正在照顾自己的安排" } : rawCurrent;
-  const recent = recentCompleted(input, current);
+  const privateCurrent = restricted(rawCurrent);
+  const current = privateCurrent && rawCurrent ? { ...rawCurrent, activityTitle: "留一点自己的时间，做一件私人的小事", summary: "正在照顾自己的安排" } : rawCurrent;
+  const recent = input.timeline
+    .filter((event) => event.status === "completed" && event.id !== current?.id
+      && !restricted(event) && !isLegacyPersonalOutcome(event.outcome ?? event.summary))
+    .sort((a, b) => b.occurredAt - a.occurredAt)[0];
   const rawNext = input.state.nextPlannedEvent;
   const next = restricted(rawNext) && rawNext ? { ...rawNext, activityTitle: "为自己的私事留一点时间" } : rawNext;
   const location = eventLocation(current);
   const arc = XILIAN_WORLD_ARCS[input.state.activeArcId];
   const personal = input.world?.personal;
-  const knownExperiences = personal?.experiences.filter((memory) => !memory.conversationId || memory.conversationId === input.conversationId);
+  const knownExperiences = personal?.experiences.filter((memory) => (!memory.conversationId || memory.conversationId === input.conversationId)
+    && !isLegacyPersonalOutcome(memory.text));
   return {
     worldDate: getXilianDateKey(new Date(input.now), input.timezone),
     localTime: localTime(input.now, input.timezone),
@@ -90,7 +90,7 @@ export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLi
     ...(input.world ? { worldContext: formatAmphoreusContext(input.world, input.conversationId) } : {}),
     location,
     currentActivity: current?.activityTitle ?? "还在决定今天先从哪一页开始",
-    recentEvent: knownExperiences?.at(-1)?.text ?? (!restricted(recent) ? recent?.outcome ?? recent?.summary : undefined) ?? "今天还没有完成可以回看的生活事件",
+    recentEvent: knownExperiences?.at(-1)?.text ?? recent?.outcome ?? recent?.summary ?? "今天还没有完成可以回看的生活事件",
     nextPlan: next?.activityTitle ?? "晚上留一点安静时间整理心情",
     mood: personal?.mood ?? current?.mood ?? "平稳，带着一点期待",
     energy: Math.max(0, Math.min(100, Math.floor((personal?.energy ?? (input.world ? input.world.residentStates.find((r) => r.id === "cyrene")?.energy : input.energy)) ?? current?.energyAfter ?? 70))),
@@ -105,7 +105,7 @@ export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLi
       "不要出现第二个人物、文字水印、相机 UI 或未授权品牌",
       "不要把虚构世界地点画成现实城市，也不要添加与当前活动冲突的道具",
     ],
-    sourceEventId: current?.id ?? "xilian:none",
+    sourceEventId: privateCurrent ? "xilian:none" : current?.id ?? "xilian:none",
   };
 }
 

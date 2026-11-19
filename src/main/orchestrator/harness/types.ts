@@ -240,6 +240,8 @@ export interface HarnessInput {
   systemPrompt: string;
   /** 缓存友好的提示词分层；Todo 等每轮状态不得放入 stablePrefix。 */
   promptLayers?: import("../prompt-layers").PromptLayers;
+  /** 仅追加到模型请求尾部，独立于 transcript 中的运行上下文。 */
+  companionReplyContext?: string;
   /**
    * stablePrefix 的人设层/工具层文本拆分，供上下文容量快照分类；
    * 缺省时整个 stablePrefix 计入系统提示词类。

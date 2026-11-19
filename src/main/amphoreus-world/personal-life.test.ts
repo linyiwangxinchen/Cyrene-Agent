@@ -10,7 +10,7 @@ import { advanceResidents } from "./life";
 import { narrativeMessages, parseDailyPlan, parsePersonalPlans } from "./narrative";
 import { createAmphoreusService } from "./service";
 import { plan } from "./test-fixtures";
-import { buildXilianLifeSnapshot, formatXilianLifeContext } from "../xilian-world/life-context";
+import { buildXilianLifeSnapshot, buildXilianSelfiePrompt, formatXilianLifeContext } from "../xilian-world/life-context";
 
 let root: string, now: number;
 const at = (hour: string) => Date.parse(`2026-11-17T${hour}:00Z`);
@@ -31,6 +31,8 @@ describe("a private life with committed evidence", () => {
     now = action.endsAt; store.advance({ now, timezone: "UTC" });
     const personal = store.worldView().amphoreus!.personal!;
     expect(personal.actions[0]).toMatchObject({ status: "completed", version: 2 });
+    expect(personal.actions[0]).not.toHaveProperty("artifact");
+    expect(personal.actions[0].outcome).not.toContain("还有一点没想明白");
     expect(personal.goals.find((g) => g.id === action.goalId)).toMatchObject({ progress: 8, lastActionId: action.id });
     expect(personal.changes.filter((c) => c.eventId === action.id)).toHaveLength(1);
     expect(personal.experiences.find((m) => m.eventId === action.id)).toMatchObject({ sourceVersion: 2, occurredAt: action.endsAt });
@@ -110,6 +112,28 @@ describe("a private life with committed evidence", () => {
     expect(state.changes).toHaveLength(0);
   });
 
+  it("records a concrete result when story sorting crosses a milestone, without repeating it in a later cycle", () => {
+    const settle = (cycle: number) => {
+      const state = createAmphoreusState(now);
+      planPersonalLife(state, now, "UTC");
+      const [action] = state.personalActions;
+      const goal = state.residents.find((r) => r.id === "cyrene")!.goals[2];
+      action.goalId = goal.id;
+      action.title = goal.title;
+      goal.progress = 24;
+      goal.cycle = cycle;
+      advancePersonalActions(state, action.endsAt);
+      return { action, goal, change: state.changes.find((change) => change.eventId === action.id) };
+    };
+    const first = settle(1);
+    expect(first.goal.progress).toBe(32);
+    expect(first.action).toMatchObject({ status: "completed", artifact: "按讲述人分好的故事页" });
+    expect(first.change?.text).toContain("把几张故事页按讲述人分开");
+    const later = settle(2);
+    expect(later.goal.progress).toBe(32);
+    expect(later.action).not.toHaveProperty("artifact");
+  });
+
   it("accepts explicit suggestions idempotently as plans and preserves their provenance", () => {
     const store = createStore(); store.advance({ now, timezone: "UTC" });
     const input = { id: "chat-turn-7", title: "试着列一张小清单", intent: "下次可以把想读的内容列出来", conversationId: "chat-1" };
@@ -180,20 +204,45 @@ describe("a private life with committed evidence", () => {
 });
 
 describe("personal knowledge and migration", () => {
+  it("skips persisted empty-list filler in both conversation projections without rewriting old memories", () => {
+    const store = createStore(); store.advance({ now, timezone: "UTC" });
+    const filler = "为「整理收到的故事」留了一段专心的时间，留下一份还留着空白的清单。还有一点没想明白，想下次接着试。";
+    const concrete = "把两份讲述放到相邻的两页，翻起来方便多了。";
+    store.updateAmphoreus((state) => {
+      const resident = state.residents.find((entry) => entry.id === "cyrene")!;
+      const experience = { at: now, kind: "routine" as const, source: "昔涟自己的生活", locationId: "aedes-elysiae" };
+      resident.memories.push({ ...experience, id: "real-outcome", eventId: "real-outcome", text: concrete });
+      resident.memories.push({ ...experience, id: "personal:legacy", eventId: "legacy", text: filler });
+      return true;
+    });
+    const snapshot = store.readDataSnapshot();
+    const view = store.worldView().amphoreus!;
+    expect(view.personal!.experiences.at(-1)?.text).toBe(filler);
+    const context = buildXilianLifeSnapshot({ state: snapshot.state, timeline: snapshot.timeline, now, timezone: "UTC", world: view });
+    expect(context.recentEvent).toBe(concrete);
+    expect(formatXilianLifeContext(context)).toContain(concrete);
+    expect(formatXilianLifeContext(context)).not.toContain("还留着空白的清单");
+    expect(createStore().worldView().amphoreus!.personal!.experiences.at(-1)?.text).toBe(filler);
+  });
+
   it("keeps private suggestions and their derived memories out of other conversations and world planning", () => {
     const store = createStore(); store.advance({ now, timezone: "UTC" });
     const action = store.addPersonalIntention({ id: "private-topic", title: "私聊专属的小标题", intent: "私聊专属的建议正文", conversationId: "private-a" })!;
     now = action.startsAt + 60_000; store.advance({ now, timezone: "UTC" });
     const snapshot = () => store.readDataSnapshot();
     const view = store.worldView().amphoreus!;
-    const context = (conversationId?: string) => formatXilianLifeContext(buildXilianLifeSnapshot({ state: snapshot().state, timeline: snapshot().timeline, now, timezone: "UTC", world: view, conversationId }));
-    expect(context("private-a")).toContain("私聊专属");
-    expect(context("private-b")).not.toContain("私聊专属");
-    expect(context()).not.toContain("私聊专属");
+    const activity = (conversationId?: string) => buildXilianLifeSnapshot({ state: snapshot().state, timeline: snapshot().timeline, now, timezone: "UTC", world: view, conversationId });
+    expect(formatXilianLifeContext(activity("private-a"))).toContain("私聊专属");
+    expect(formatXilianLifeContext(activity("private-b"))).not.toContain("私聊专属");
+    expect(formatXilianLifeContext(activity())).not.toContain("私聊专属");
+    expect(activity().sourceEventId).toBe("xilian:none");
+    expect(buildXilianSelfiePrompt(activity())).not.toContain("私聊专属");
     expect(narrativeMessages(snapshot().amphoreus!, now, "UTC")[1].content).not.toContain("私聊专属");
     now = action.endsAt; store.advance({ now, timezone: "UTC" });
     const memory = snapshot().amphoreus!.residents.find((r) => r.id === "cyrene")!.memories.find((memory) => memory.eventId === action.id)!;
     expect(memory.conversationId).toBe("private-a");
+    expect(memory.text).toContain(action.title);
+    expect(snapshot().timeline.find((event) => event.id === action.id)?.visibility).toBe("private");
     expect(snapshot().amphoreus!.changes.find((change) => change.eventId === action.id)?.conversationId).toBe("private-a");
     store.updateAmphoreus((state) => { state.residents.find((r) => r.id === "cyrene")!.memories.find((memory) => memory.eventId === action.id)!.text = "私聊专属的经历内容"; return true; });
     expect(formatAmphoreusContext(store.worldView().amphoreus!, "private-a")).toContain("私聊专属");

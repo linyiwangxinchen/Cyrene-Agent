@@ -80,11 +80,20 @@ describe("chat time context", () => {
 
     expect(result.timeContext).toContain([
       "[对话时间信息]",
-      "当前时间：2026-07-13 11:00, Asia/Taipei",
+      "本轮用户的发送时间：2026-07-13 11:00, Asia/Taipei",
       "距离上一条有效聊天消息：约 14 小时 58 分钟",
       "仅用于理解对话连续性；除非与当前语境有关，否则不要主动提及时间间隔，也不要复述本段内容。",
     ].join("\n"));
     expect(result.timeContext.match(/距离上一条有效聊天消息/g)).toHaveLength(1);
+  });
+
+  it("separates the current reply date from a message sent before midnight", () => {
+    const result = buildConversationTimeContext([
+      { role: "user", content: "我明天答辩", at: Date.UTC(2026, 10, 19, 15, 59) },
+    ], "Asia/Shanghai", Date.UTC(2026, 10, 19, 16, 0));
+    expect(result.messages[0].content).toContain("2026-11-19 23:59");
+    expect(result.timeContext).toContain("用户当地现在：2026-11-20 00:00");
+    expect(result.timeContext).toContain("按那条消息的发送日期理解");
   });
 
   it("skips the gap notice when the latest user or previous valid message has no timestamp", () => {

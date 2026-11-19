@@ -13,6 +13,7 @@ import type { CacheDiagnostic } from "./cache-diagnostic";
 import type { BrowserElementSelection } from "./browser-panel-types";
 import type { GeneratedImageAttachment } from "./generated-image";
 import type { MailDraftCardData } from "./mail-draft-card";
+import type { CompanionReplyInput } from "./companion";
 
 // - schemaVersion 用于以后改 schema 时的迁移判断；当前固定 1。
 
@@ -284,6 +285,8 @@ export interface PendingChatMessage {
   attachments?: PendingChatAttachment[];
   /** 用户表情包 ID（内置或自定义）。 */
   userSticker?: string;
+  /** 只用于这条待发消息的回应。 */
+  companionReply?: CompanionReplyInput;
   /**
    * 调整目标运行 id：非空表示该条目已被请求"插入当前运行下一步"。
    * 注入成功后条目移出队列；已接受的消息在运行结束时入册，留待下次用户续跑。
@@ -332,6 +335,8 @@ export interface PendingDispatchState {
   messageId: string;
   /** 认领时间戳。 */
   claimedAt: number;
+  /** 认领至派发期间保留，独立于权威用户消息与回执。 */
+  companionReply?: CompanionReplyInput;
   /** v2 durable user intent；旧 v1 pendingDispatch 缺省。 */
   userMessage?: PendingDispatchUserSnapshot;
 }

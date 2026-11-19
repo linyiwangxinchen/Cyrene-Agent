@@ -1,38 +1,27 @@
 import { buildPersonaContractPrompt } from "../persona/persona-spec";
 import { buildRelationshipContext } from "../relationship/relationship-log";
 import { buildAlwaysOnContext, buildMemoryInjection } from "../orchestrator";
-import { buildToneInjection } from "../orchestrator/tone-injector";
-import { buildSkillCatalog, skillRegistry } from "../skills";
-import { resolveSlashActivation } from "../skills/slash-activation";
 import { resolveChatContextTimezone } from "../chat-time-context";
 import { getDateLocale } from "../locale-context";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import { loadUserProfile } from "../settings-store";
-import { loadGeneralSettings } from "../settings/settings-facade";
 import { searchMemoryEntries } from "../rag";
 import { memoryStore } from "../memory/memory-store";
 import { l2DmaeManager } from "../memory/l2-dmae-manager";
 import { isMemoryEnabled } from "../memory/memory-mode";
 
 /**
- * 构建通话（Call）模式专用 system prompt。
- * 包含时间日期、常驻上下文、记忆注入、phone 人设文件、skill 约束、语气注入。
- * 注意：本函数会修改传入的 messages 数组以处理 /命令命中但未启用的情况。
+ * 通话共享人设与记忆，使用专用口语约定。
  */
 export async function buildCallSystemPrompt(
   userText: string,
   messages: Array<{ role: "user" | "assistant"; content: string }>,
 ): Promise<string> {
-  // ① 时间日期（用用户时区，禁止直接喂未校验的 profile.timezone 给 Intl）
-  const now = new Date();
-  const userTz = resolveChatContextTimezone(loadUserProfile().timezone);
-  const timeStr = `当前时间：${now.toLocaleDateString(getDateLocale(), { timeZone: userTz })} ${now.toLocaleTimeString(getDateLocale(), { hour: "2-digit", minute: "2-digit", timeZone: userTz })}`;
-
-  // ② 常驻上下文（世界书 + L0/L1 画像）
+  // 常驻上下文（世界书与用户画像）
   let alwaysOnContext = "";
   try { alwaysOnContext = await buildAlwaysOnContext(userText, messages); } catch { /* ignore */ }
 
-  // ③ V5 L2 DMAE：先向量召回 top-4，再执行 DMAE 状态更新
+  // 先向量召回，再更新 L2 激活状态。
   if (isMemoryEnabled()) {
     try {
       const allL2 = await memoryStore.getAllL2();
@@ -50,39 +39,26 @@ export async function buildCallSystemPrompt(
     }
   }
 
-  // ④ 记忆注入（读取 DMAE active L2）
   let memoryInjection = "";
   try { memoryInjection = await buildMemoryInjection(userText); } catch { /* ignore */ }
 
-  // ④ 通话专用人设 prompt
-  const phoneParts: string[] = [buildPersonaContractPrompt(), await buildRelationshipContext("call")];
-  const phoneSystem = loadPromptFile("phone_system.md");
-  if (phoneSystem) phoneParts.push(phoneSystem);
-  const phoneIdentity = loadPromptFile("phone_identity.md");
-  if (phoneIdentity) phoneParts.push(phoneIdentity);
-  const soul = loadPromptFile("soul.md");
-  if (soul) phoneParts.push(soul);
-  const canon = loadPromptFile("canon_quotes.md");
-  if (canon) phoneParts.push(canon);
-  const phoneStyle = loadPromptFile("phone_style.md");
-  if (phoneStyle) phoneParts.push(phoneStyle);
-  const phonePrompt = phoneParts.join("\n\n---\n\n");
+  const relationshipContext = await buildRelationshipContext("call", true, userText);
+  const userTz = resolveChatContextTimezone(loadUserProfile().timezone);
+  const localTime = new Intl.DateTimeFormat(getDateLocale(), {
+    timeZone: userTz,
+    year: "numeric", month: "2-digit", day: "2-digit", weekday: "long",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).format(new Date());
 
-  // ⑤ Skill 约束（resolveSlashActivation 会原地修改 messages）
-  // Call 模式按 work 模式过滤 skill，并尊重 skill-模式覆盖层。
-  const skillCatalog = buildSkillCatalog(
-    skillRegistry.getEnabledForMode("work", loadGeneralSettings().skillModeOverrides),
-  );
-  const skillActivation = resolveSlashActivation(messages, "work", loadGeneralSettings().skillModeOverrides);
-
-  // ⑥ 语气注入（通用语气规则）
-  const toneInjection = buildToneInjection();
-
-  return timeStr + "\n\n" +
-    (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
-    (memoryInjection ? memoryInjection + "\n\n" : "") +
-    phonePrompt +
-    (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
-    skillActivation +
-    toneInjection;
+  return [
+    buildPersonaContractPrompt(),
+    `用户当地时间：${localTime}（${userTz}）`,
+    alwaysOnContext,
+    memoryInjection,
+    relationshipContext,
+    loadPromptFile("soul.md"),
+    loadPromptFile("phone_identity.md"),
+    loadPromptFile("phone_system.md"),
+    loadPromptFile("phone_style.md"),
+  ].filter(Boolean).join("\n\n---\n\n");
 }

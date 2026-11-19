@@ -176,6 +176,8 @@ export interface CyreneRunOptions {
   soulSystemBaseContent: string;
   /** 每次请求才附加给 Soul 的可变运行时上下文；不参与稳定缓存前缀。 */
   soulRuntimeContext?: string;
+  /** 本轮用户指定的回应方式，只在实际模型请求中使用。 */
+  companionReplyContext?: string;
   /** Plan Mode 时注入的 cyrene-plan-mode skill 正文；可变，不参与稳定缓存前缀，
    *  在 harness runtimeParts 里拼，避免进/出 plan mode 打断 stablePrefix 缓存。 */
   planSkillContext?: string;
@@ -520,7 +522,7 @@ export class CyreneAgent extends AbstractAgent {
               adapter,
               messages: options.messages,
               soulSystemBaseContent: options.soulSystemBaseContent,
-              runtimeContext: [options.soulRuntimeContext, options.citaContextBlock, options.responseContext].filter(Boolean).join("\n\n---\n\n"),
+              runtimeContext: [options.soulRuntimeContext, options.citaContextBlock, options.responseContext, options.companionReplyContext].filter(Boolean).join("\n\n---\n\n"),
               soulSampling: options.soulSampling,
               timeoutMs: options.timeoutMs,
               imageCaptionFallback: options.imageCaptionFallback,

@@ -1079,6 +1079,9 @@ const companionApi: import("../shared/companion").CompanionApi = {
   getWorldHistory: (query) => ipcRenderer.invoke(IPC.COMPANION_WORLD_HISTORY, query),
   getWorldUpdate: (cursor) => ipcRenderer.invoke(IPC.COMPANION_WORLD_UPDATE, cursor),
   getWorldArtifact: (id) => ipcRenderer.invoke(IPC.COMPANION_WORLD_ARTIFACT, id),
+  getWorldSuggestions: (conversationId) => ipcRenderer.invoke(IPC.COMPANION_WORLD_SUGGESTIONS_GET, conversationId),
+  suggestWorldAction: (input) => ipcRenderer.invoke(IPC.COMPANION_WORLD_SUGGESTION_ADD, input),
+  withdrawWorldSuggestion: (conversationId, actionId) => ipcRenderer.invoke(IPC.COMPANION_WORLD_SUGGESTION_WITHDRAW, conversationId, actionId),
   update: (command) => ipcRenderer.invoke(IPC.COMPANION_UPDATE, command),
   export: () => ipcRenderer.invoke(IPC.COMPANION_EXPORT),
 };

@@ -10,6 +10,7 @@ import * as path from "path";
 import { CHAT_SCHEMA_VERSION, type ChatMessage, type ChatSession, type ChatSessionRecord, type ChatSessionRecordV2, type ChatSessionMeta, type ChatSessionPurpose, type ConversationMode, type PendingChatAttachment, type PendingChatMessage, type PendingDispatchState, type PendingDispatchUserSnapshot, type PendingWithdrawalState, } from "../../shared/chat-types";
 import type { ContextUsageSnapshot } from "../../shared/context-usage";
 import { normalizeBrowserElementSelection } from "../../shared/browser-panel-types";
+import { normalizeCompanionReply } from "../../shared/companion";
 import { buildStickerUserModelText, resolveStickerPhrase, type StickerPhraseSource } from "../sticker-descriptions";
 const ROOT_DIR_NAME = "cyrene-chats";
 const SESSIONS_SUBDIR = "sessions";
@@ -518,7 +519,7 @@ export type EnqueuePendingResult = {
   enqueued: boolean;
 } | {
   ok: false;
-  error: "session-not-found" | "empty-content" | "duplicate-id" | "invalid-attachments" | "write-failed";
+  error: "session-not-found" | "empty-content" | "duplicate-id" | "invalid-attachments" | "invalid-companion-reply" | "write-failed";
 };
 /** 删除结果：removed=false 表示条目本就不在（幂等成功，未写盘）。 */
 export type RemovePendingResult = {
@@ -646,12 +647,15 @@ function normalizePendingAttachment(value: unknown): PendingChatAttachment | nul
   };
 }
 /** 待发条目校验与规范化：内容、附件逐条检查，enqueuedAt 由主进程填当前时间。 */
-function normalizePendingMessage(id: string, entry: PendingChatMessageInput): PendingChatMessage | "empty" | "invalid-attachments" {
+function normalizePendingMessage(id: string, entry: PendingChatMessageInput): PendingChatMessage | "empty-content" | "invalid-attachments" | "invalid-companion-reply" {
   if (typeof id !== "string" || !id.trim())
-    return "empty";
+    return "empty-content";
   if (typeof entry?.rawContent !== "string" || !entry.rawContent.trim())
-    return "empty";
+    return "empty-content";
   const visibleContent = typeof entry.visibleContent === "string" ? entry.visibleContent : entry.rawContent;
+  const companionReply = normalizeCompanionReply(entry.companionReply);
+  if (entry.companionReply !== undefined && !companionReply)
+    return "invalid-companion-reply";
   let attachments: PendingChatAttachment[] | undefined;
   if (entry.attachments !== undefined) {
     if (!Array.isArray(entry.attachments))
@@ -672,6 +676,7 @@ function normalizePendingMessage(id: string, entry: PendingChatMessageInput): Pe
     visibleContent,
     ...(attachments ? { attachments } : {}),
     ...(typeof entry.userSticker === "string" && entry.userSticker.trim() ? { userSticker: entry.userSticker.trim() } : {}),
+    ...(companionReply ? { companionReply } : {}),
     enqueuedAt: Date.now(),
   };
 }
@@ -683,6 +688,8 @@ function pendingEntryEquals(a: PendingChatMessage, b: PendingChatMessage): boole
   if (a.rawContent !== b.rawContent || a.visibleContent !== b.visibleContent)
     return false;
   if ((a.userSticker ?? "") !== (b.userSticker ?? ""))
+    return false;
+  if (a.companionReply?.mode !== b.companionReply?.mode || a.companionReply?.correction !== b.companionReply?.correction)
     return false;
   const aAtt = a.attachments ?? [];
   const bAtt = b.attachments ?? [];
@@ -710,10 +717,10 @@ export function enqueuePendingMessage(sessionId: string, entry: PendingChatMessa
   if (!session)
     return { ok: false, error: "session-not-found" };
   const normalized = normalizePendingMessage(entry?.id ?? "", entry);
-  if (normalized === "empty")
-    return { ok: false, error: "empty-content" };
-  if (normalized === "invalid-attachments")
-    return { ok: false, error: "invalid-attachments" };
+  if (typeof normalized === "string")
+    return { ok: false, error: normalized };
+  if (normalized.companionReply && (session.mode !== "chat" || session.purpose))
+    return { ok: false, error: "invalid-companion-reply" };
   const queue = session.pendingMessages ?? [];
   const existing = queue.find((item) => item.id === normalized.id);
   if (existing) {
@@ -896,6 +903,7 @@ export function claimPendingMessage(sessionId: string): ClaimPendingResult {
     record.pendingDispatch = {
       messageId: head.id,
       claimedAt,
+      ...(head.companionReply ? { companionReply: head.companionReply } : {}),
       userMessage: {
         id: head.id,
         at: claimedAt,
@@ -940,7 +948,11 @@ export function claimPendingMessage(sessionId: string): ClaimPendingResult {
   const session = record;
   session.messages = [...session.messages, userMessage];
   session.pendingMessages = remaining;
-  session.pendingDispatch = { messageId: head.id, claimedAt };
+  session.pendingDispatch = {
+    messageId: head.id,
+    claimedAt,
+    ...(head.companionReply ? { companionReply: head.companionReply } : {}),
+  };
   session.updatedAt = claimedAt;
   if (initializeTitle)
     session.title = deriveTitle(session.messages);
@@ -1073,7 +1085,7 @@ export type MarkPendingAdjustResult = {
   queue: PendingChatMessage[];
 } | {
   ok: false;
-  error: "session-not-found" | "not-found" | "already-claimed" | "already-adjusting" | "withdrawal-in-progress" | "has-attachments" | "write-failed";
+  error: "session-not-found" | "not-found" | "already-claimed" | "already-adjusting" | "withdrawal-in-progress" | "has-attachments" | "invalid-companion-reply" | "write-failed";
   queue?: PendingChatMessage[];
 };
 /**
@@ -1104,6 +1116,9 @@ export function markPendingAdjust(sessionId: string, messageId: string, runId: s
     return { ok: false, error: "already-adjusting", queue: snapshot() };
   if (target.attachments && target.attachments.length > 0) {
     return { ok: false, error: "has-attachments", queue: snapshot() };
+  }
+  if (target.companionReply) {
+    return { ok: false, error: "invalid-companion-reply", queue: snapshot() };
   }
   const acceptedAt = Math.max(Date.now(), ...queue.map((item) => (item.adjustAcceptedAt ?? 0) + 1));
   queue[index] = { ...target, adjustRunId: runId, adjustAcceptedAt: acceptedAt };

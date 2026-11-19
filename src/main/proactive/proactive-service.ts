@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { ChatMessage } from "../orchestrator/vendors/types";
 import {
   canCommitProactiveMessage,
@@ -8,7 +9,7 @@ import {
   markUserActivity,
 } from "./proactive-policy";
 import type { ProactiveModelResult } from "./proactive-model";
-import type { ProactiveBlockReason, ProactiveCandidate, ProactiveCommitIntent, ProactiveRuntimeSnapshot, ProactiveState } from "./proactive-types";
+import { normalizeDurableCandidate, type ProactiveBlockReason, type ProactiveCandidate, type ProactiveCommitIntent, type ProactiveDeliveryContext, type ProactiveRuntimeSnapshot, type ProactiveState } from "./proactive-types";
 import type { ProactiveDeliveryTarget } from "../../shared/preferences";
 
 export interface ProactiveFallback {
@@ -47,7 +48,9 @@ export interface ProactiveChatServiceDeps {
   requiresDurableIntent?: () => boolean;
   /** Read once per evaluation so a settings change cannot reroute its commit. */
   getDeliveryTarget?: () => ProactiveDeliveryTarget;
-  getDeliveryContext?: () => import("./proactive-types").ProactiveDeliveryContext | undefined;
+  getDeliveryContext?: () => ProactiveDeliveryContext | undefined;
+  isDraftTimeCurrent?: (context: ProactiveDeliveryContext, snapshot: ProactiveRuntimeSnapshot) => boolean;
+  onDraftTimeChanged?: (candidate: ProactiveCandidate, now: number) => void;
   canStartDelivery?: () => boolean;
   validateCandidate?: (candidate: ProactiveCandidate) => string | undefined;
   beforeModel?: (candidate: ProactiveCandidate) => boolean;
@@ -82,7 +85,9 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
 
   const stateHasIntent = (state: ProactiveState, intent: ProactiveCommitIntent): boolean => (
     state.proactiveCommitSequence === intent.sequence
-    && JSON.stringify(state.pendingCommitIntent) === JSON.stringify(intent)
+    && state.pendingCommitIntent !== undefined
+    // Compare the JSON payload after parsing, so property order is immaterial.
+    && isDeepStrictEqual(JSON.parse(JSON.stringify(state.pendingCommitIntent)), JSON.parse(JSON.stringify(intent)))
   );
 
   const persistPendingIntent = (state: ProactiveState, intent: ProactiveCommitIntent): void => {
@@ -127,7 +132,9 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
     intentId?: string,
   ): ProactiveCommitResult => {
     if (result.kind === "cancelled") {
-      deps.onOpportunityDecision?.(candidate, result.deliveryStatus === "unknown" ? "delivery_unknown" : "hold", { now: deps.getSnapshot().now, resumeOn: "evidence_change" });
+      const now = deps.getSnapshot().now;
+      if (result.reason === "draft_time_changed" && !result.deliveryStatus) deps.onDraftTimeChanged?.(candidate, now);
+      else deps.onOpportunityDecision?.(candidate, result.deliveryStatus === "unknown" ? "delivery_unknown" : "hold", { now, resumeOn: "evidence_change" });
       const cancelledState = cloneState(deps.loadState());
       if (intentId) clearPendingIntent(cancelledState, intentId);
       deps.saveState(cancelledState);
@@ -253,6 +260,14 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           return;
         }
 
+        const deliveryContext = deps.getDeliveryContext?.();
+        const draftSnapshot = deps.getSnapshot();
+        if (deliveryContext && deps.isDraftTimeCurrent?.(deliveryContext, draftSnapshot) === false) {
+          deps.onDraftTimeChanged?.(candidate, draftSnapshot.now);
+          deps.log?.("generation_discarded", { scene: candidate.sceneId, reason: "draft_time_changed" });
+          return;
+        }
+
         let text: string;
         let source: "model" | "fallback";
         let fallbackPayload: unknown;
@@ -322,11 +337,12 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
 
         const commitStateBeforeIntent = cloneState(deps.loadState());
         const sequence = (commitStateBeforeIntent.proactiveCommitSequence ?? 0) + 1;
-        const deliveryContext = deps.getDeliveryContext?.();
+        const durableCandidate = normalizeDurableCandidate(candidate);
+        if (!durableCandidate) throw new Error("PROACTIVE_INVALID_CANDIDATE");
         const intent: ProactiveCommitIntent = {
           intentId: `proactive-intent-${sequence}`,
           sequence,
-          candidate: { ...candidate },
+          candidate: durableCandidate,
           generationEpoch,
           intentAt: commitSnapshot.now,
           ...(commitSnapshot.localDate ? { localDate: commitSnapshot.localDate } : {}),

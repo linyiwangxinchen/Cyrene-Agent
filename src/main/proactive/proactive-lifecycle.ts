@@ -1,4 +1,4 @@
-import { relationshipOpportunities } from "./relationship-opportunities";
+import { canAskAboutRecentWellbeing, relationshipOpportunities, standaloneCareOpportunity, standaloneCareWindowDate, STANDALONE_CARE_SCENE, userCareOpportunity } from "./relationship-opportunities";
 import { followupIdFromScene, followupOpportunities } from "./followup-opportunities";
 import { createCompanionLifeStore, type CompanionDeliveryReviewStatus, type CompanionLifeObservationKind, type CompanionLifeStore, type CompanionMoment } from "./companion-life";
 import { withConversationRun } from "../orchestrator/conversation-run-guard";
@@ -12,6 +12,8 @@ import { broadcastChatsChanged } from "../chats/chats-ipc";
 import type { ConversationJournalService } from "../orchestrator/conversation-journal-service";
 import { setChannelsConversationLifecycle } from "../channels/init";
 import { channelManager } from "../channels/manager";
+import { getChannelRecoveryStore } from "../channels/recovery-store";
+import { isGroupBoundConversation } from "../channels/conversation-binding-store";
 import {
   getProactiveChannelAvailability,
   sendProactiveChannelMessage,
@@ -30,17 +32,17 @@ import type {
   ProactiveCommitResult,
 } from "./proactive-service";
 import { routeProactiveDelivery } from "./proactive-delivery-routing";
-import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive-prompt";
+import { buildProactiveMessages, repeatsRecentProactiveMessage, type ProactiveHistoryTurn } from "./proactive-prompt";
 import { canCommitProactiveMessage, canStartProactiveGeneration } from "./proactive-policy";
 import { loadProactiveState, saveProactiveState } from "./proactive-state-store";
-import { createProactiveTrigger, getZonedDateParts, type ProactiveOpportunity, type ProactiveTriggerController } from "./proactive-trigger";
+import { createProactiveTrigger, formatLocalDate, getZonedDateParts, type ProactiveOpportunity, type ProactiveTriggerController } from "./proactive-trigger";
 import { runProactiveModel } from "./proactive-model";
 import { DEFAULT_PROACTIVE_TARGET_SCORE, normalizeProactiveDensity } from "../../shared/preferences";
 import { InitiativeOpportunityStore, type InitiativeOpportunityInput } from "./initiative-opportunities";
 import { worldInitiativeOpportunities, boredomInitiativeOpportunity, relatedConversationOpportunity } from "./world-initiative";
 import type { ProactiveCandidate, ProactiveEvaluationStatus, ProactiveRuntimeSnapshot, ProactiveDeliveryContext } from "./proactive-types";
 import { getSharedXilianWorldStore, type XilianWorldStore } from "../xilian-world/world-store";
-import { buildXilianLifeSnapshot, formatXilianLifeContext } from "../xilian-world/life-context";
+import type { ChatMessage } from "../../shared/chat-types";
 import type { XilianTimelineEvent, XilianWorldState, XilianWorldView } from "../../shared/xilian-world";
 import { createAmphoreusRuntime } from "../amphoreus-world/runtime";
 
@@ -86,6 +88,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   let generationRelationshipRevision: number | undefined;
   let generationRecipient: RecentProactiveChannelRecipient | undefined;
   let generationDeliveryContext: ProactiveDeliveryContext | undefined;
+  let generationShares: { history: ProactiveHistoryTurn[]; worldShare: boolean; careStale?: boolean } = { history: [], worldShare: false };
   let lastOutcome: ProactiveEvaluationStatus["lastOutcome"];
   let proactiveStatus: ProactiveEvaluationStatus = {
     candidateScore: null,
@@ -121,6 +124,18 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       return loadProactiveState().pendingCommitIntent?.candidate.opportunityId === candidate.opportunityId ? undefined : "opportunity_consumed";
     }
     if (opportunity.expiresAt <= Date.now()) return "opportunity_expired";
+    if (opportunity.source === "user_care") {
+      if (!opportunity.conversationId || isGroupBoundConversation(opportunity.conversationId)) return "care_source_private_chat_required";
+      const timezone = resolveChatContextTimezone(loadUserProfile().timezone);
+      const now = Date.now();
+      if (!canAskAboutRecentWellbeing(opportunity.occurredAt, now, getZonedDateParts(new Date(now), timezone).hour)) return "care_source_time_not_suitable";
+    }
+    if (opportunity.source === STANDALONE_CARE_SCENE) {
+      if (!opportunity.conversationId || isGroupBoundConversation(opportunity.conversationId)) return "care_source_private_chat_required";
+      const clock = getProactiveRuntimeSnapshot();
+      if (standaloneCareWindowDate(clock.localDate, clock.localHour) !== opportunity.evidenceVersion) return "care_source_time_not_suitable";
+      if (loadProactiveState().unansweredCount !== 0) return "unanswered_limit";
+    }
     if (opportunity.source === "amphoreus") {
       const personal = worldStore.worldView().amphoreus?.personal;
       if (!personal?.changes.some(change => change.eventId === opportunity.sourceEventId && String(change.version) === String(opportunity.evidenceVersion))) return "world_source_changed";
@@ -133,15 +148,11 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
 
   function buildProactivePersonaPrompt(): string {
     const parts: string[] = [buildPersonaContractPrompt()];
-    const chatSystem = loadPromptFile("chat_system.md");
-    if (chatSystem) parts.push(chatSystem);
     const soul = loadPromptFile("soul.md");
     if (soul) {
       // 主动轮完全不携带工具说明；Soul 尾部的 Live2D/联网章节由正常聊天使用。
       parts.push(soul.split("\n## Live2D 与聊天文字的分工")[0].trim());
     }
-    const canon = loadPromptFile("canon_quotes.md");
-    if (canon) parts.push(canon);
     const style = loadPromptFile("styles/01_default.md");
     if (style) parts.push(style);
     return parts.join("\n\n---\n\n");
@@ -156,10 +167,20 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       .map((message) => ({ role: message.role, content: message.content, at: message.at }));
   }
 
-  async function getProactiveHistories(recipient?: RecentProactiveChannelRecipient): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[]; conversationId?: string }> {
+  function isProactiveMessage(message: ChatMessage): boolean {
+    return message.role === "model" && /^proactive-intent-\d+$/.test(message.runSnapshot?.runId ?? "");
+  }
+
+  async function getProactiveHistories(recipient?: RecentProactiveChannelRecipient): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[]; conversationId?: string; careAllowed: boolean }> {
     if (recipient) {
-      const projection = await conversationJournal.readProjection(recipient.conversationId ?? recipient.sessionId);
-      return { ordinary: toProactiveHistory(projection.messages), proactive: [], conversationId: recipient.conversationId ?? recipient.sessionId };
+      const conversationId = recipient.conversationId ?? recipient.sessionId;
+      const { messages } = await conversationJournal.readProjection(conversationId);
+      return {
+        ordinary: toProactiveHistory(messages.filter(message => !isProactiveMessage(message))),
+        proactive: toProactiveHistory(messages.filter(isProactiveMessage)),
+        careAllowed: !isGroupBoundConversation(conversationId) && !messages.some(message => message.channelSource?.chatType === "group"),
+        conversationId,
+      };
     }
     // Read the session index once so both projections come from the same
     // snapshot. listSessions is sorted by recent activity, so the first
@@ -173,13 +194,15 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       proactiveMeta ? conversationJournal.readProjection(proactiveMeta.id) : Promise.resolve(null),
     ]);
     return {
-      ordinary: toProactiveHistory(ordinaryProjection?.messages ?? []),
+      ordinary: toProactiveHistory(ordinaryProjection?.messages.filter(message => !isProactiveMessage(message)) ?? []),
       proactive: toProactiveHistory(proactiveProjection?.messages ?? []),
+      careAllowed: !!ordinaryMeta && !ordinaryMeta.purpose && ordinaryMeta.mode === "chat" && !isGroupBoundConversation(ordinaryMeta.id)
+        && !ordinaryProjection?.messages.some(message => message.channelSource?.chatType === "group"),
       ...(ordinaryMeta ? { conversationId: ordinaryMeta.id } : {}),
     };
   }
 
-  function getProactiveRuntimeSnapshot(): ProactiveRuntimeSnapshot {
+  function getProactiveRuntimeSnapshot(): ProactiveRuntimeSnapshot & { timezone: string } {
     const now = Date.now();
     // Proactive timing must not inherit the Web renderer's activity clock.
     // `web:user-activity` is useful for renderer/session idle UX, but viewing a
@@ -194,11 +217,12 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const settings = options.loadGeneralSettings();
     return {
       now,
+      timezone,
       // The server's system timezone can differ from the user's timezone.
       // Policy quiet hours must use the same clock as candidate selection.
       localHour: zoned.hour,
       localMinute: zoned.minute,
-      localDate: `${zoned.year}-${String(zoned.month).padStart(2, "0")}-${String(zoned.day).padStart(2, "0")}`,
+      localDate: formatLocalDate(new Date(now), timezone),
       quietStartMinute: settings.proactiveQuietStartMinute,
       quietEndMinute: settings.proactiveQuietEndMinute,
       dailyLimit: settings.proactiveDailyLimit,
@@ -208,6 +232,16 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       generationBusy: false,
       screenLocked: proactiveScreenLocked,
     };
+  }
+
+  function isDraftTimeCurrent(context: ProactiveDeliveryContext, snapshot: ProactiveRuntimeSnapshot): boolean {
+    if (context.composedAt === undefined || context.timezone === undefined) return true;
+    if (context.timezone !== snapshot.timezone || snapshot.now < context.composedAt || snapshot.now - context.composedAt > 5 * 60_000) return false;
+    const drafted = new Date(context.composedAt);
+    const { hour, minute } = getZonedDateParts(drafted, context.timezone);
+    const elapsedMinutes = Math.floor(snapshot.now / 60_000) - Math.floor(context.composedAt / 60_000);
+    return formatLocalDate(drafted, context.timezone) === snapshot.localDate
+      && hour === snapshot.localHour && minute + elapsedMinutes === snapshot.localMinute;
   }
 
   async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
@@ -224,6 +258,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     if (followupId && (!followup || followup.status !== "active" || followup.nextEligibleAt > Date.now() || !companion.relationship.proactiveLifeEnabled)) throw new Error("followup_not_eligible");
     if (followup && generationRecipient && followup.conversationId !== (generationRecipient.conversationId ?? generationRecipient.sessionId)) throw new Error("followup_recipient_changed");
     const initiative = candidate.opportunityId ? initiativeStore.find(candidate.opportunityId) : undefined;
+    const standaloneCare = initiative?.source === STANDALONE_CARE_SCENE;
     const localConversationId = followup?.conversationId ?? moment?.conversationId ?? initiative?.conversationId;
     const historyTarget = generationRecipient ?? (localConversationId ? { conversationId: localConversationId, sessionId: localConversationId, targetId: "", updatedAt: 0 } : undefined);
     generationDeliveryContext = { relationshipRevision: companion.revision,
@@ -231,47 +266,45 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       ...(generationRecipient ? { sessionId: generationRecipient.sessionId, targetId: generationRecipient.targetId, ...(generationRecipient.threadId ? { threadId: generationRecipient.threadId } : {}) } : {}),
       ...(followupId ? { followupId } : {}) };
     const histories = await getProactiveHistories(historyTarget);
+    generationShares = { history: histories.proactive, worldShare: initiative?.source === "amphoreus" || candidate.sceneId.startsWith("world:") };
     const recentTopic = histories.ordinary.slice(-4).map((turn) => turn.content).join("\n");
     const retrievalQuery = `${candidate.sceneId}\n${recentTopic}`.trim();
-    const [profileContext, memoryContext] = await Promise.all([
+    const [profileContext, memoryContext] = standaloneCare ? ["", ""] : await Promise.all([
       buildAlwaysOnContext(retrievalQuery, histories.ordinary.map((turn) => ({ role: turn.role, content: turn.content }))).catch(() => ""),
       buildMemoryInjection(retrievalQuery).catch(() => ""),
     ]);
+    const relationshipContext = await buildRelationshipContext(historyTarget?.conversationId ?? historyTarget?.sessionId ?? "proactive-local");
     const state = loadProactiveState();
     const snapshot = getProactiveRuntimeSnapshot();
-    const lifeState = lifeStore.getState({ now: snapshot.now, dateKey: lifeDateKey(snapshot.now) });
-    // 用户有效时区：resolver 校验后传给 prompt，禁止未校验的 profile.timezone。
-    const profile = loadUserProfile();
-    const timezone = resolveChatContextTimezone(profile.timezone);
-    const worldState = worldStore.advance({
-      now: snapshot.now,
-      timezone,
-      companion: { energy: lifeState.energy, curiosity: lifeState.curiosity, boredom: lifeState.boredom },
-    });
-    const worldTimeline = worldStore.queryTimeline({ dateKey: worldState.worldDate, order: "desc", limit: 8 });
-    const worldSnapshot = buildXilianLifeSnapshot({
-      state: worldState,
-      world: worldStore.worldView().amphoreus,
-      timeline: worldTimeline,
-      now: snapshot.now,
-      timezone,
-      energy: lifeState.energy,
-      conversationId: historyTarget?.conversationId ?? historyTarget?.sessionId,
-    });
+    generationDeliveryContext.composedAt = snapshot.now;
+    generationDeliveryContext.timezone = snapshot.timezone;
+    const lastUser = histories.ordinary.filter(turn => turn.role === "user").at(-1);
+    if (standaloneCare) {
+      generationShares.careStale = !companion.relationship.proactiveLifeEnabled || !histories.careAllowed
+        || standaloneCareOpportunity(lastUser, histories.conversationId, {
+          now: snapshot.now, localDate: snapshot.localDate, localHour: snapshot.localHour, lastActivity: histories.ordinary.at(-1)?.at,
+        })?.evidenceVersion !== initiative.evidenceVersion;
+    } else if (initiative?.source === "user_care") {
+      generationShares.careStale = !histories.careAllowed || userCareOpportunity(lastUser, histories.conversationId, snapshot.now)?.evidenceVersion !== initiative.evidenceVersion;
+    }
+    const careContext = followup ? { kind: "requested_followup" as const, at: followup.nextEligibleAt, topic: followup.topic }
+      : initiative?.source === "user_care" ? { kind: "user_message" as const, at: initiative.occurredAt }
+      : standaloneCare ? { kind: "standalone_care" as const }
+      : undefined;
     return buildProactiveMessages({
-      basePersona: buildProactivePersonaPrompt() + "\n\n" + await buildRelationshipContext(historyTarget?.conversationId ?? historyTarget?.sessionId ?? "proactive-local"),
+      basePersona: buildProactivePersonaPrompt() + "\n\n" + relationshipContext,
       userProfile: profileContext,
-      relevantMemory: [memoryContext, followup ? `用户明确设置的本轮跟进事项：${JSON.stringify(followup.topic)}。只自然关心这件事的近况，不推测结果、不催促、不声称已做任何操作；没有合适话题时可保持安静。` : ""].filter(Boolean).join("\n\n"),
-      ordinaryHistory: histories.ordinary,
+      relevantMemory: careContext ? undefined : memoryContext,
+      ordinaryHistory: standaloneCare ? [] : histories.ordinary,
       proactiveHistory: histories.proactive,
       sceneId: candidate.sceneId,
       localNow: new Date(snapshot.now),
       idleSec: snapshot.idleSec,
       unansweredCount: state.unansweredCount,
       replyBurden: candidate.replyBurden,
-      timezone,
+      timezone: snapshot.timezone,
+      careContext,
       ...((moment?.summary ?? candidate.momentSummary) ? { momentContext: moment?.summary ?? candidate.momentSummary } : {}),
-      lifeContext: `${formatXilianLifeContext(worldSnapshot)}\n好奇 ${lifeState.curiosity}/100；无聊 ${lifeState.boredom}/100。`,
     });
   }
 
@@ -379,6 +412,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const runId = commitKey;
     const intentAt = input.intentAt ?? 0;
     return withConversationRun(session.id, async (): Promise<ProactiveCommitResult> => {
+    if (input.deliveryContext && !isDraftTimeCurrent(input.deliveryContext, getProactiveRuntimeSnapshot())) return { kind: "cancelled", reason: "draft_time_changed" };
     if (!getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed) return { kind: "cancelled", reason: "stale_epoch" };
     const sink = conversationJournal.createRunSink({ conversationId: session.id, runId });
     const assistantEntryId = await sink.appendAssistant({
@@ -425,8 +459,14 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         if (!recipient || !input.intentId) return { kind: "cancelled", reason: "recipient_unavailable" };
         const conversationId = recipient.conversationId ?? recipient.sessionId;
         const runId = input.intentId;
+        const operationId = `proactive:${runId}`;
         const assistantTurnId = `${runId}:assistant`;
         return withConversationRun(conversationId, async () => {
+          // A prior outbox operation may already have sent some or all parts.
+          // Allow receipt reconciliation while blocking any new stale sends.
+          if (frozen && !isDraftTimeCurrent(frozen, getProactiveRuntimeSnapshot()) && !getChannelRecoveryStore()?.get(operationId)) {
+            return { kind: "cancelled" as const, reason: "draft_time_changed" };
+          }
           if (!getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed) return { kind: "cancelled" as const, reason: "stale_epoch" };
           const current = getProactiveChannelAvailability(channel, channelManager);
           if (!current.available || current.recipient.targetId !== recipient.targetId || current.recipient.conversationId !== recipient.conversationId) return { kind: "cancelled" as const, reason: "binding_changed" };
@@ -438,12 +478,13 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
             runSnapshot: { runId, status: "terminal", updatedAt: input.intentAt ?? 0 },
           });
           const channelResult = await sendProactiveChannelMessage({
-            operationId: `proactive:${input.intentId}`, assistantTurnId, runId,
+            operationId, assistantTurnId, runId,
             channel, text: input.text, mobileMessageSegmentation: settings.mobileMessageSegmentation,
             manager: channelManager, recipient,
             // authoritative assistant already exists; callback never creates a second reply.
             recordDelivery: async () => undefined,
             canContinue: () => {
+              if (frozen && !isDraftTimeCurrent(frozen, getProactiveRuntimeSnapshot())) return false;
               if (options.loadGeneralSettings().proactiveDeliveryTarget !== channel) return false;
               const latest = getProactiveChannelAvailability(channel, channelManager);
               if (!latest.available || latest.recipient.targetId !== recipient.targetId || latest.recipient.conversationId !== recipient.conversationId) return false;
@@ -486,6 +527,10 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         saveProactiveState(state);
       },
       getSnapshot: getProactiveRuntimeSnapshot,
+      isDraftTimeCurrent,
+      onDraftTimeChanged: (candidate, now) => {
+        if (candidate.opportunityId) initiativeStore.requeue(candidate.opportunityId, now);
+      },
       validateCandidate: validateInitiative,
       beforeModel: candidate => !candidate.opportunityId || initiativeStore.markAttempt(candidate.opportunityId, Date.now(), lifeDateKey(Date.now()), Math.min(60, Math.max(8, (options.loadGeneralSettings().proactiveDailyLimit ?? 3) * 2 + 4))),
       onOpportunityDecision: (candidate, decision, input) => {
@@ -493,6 +538,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       },
       buildMessages: async (candidate) => buildProactiveAgentMessages(candidate),
       runModel: async (messages, deliveryTarget) => {
+        if (generationShares.careStale) return { kind: "drop" };
         // Resolve the delivery conversation, not whichever ordinary chat is open.
         // Use the route frozen by the service before building messages.
         const target = deliveryTarget ?? options.loadGeneralSettings().proactiveDeliveryTarget;
@@ -508,7 +554,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         // profile chain without creating a session just to generate a candidate.
         const settings = resolveSessionModelSettings(loadModelSettings(), session ?? {});
         if (!settings.apiKey) return { kind: "error", reason: "missing_api_key" };
-        return runProactiveModel({
+        const result = await runProactiveModel({
           settings: {
             provider: settings.provider,
             baseUrl: settings.baseUrl,
@@ -521,6 +567,10 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           messages,
           timeoutMs: 45_000,
         });
+        if (result.kind === "send" && repeatsRecentProactiveMessage(result.text, generationShares.history, Date.now(), generationShares.worldShare)) {
+          return { kind: "drop" };
+        }
+        return result;
       },
       // Model failure is fail-closed: the proactive service cancels this
       // attempt instead of sending a generic canned message.
@@ -619,23 +669,34 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
             occurredAt: ctx.now, expiresAt: ctx.now + 24 * 3_600_000, strengthPerHour: 2, decayPerHour: 0.1,
             replyBurden: "question", ...item });
         }
-        const timezone = resolveChatContextTimezone(loadUserProfile().timezone);
-        worldStore.advance({ now: ctx.now, timezone });
+        worldStore.advance({ now: ctx.now, timezone: ctx.timezone });
         const world = worldStore.worldView().amphoreus;
         const personal = world?.personal;
         const lifeState = lifeStore.refreshState({ now: ctx.now, dateKey: ctx.localDate,
           ...(personal ? { energy: personal.energy, activity: personal.currentActivity?.activity === "rest" && personal.energy >= 55 ? "idle" : personal.currentActivity?.activity } : {}) });
         if (!companion.relationship.paused && companion.relationship.proactiveLifeEnabled) {
+          if (ctx.state.unansweredCount === 0 && (route === null || route.available)) {
+            const histories = await getProactiveHistories(route?.available ? route.recipient : undefined);
+            const lastUser = histories.ordinary.filter(turn => turn.role === "user").at(-1);
+            if (histories.careAllowed) {
+              const care = userCareOpportunity(lastUser, histories.conversationId, ctx.now);
+              if (care) opportunities.push(care);
+              if (!care || !canAskAboutRecentWellbeing(care.occurredAt, ctx.now, ctx.localHour)) {
+                const greeting = standaloneCareOpportunity(lastUser, histories.conversationId, {
+                  now: ctx.now, localDate: ctx.localDate, localHour: ctx.localHour, lastActivity: histories.ordinary.at(-1)?.at,
+                });
+                if (greeting) opportunities.push(greeting);
+              }
+            }
+            if (companion.relationship.innerLifeEnabled && histories.conversationId) {
+              const association = relatedConversationOpportunity(world, lastUser, ctx.now, histories.conversationId);
+              if (association) opportunities.push(association);
+            }
+          }
           if (companion.relationship.innerLifeEnabled) {
             opportunities.push(...worldInitiativeOpportunities(world, ctx.now, conversationId));
             const bored = boredomInitiativeOpportunity(world, lifeState, ctx.now, conversationId);
             if (bored) opportunities.push(bored);
-            if (ctx.state.unansweredCount === 0 && (route === null || route.available)) {
-              const histories = await getProactiveHistories(route?.available ? route.recipient : undefined);
-              const lastUser = [...histories.ordinary].reverse().find(turn => turn.role === "user");
-              const association = histories.conversationId ? relatedConversationOpportunity(world, lastUser, ctx.now, histories.conversationId) : undefined;
-              if (association) opportunities.push(association);
-            }
           }
           for (const moment of lifeStore.listPending(ctx.now)) {
             if (moment.id.startsWith("daily:") || moment.id.startsWith("idle:")) continue;
@@ -654,6 +715,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           density: normalizeProactiveDensity(settings.proactiveDensity), dayKey: ctx.localDate,
           dailyAttemptLimit: Math.min(60, Math.max(8, (settings.proactiveDailyLimit ?? 3) * 2 + 4)),
           eligible: opportunity => (route === null || route.available)
+            && (opportunity.source !== "user_care" || canAskAboutRecentWellbeing(opportunity.occurredAt, ctx.now, ctx.localHour))
             && (opportunity.score ?? 70) >= (settings.proactiveTargetScore ?? DEFAULT_PROACTIVE_TARGET_SCORE)
             && canStartProactiveGeneration(ctx.snapshot, ctx.state, initiativeCandidate(opportunity)).allowed });
         return selected ? [{ ...initiativeCandidate(selected, selected.key), reason: selected.summary }] : [];

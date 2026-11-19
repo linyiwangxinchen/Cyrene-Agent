@@ -15,6 +15,8 @@ import type { TtsEngine } from "../../shared/tts-types";
 import { createLlmClient, type LlmRequestSettings } from "../services/llm/llm-client";
 import { resolveTimeoutPolicy } from "../runtime-policy";
 import { resolveTransport } from "../orchestrator/vendors";
+import { stripThinkBlocks } from "../chat/think-filter";
+import { isCallWeatherRequest, toSpokenCallWeather } from "./call-weather";
 
 const LOG_PREFIX = "[CallManager]";
 
@@ -61,7 +63,8 @@ function notifyCallEnded(generation: number): void {
  * 通话场景对短上下文敏感度低，但用户希望"加点内存"——给到 24 轮（48 条），
  * 短上下文模型如果爆了由 settings 里的 model context_length 兜底。 */
 const MAX_CALL_CONTEXT_TURNS = 24;
-const callHistory: Array<{ role: "user" | "assistant"; content: string }> = [];
+type CallHistoryMessage = { role: "user" | "assistant"; content: string };
+const callHistory: CallHistoryMessage[] = [];
 
 /** 滑动窗口截断：每次 push 两轮后调用，保留最近 MAX_CALL_CONTEXT_TURNS 轮。
  * 这样 callHistory 数组本身有界（48 条），不会被长通话撑爆内存。 */
@@ -90,7 +93,7 @@ let ttsSettingsGetter: (() => {
 }) | null = null;
 
 /** index.ts 启动时注入模型配置、TTS 配置和 system prompt 构建器。 */
-let systemPromptBuilder: ((userText: string) => Promise<string>) | null = null;
+let systemPromptBuilder: ((userText: string, messages: CallHistoryMessage[]) => Promise<string>) | null = null;
 let weatherHandler: ((userText: string) => Promise<string | null>) | null = null;
 
 export function setCallSettings(
@@ -109,7 +112,7 @@ export function setCallSettings(
     ttsMimoKey: string; ttsMimoVoiceAudioPath: string; ttsMimoStylePrompt: string;
   ttsMosslandKey?: string; ttsMosslandVoiceId?: string; ttsMosslandModel?: string; ttsMosslandFormat?: "mp3" | "wav";
   },
-  systemPromptFn: (userText: string) => Promise<string>,
+  systemPromptFn: (userText: string, messages: CallHistoryMessage[]) => Promise<string>,
   weatherFn: (userText: string) => Promise<string | null>,
 ): void {
   modelSettingsGetter = modelGetter;
@@ -509,24 +512,21 @@ export function handleAudioFrame(frame: Buffer): void {
   }
 }
 
-/** 天气关键词正则匹配 */
-const WEATHER_REGEX = /天气|今天.*热|今天.*冷|下雨|下雪|气温|几度|多少度|穿什么/;
-
 /**
  * 获取回复文本。
- * 1. 先正则匹配天气 → 直接查天气
+ * 1. 明确询问天气时使用实时天气快捷路径
  * 2. 否则直接调 LLM（不走 FC loop，不调工具），用通话专用 system prompt
- * 3. 回复过滤掉 [sticker:xxx] 表情包标记
+ * 3. 清理不可朗读的内部内容与符号
  */
 async function runAgentTurn(userText: string, signal: AbortSignal, generation: number): Promise<string | null> {
   let stage = "天气查询";
   let requestSettings: LlmRequestSettings | null = null;
   try {
-    // 1. 天气正则匹配
-    if (WEATHER_REGEX.test(userText) && weatherHandler) {
-      const weatherReply = await weatherHandler(userText);
+    if (isCallWeatherRequest(userText) && weatherHandler) {
+      const result = await weatherHandler(userText);
       if (!isCurrentCall(generation) || signal.aborted) return null;
-      if (weatherReply) {
+      if (result) {
+        const weatherReply = toSpokenCallWeather(result);
         // 天气走快捷路径，也记入上下文
         callHistory.push({ role: "user", content: userText });
         callHistory.push({ role: "assistant", content: weatherReply });
@@ -543,13 +543,12 @@ async function runAgentTurn(userText: string, signal: AbortSignal, generation: n
     }
 
     stage = "通话提示词构建";
-    const systemPrompt = await systemPromptBuilder?.(userText) ?? "";
+    const conversation: CallHistoryMessage[] = [...callHistory, { role: "user", content: userText }];
+    const systemPrompt = await systemPromptBuilder?.(userText, conversation) ?? "";
     if (!isCurrentCall(generation) || signal.aborted) return null;
     const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
       { role: "system", content: systemPrompt },
-      // 取最近 MAX_CALL_CONTEXT_TURNS 轮历史（每轮 2 条：user + assistant）
-      ...callHistory.slice(-MAX_CALL_CONTEXT_TURNS * 2),
-      { role: "user", content: userText },
+      ...conversation,
     ];
 
     stage = "模型请求";
@@ -566,8 +565,7 @@ async function runAgentTurn(userText: string, signal: AbortSignal, generation: n
       signal,
     );
     if (!isCurrentCall(generation) || signal.aborted) return null;
-    // 过滤掉表情包标记
-    const reply = (resp.text || "").replace(/\[sticker:[^\]]+\]/g, "").trim();
+    const reply = stripThinkBlocks(resp.text || "").replace(/\[sticker:[^\]]+\]|[♪♫♬]/gu, "").trim();
 
     // 记入通话上下文
     if (reply) {

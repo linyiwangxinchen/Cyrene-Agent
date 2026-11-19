@@ -29,6 +29,7 @@ await writeFile(path.join(root, "channel-recovery", `${createHash("sha256").upda
   parts: [{ status: "sending", updatedAt: Date.now() }],
 }), { mode: 0o600 });
 const logs = [], results = [];
+const invitationTitle = "验收：观星后记一笔";
 let server, socket, token, cookie, base, browser, page;
 async function start() {
   server = createWebServer({ dataDir: root, sharedCore: true, secureCookies: false, setupToken: "companion-fixture-setup", staticRoot: path.resolve("dist/renderer"), logger: { info: x => logs.push(String(x)), warn: x => logs.push(String(x)), error: x => logs.push(String(x)) } });
@@ -89,7 +90,9 @@ async function companionTab(name) {
 try {
   await start();
   await check("Unauthenticated companion writes are rejected", async () => {
-    assert.equal((await http("/api/core/invoke", "POST", { channel: "companion:update", args: [] })).response.status, 401);
+    for (const channel of ["companion:update", "companion:world:suggestion:add", "companion:world:suggestion:withdraw"]) {
+      assert.equal((await http("/api/core/invoke", "POST", { channel, args: [] })).response.status, 401);
+    }
   });
   await http("/api/auth/bootstrap", "POST", { username: "companion-test", password: "Fixture-Test-123" }, { "X-Cyrene-Setup-Token": "companion-fixture-setup" });
   await connect(); await server.startChannels();
@@ -193,6 +196,84 @@ try {
       await page.getByRole("dialog", { name: "记忆来源与管理", exact: true }).waitFor({ state: "hidden" });
       assert.equal(JSON.parse(await invoke("memory-governance:export")).l2.length, 0);
     });
+    await check("Chat companion controls use the real Web bridge and stay usable on mobile", async () => {
+      await page.setViewportSize({ width: 1280, height: 1000 });
+      await page.goto(base + "/web/?sessionId=" + encodeURIComponent(fixtureSession.id));
+      const replyMode = page.getByLabel("下一条消息的回应方式", { exact: true });
+      await replyMode.selectOption("listen");
+      assert.equal(await replyMode.inputValue(), "listen");
+      await page.getByRole("button", { name: "纠正回应", exact: true }).click();
+      await page.getByLabel("希望怎样调整回应", { exact: true }).fill("验收：先听完这句话");
+      await page.getByRole("button", { name: "仅下次回复", exact: true }).click();
+      await page.getByRole("button", { name: "已设下次纠正", exact: true }).click();
+      await page.getByLabel("希望怎样调整回应", { exact: true }).fill("验收：在这段会话先听完");
+      await page.getByRole("button", { name: "在此会话记住", exact: true }).click();
+      await page.getByText("已保存到此会话。", { exact: true }).waitFor();
+      assert.ok((await invoke("companion:get")).repairCases.some(item =>
+        item.conversationId === fixtureSession.id && item.note === "验收：在这段会话先听完"));
+      await page.getByLabel("希望怎样调整回应", { exact: true }).press("Escape");
+      await page.screenshot({ path: path.join(evidence, "chat-companion-desktop.png") });
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByRole("button", { name: "约个时间再聊", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "约个时间再聊", exact: true });
+      await dialog.getByLabel("跟进事项", { exact: true }).fill("验收：在聊天里约好");
+      await dialog.getByRole("button", { name: "确认跟进", exact: true }).click();
+      await dialog.getByText("等待合适时间", { exact: true }).waitFor();
+      assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= element.clientWidth + 1), true);
+      await page.screenshot({ path: path.join(evidence, "chat-followup-mobile.png") });
+      await dialog.getByRole("button", { name: "以后别问", exact: true }).click();
+      await dialog.getByText("已取消", { exact: true }).waitFor();
+      assert.ok((await invoke("companion:get")).followups.some(item =>
+        item.conversationId === fixtureSession.id && item.topic === "验收：在聊天里约好" && item.status === "cancelled"));
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+    });
+    await check("Quiet companionship is silent, survives mode changes and leaves chat history alone", async () => {
+      const before = await invoke("chats:get", fixtureSession.id);
+      const trigger = page.getByRole("button", { name: "安静共处", exact: true });
+      await trigger.click();
+      const dialog = page.getByRole("dialog", { name: "安静共处", exact: true });
+      assert.equal(await dialog.getByRole("checkbox", { name: "结束时播放提示音" }).isChecked(), false);
+      await dialog.getByRole("button", { name: "开始共处", exact: true }).click();
+      await dialog.waitFor({ state: "hidden" });
+      await trigger.getByRole("timer").waitFor();
+      await page.locator(".cy-mode-switch").getByText("Work", { exact: true }).click();
+      await trigger.click();
+      await dialog.getByRole("button", { name: /^暂\s*停$/ }).click();
+      await dialog.getByText("共处已暂停", { exact: true }).waitFor();
+      await dialog.screenshot({ path: path.join(evidence, "quiet-companion-mobile.png"), animations: "disabled" });
+      await dialog.getByRole("button", { name: /^继\s*续$/ }).click();
+      await dialog.getByText("昔涟安静陪着你", { exact: true }).waitFor();
+      await dialog.getByRole("button", { name: /^结\s*束$/ }).click();
+      await trigger.waitFor({ state: "hidden" });
+      await page.locator(".cy-mode-switch").getByText("Chat", { exact: true }).click();
+      assert.deepEqual((await invoke("chats:get", fixtureSession.id)).messages, before.messages);
+    });
+    await check("Fictional invitations are explicitly confirmed, scoped and withdrawable in mobile Chat", async () => {
+      const other = await invoke("chats:create", { title: "隔离验收会话", mode: "chat" });
+      await page.getByRole("button", { name: "邀昔涟做件小事", exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: "邀昔涟做件小事", exact: true });
+      await dialog.getByLabel("小事名称", { exact: true }).fill(invitationTitle);
+      await dialog.getByLabel("想邀请她做什么", { exact: true }).fill("在翁法罗斯的观星记录里留下一段感想");
+      assert.deepEqual(await invoke("companion:world:suggestions:get", fixtureSession.id), []);
+      await dialog.getByRole("button", { name: "确认邀请", exact: true }).click();
+      await dialog.getByText("已安排", { exact: true }).waitFor();
+      const [invitation] = await invoke("companion:world:suggestions:get", fixtureSession.id);
+      assert.equal(invitation.title, invitationTitle);
+      assert.equal(invitation.status, "planned");
+      assert.equal(invitation.outcome, undefined);
+      assert.deepEqual(await invoke("companion:world:suggestions:get", other.id), []);
+      assert.equal(await invoke("companion:world:suggestion:withdraw", other.id, invitation.id), null);
+      assert.equal(await page.locator("body").evaluate(element => element.scrollWidth <= element.clientWidth + 1), true);
+      await page.screenshot({ path: path.join(evidence, "world-invitation-mobile.png") });
+      await dialog.getByRole("button", { name: "撤回邀请", exact: true }).click();
+      await dialog.getByText("已中断", { exact: true }).waitFor();
+      const [withdrawn] = await invoke("companion:world:suggestions:get", fixtureSession.id);
+      assert.equal(withdrawn.status, "interrupted");
+      await page.keyboard.press("Escape");
+      await dialog.waitFor({ state: "hidden" });
+    });
     assert.deepEqual(pageErrors, []);
     await browser.close(); browser = undefined;
   } else {
@@ -207,6 +288,8 @@ try {
     if (process.argv.includes("--ui")) {
       assert.ok((await invoke("companion:get")).followups.some(item => item.topic === "隔离验收：论文答辩" && item.status === "completed"));
       assert.equal((await invoke("channels:recovery:list")).find(item => item.id === recoveryId)?.status, "completed");
+      assert.ok((await invoke("companion:world:suggestions:get", fixtureSession.id)).some(item =>
+        item.title === invitationTitle && item.status === "interrupted"));
     }
   });
   await writeFile(path.join(evidence, "results.json"), JSON.stringify({ results }, null, 2));

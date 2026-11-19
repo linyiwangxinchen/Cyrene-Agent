@@ -107,6 +107,15 @@ describe("proactive hard policy", () => {
       .toBe(true);
   });
 
+  it("allows overnight care only once the private reply has had thirty minutes to rest", () => {
+    const state = { ...createDefaultProactiveState(), lastNormalConversationEndedAt: NOW - 30 * 60_000 };
+    const clock = snapshot({ localHour: 2, localMinute: 0, idleSec: 30 * 60 });
+    const care = { ...candidate(), sceneId: "standalone_care" };
+    expect(canCommitProactiveMessage(clock, state, care, 0).allowed).toBe(true);
+    expect(canCommitProactiveMessage(clock, { ...state, lastNormalConversationEndedAt: NOW - 30 * 60_000 + 1 }, care, 0).reason)
+      .toBe("normal_quiet_period");
+  });
+
   it("blocks disabled, locked, busy, and overlapping generation states", () => {
     const state = createDefaultProactiveState();
     expect(canStartProactiveGeneration(snapshot({ enabled: false }), state, candidate()).reason).toBe("disabled");

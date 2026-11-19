@@ -454,11 +454,34 @@ export class XilianWorldStore {
       const id = personalIntentionId(input);
       if (!world.personalActions.some((action) => action.id === id) && hasArchivedWorldEntry(path.join(path.dirname(this.filePath), "amphoreus-history.sqlite"), id)) return false;
       const count = world.personalActions.length;
-      result = planPersonalIntention(world, input, this.now(), this.worldTime?.timezone ?? systemTimezone());
+      result = planPersonalIntention(world, input, Math.max(this.now(), world.lastReconciledAt), this.worldTime?.timezone ?? systemTimezone());
       if (world.personalActions.length === count) return false;
       world.revision++; return true;
     });
     return result ? clone(result) : undefined;
+  }
+
+  listPersonalSuggestions(conversationId: string) {
+    const actions = this.readData().amphoreus?.personalActions ?? [];
+    return clone(actions.filter((action) => action.origin === "user_suggestion" && action.conversationId === conversationId)
+      .slice(-30).reverse());
+  }
+
+  withdrawPersonalSuggestion(conversationId: string, actionId: string) {
+    let result: import("../../shared/amphoreus-world").PersonalAction | undefined;
+    this.updateAmphoreus((world) => {
+      result = world.personalActions.find((action) => action.id === actionId
+        && action.origin === "user_suggestion" && action.conversationId === conversationId);
+      const now = Math.max(this.now(), world.lastReconciledAt);
+      if (result?.status !== "planned" || result.startsAt <= now) return false;
+      result.status = "interrupted";
+      result.reason = "建议已撤回，没有开始这件小事。";
+      result.resolvedAt = now;
+      result.version++;
+      world.revision++;
+      return true;
+    });
+    return result ? clone(result) : null;
   }
 
   queryWorldHistory(input: WorldHistoryQuery = {}) {

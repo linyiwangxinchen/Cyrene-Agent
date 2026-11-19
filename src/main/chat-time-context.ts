@@ -138,7 +138,7 @@ function buildGapNotice(messages: ChatContextMessage[], timezone: string): strin
 
   return [
     "[对话时间信息]",
-    `当前时间：${formatLocalTime(latestUser.at, timezone)}`,
+    `本轮用户的发送时间：${formatLocalTime(latestUser.at, timezone)}`,
     `距离上一条有效聊天消息：${formatDuration(gapMs)}`,
     "仅用于理解对话连续性；除非与当前语境有关，否则不要主动提及时间间隔，也不要复述本段内容。",
   ].join("\n");
@@ -161,7 +161,7 @@ export function stripLeakedChatTimeContext(text: string): string {
   return text.replace(LEADING_TIME_METADATA_RE, "").trimStart();
 }
 
-export function buildConversationTimeContext(messages: ChatContextMessage[], timezone: string): ConversationTimeContext {
+export function buildConversationTimeContext(messages: ChatContextMessage[], timezone: string, responseAt?: number): ConversationTimeContext {
   const resolvedTimezone = resolveChatContextTimezone(timezone);
   const gapNotice = buildGapNotice(messages, resolvedTimezone);
   const timestampedMessages = messages.map((message) => withTimePrefix(message, resolvedTimezone));
@@ -169,6 +169,14 @@ export function buildConversationTimeContext(messages: ChatContextMessage[], tim
     cleanMessages: messages.map((message) => ({ ...message })),
     timestampedMessages,
     messages: timestampedMessages,
-    timeContext: [buildInternalContextPolicy(messages), gapNotice].filter(Boolean).join("\n\n"),
+    timeContext: [
+      buildInternalContextPolicy(messages),
+      isValidTimestamp(responseAt) ? [
+        "[回复时间]",
+        `用户当地现在：${formatLocalTime(responseAt, resolvedTimezone)}`,
+        "消息里的今天、昨天、明天按那条消息的发送日期理解。你提到现在时，以这里的时间为准。光凭时间不能判断对方在做什么。只在话题需要时自然用到这些信息。",
+      ].join("\n") : "",
+      gapNotice,
+    ].filter(Boolean).join("\n\n"),
   };
 }

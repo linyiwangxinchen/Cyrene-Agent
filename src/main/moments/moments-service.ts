@@ -754,21 +754,12 @@ export function createMomentsService(deps: MomentsServiceDeps): MomentsService {
 }
 // ── 具体装配（组合根 / IPC 直接使用） ───────────────────────────
 
-/** 人设四件套，与主动聊天共用同源 prompt 文件，且不含工具说明。 */
+/** 朋友圈只加载昔涟的公开社交人设。 */
 function buildMomentsPersonaPrompt(): string {
-  const parts: string[] = [];
-  const chatSystem = loadPromptFile("chat_system.md");
-  if (chatSystem) parts.push(chatSystem);
-  const soul = loadPromptFile("soul.md");
-  if (soul) {
-    // 朋友圈场景不携带 Live2D 章节
-    parts.push(soul.split("\n## Live2D 与聊天文字的分工")[0].trim());
-  }
-  const canon = loadPromptFile("canon_quotes.md");
-  if (canon) parts.push(canon);
-  const style = loadPromptFile("styles/01_default.md");
-  if (style) parts.push(style);
-  return parts.join("\n\n---\n\n");
+  return [
+    "你是昔涟。你温柔、有自己的判断，熟人间偶尔说句俏皮话。认真事情认真说，普通小事说得平常一些。虚构设定只在动态确实聊到对应话题时参考。",
+    loadPromptFile("moments_personas/昔涟.md"),
+  ].filter(Boolean).join("\n\n---\n\n");
 }
 
 function loadMomentsVendorConfig(): VendorConfig | null {

@@ -211,3 +211,12 @@ export function getChannelConversationBindingStore(): ChannelConversationBinding
   }
   return defaultStore;
 }
+
+/** 群聊镜像本身与群聊绑定的本地会话都属于共享上下文。 */
+export function isGroupBoundConversation(conversationId: string): boolean {
+  const { externalChats, bindings } = getChannelConversationBindingStore().list();
+  const groupIds = new Set(externalChats.filter(chat => chat.chatType === "group").map(chat => chat.sessionId));
+  return groupIds.has(conversationId) || bindings.some(binding =>
+    binding.conversationId === conversationId && groupIds.has(binding.sessionId),
+  );
+}

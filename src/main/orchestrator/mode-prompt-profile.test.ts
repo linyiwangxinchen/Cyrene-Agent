@@ -6,7 +6,7 @@ const load = (name: string) => marker(name);
 
 describe("buildModePrompt", () => {
   it.each([
-    ["chat", ["soul.md", "chat_system.md", "chat_identity.md", "canon_quotes.md"], ["cyrene_harness.md", "work_system.md", "learn_system.md", "code_system.md"]],
+    ["chat", ["soul.md", "chat_system.md", "chat_identity.md"], ["canon_quotes.md", "cyrene_harness.md", "work_system.md", "learn_system.md", "code_system.md"]],
     ["work", ["soul.md", "work_system.md", "work_identity.md", "work_remark.md", "canon_quotes_lite.md"], ["chat_system.md", "learn_system.md", "code_system.md"]],
     ["learn", ["soul.md", "learn_system.md", "learn_identity.md", "canon_quotes.md"], ["chat_system.md", "work_system.md", "code_system.md"]],
     ["code", ["soul.md", "code_system.md", "code_identity.md", "code_remark.md", "canon_quotes_lite.md"], ["chat_system.md", "work_system.md", "learn_system.md"]],

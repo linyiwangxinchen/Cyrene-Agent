@@ -4,6 +4,7 @@ import type {
   ProactiveRuntimeSnapshot,
   ProactiveState,
 } from "./proactive-types";
+import { STANDALONE_CARE_MIN_IDLE_MS, STANDALONE_CARE_SCENE } from "./relationship-opportunities";
 
 // These are anti-flood bounds only. Passing them must never create an opportunity.
 export const NORMAL_QUIET_MS = 3 * 60 * 1000;
@@ -63,6 +64,7 @@ export function canStartProactiveGeneration(
   state: ProactiveState,
   candidate: ProactiveCandidate,
 ): ProactiveCommitDecision {
+  const standaloneCare = candidate.sceneId === STANDALONE_CARE_SCENE;
   if (!snapshot.enabled) return block("disabled");
   if (snapshot.screenLocked) return block("screen_locked");
   if (snapshot.conversationBusy) return block("conversation_busy");
@@ -71,7 +73,8 @@ export function canStartProactiveGeneration(
     && isWithinQuietWindow(snapshot.localHour * 60 + snapshot.localMinute, snapshot.quietStartMinute, snapshot.quietEndMinute)) {
     return block("custom_quiet_period");
   }
-  if (isNight(snapshot.localHour) && snapshot.idleSec >= NIGHT_ACTIVE_IDLE_LIMIT_SEC) return block("night_inactive");
+  if (!standaloneCare && isNight(snapshot.localHour)
+    && snapshot.idleSec >= NIGHT_ACTIVE_IDLE_LIMIT_SEC) return block("night_inactive");
   if (snapshot.dailyLimit === 0) return block("daily_limit");
   if (snapshot.dailyLimit !== undefined && snapshot.localDate && state.dailyMessageDate === snapshot.localDate
     && (state.dailyMessageCount ?? 0) >= snapshot.dailyLimit) return block("daily_limit");
@@ -83,7 +86,7 @@ export function canStartProactiveGeneration(
 
   if (
     state.lastNormalConversationEndedAt !== null &&
-    snapshot.now - state.lastNormalConversationEndedAt < NORMAL_QUIET_MS
+    snapshot.now - state.lastNormalConversationEndedAt < (standaloneCare ? STANDALONE_CARE_MIN_IDLE_MS : NORMAL_QUIET_MS)
   ) return block("normal_quiet_period");
 
   if (

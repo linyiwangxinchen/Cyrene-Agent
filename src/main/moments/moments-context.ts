@@ -11,6 +11,7 @@
 
 import type {
   MomentComment,
+  MomentAuthor,
   MomentFeedItem,
   MomentPost,
   MomentReaction,
@@ -64,8 +65,10 @@ export function shouldRetrievePostContext(query: string): boolean {
 }
 // ── 格式化辅助 ──────────────────────────────────────────────────
 
-function authorLabel(author: MomentPost["author"]): string {
-  return author === "cyrene" ? "昔涟" : "用户";
+export function formatMomentAuthor(author: MomentAuthor): string {
+  if (author === "user") return "用户";
+  if (author === "cyrene") return "昔涟";
+  return author;
 }
 
 function pad2(value: number): string {
@@ -119,7 +122,7 @@ export function buildRecentMomentsBlock(
 
   const lines = recent.map((post) => {
     const excerpt = postExcerpt(post);
-    let line = `- ${formatRecentTime(post.createdAt, now)} ${authorLabel(post.author)}发布了动态："${excerpt}"`;
+    let line = `- ${formatRecentTime(post.createdAt, now)} ${formatMomentAuthor(post.author)}发布了动态："${excerpt}"`;
     const annotations: string[] = [];
     if (interactions.some((i) => isMomentReaction(i) && i.actor === "cyrene" && i.postId === post.id)) {
       annotations.push("昔涟已点赞");
@@ -182,9 +185,9 @@ function formatThread(comments: readonly MomentComment[]): string {
     .slice(-THREAD_MAX_COMMENTS)
     .map((comment) => {
       const target = comment.replyTo ? byId.get(comment.replyTo) : undefined;
-      const replyMark = target ? `（回复${authorLabel(target.author)}）` : "";
+      const replyMark = target ? `（回复${formatMomentAuthor(target.author)}）` : "";
       const d = new Date(comment.createdAt);
-      return `[${pad2(d.getHours())}:${pad2(d.getMinutes())}] ${authorLabel(comment.author)}${replyMark}：${comment.content.trim()}`;
+      return `[${pad2(d.getHours())}:${pad2(d.getMinutes())}] ${formatMomentAuthor(comment.author)}${replyMark}：${comment.content.trim()}`;
     });
   if (lines.length === 0) return "（暂无）";
 
@@ -197,13 +200,13 @@ function formatThread(comments: readonly MomentComment[]): string {
 }
 
 /** Layer 2：目标动态的完整上下文（原文 + 评论线程 + 触发摘录 + 配图）。 */
-export function buildPostContextBlock(item: MomentFeedItem): string {
+export function buildPostContextBlock(item: MomentFeedItem, conversationId?: string): string {
   const { post } = item;
   const sections: string[] = [];
 
   const postLines = [
     "[指代目标动态]",
-    `发布者：${authorLabel(post.author)}`,
+    `发布者：${formatMomentAuthor(post.author)}`,
     `发布时间：${formatFullTime(post.createdAt)}`,
   ];
   if (post.title?.trim()) postLines.push(`标题：${post.title.trim()}`);
@@ -212,7 +215,8 @@ export function buildPostContextBlock(item: MomentFeedItem): string {
 
   sections.push(`[评论线程]\n${formatThread(item.comments)}`);
 
-  if (post.source?.type === "conversation" && post.source.triggerExcerpt?.trim()) {
+  if (conversationId && post.author === "cyrene" && post.source?.type === "conversation"
+    && post.source.triggerConversationId === conversationId && post.source.triggerExcerpt?.trim()) {
     sections.push(`[触发摘录]\n${post.source.triggerExcerpt.trim().slice(0, TRIGGER_EXCERPT_MAX_CHARS)}`);
   }
 
@@ -234,6 +238,7 @@ export function buildMomentsContextBlock(
   feed: readonly MomentFeedItem[],
   query: string,
   now: number,
+  conversationId?: string,
 ): string {
   const posts = feed.map((item) => item.post);
   const interactions: Array<MomentComment | MomentReaction> = feed.flatMap((item) => [
@@ -248,7 +253,7 @@ export function buildMomentsContextBlock(
   if (shouldRetrievePostContext(query) && posts.length > 0) {
     const target = rankMomentsPosts(posts, query, now)[0];
     const item = feed.find((candidate) => candidate.post.id === target.id);
-    if (item) parts.push(buildPostContextBlock(item));
+    if (item) parts.push(buildPostContextBlock(item, conversationId));
   }
   return parts.join("\n\n---\n\n");
 }

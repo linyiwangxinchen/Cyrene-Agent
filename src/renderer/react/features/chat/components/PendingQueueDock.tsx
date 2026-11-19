@@ -16,6 +16,7 @@ export interface PendingQueueDockItem {
   id: string;
   content: string;
   attachmentCount?: number;
+  companionGuided?: boolean;
 }
 
 interface PendingQueueDockProps {
@@ -56,11 +57,11 @@ export function PendingQueueDock({
     }
   }
 
-  async function adjust(id: string) {
-    if (!onAdjust || !adjustmentAvailable) return;
-    setBusyId(id);
+  async function adjust(item: PendingQueueDockItem) {
+    if (!onAdjust || !adjustmentAvailable || item.companionGuided) return;
+    setBusyId(item.id);
     try {
-      await onAdjust(id);
+      await onAdjust(item.id);
     } finally {
       setBusyId(null);
     }
@@ -147,9 +148,9 @@ export function PendingQueueDock({
                       <button
                         type="button"
                         aria-label={t("composer.queueAdjust")}
-                        title={adjustmentAvailable ? t("composer.queueAdjust") : t("composer.queueAdjustUnavailable")}
-                        disabled={busy || !adjustmentAvailable}
-                        onClick={() => void adjust(item.id)}
+                        title={item.companionGuided ? t("composer.companionReply.queued") : adjustmentAvailable ? t("composer.queueAdjust") : t("composer.queueAdjustUnavailable")}
+                        disabled={busy || !adjustmentAvailable || item.companionGuided}
+                        onClick={() => void adjust(item)}
                       ><EnterOutlined /></button>
                       <button
                         type="button"

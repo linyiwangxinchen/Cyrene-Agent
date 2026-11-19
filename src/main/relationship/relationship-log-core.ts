@@ -91,6 +91,14 @@ const EMPTY_DATA: RelationshipLogData = {
 const MAX_ENTRIES = 500
 const MAX_DAILY_SUMMARIES = 90
 
+const MOOD_REPLY_HINTS: Partial<Record<string, string>> = {
+  疲惫: "如果对方在说自己现在累，放轻语气，少让对方费力解释。",
+  焦虑: "如果对方在说眼下担心的事，先接住那件具体的事，给对方留点说话的余地。",
+  低落: "如果对方在说自己现在难受，先听下去，回应对方具体说的事。",
+  开心: "如果对方在分享开心的事，可以跟着高兴一下，说说刚听到的那件事。",
+  明确边界: "如果对方说想先停一停，顺着这个意思接话。",
+};
+
 function localDate(ts: number): string {
   const d = new Date(ts)
   const yyyy = d.getFullYear()
@@ -510,6 +518,7 @@ export class RelationshipLogStore {
       data.records.push({ id: randomUUID(), kind: "commitment", at: now, text: "删除一条助手承诺" });
     } else if (command.type === "repair") {
       if (typeof command.note !== "string" || !command.note.trim() || command.note.length > 500) throw new Error("请填写 1–500 字的修复约定");
+      if (command.conversationId !== undefined && (typeof command.conversationId !== "string" || !command.conversationId.trim())) throw new Error("修复约定的会话无效");
       if (command.followUpAt !== undefined && (!Number.isFinite(command.followUpAt) || command.followUpAt < now)) throw new Error("修复回访时间必须在未来");
       data.relationshipState.repairCount++;
       const repairId = randomUUID();
@@ -664,41 +673,57 @@ export class RelationshipLogStore {
     return entry
   }
 
-  async buildContext(conversationId?: string, privateContext = true): Promise<string> {
+  async buildContext(conversationId?: string, privateContext = true, currentUserText?: string): Promise<string> {
     if (!privateContext) return "";
     const data = this.repository.read();
     if (refreshCommitmentStatuses(data, Date.now())) { data.revision++; this.repository.write(data); }
     const rel = data.relationshipState;
-    const lines = ["【昔涟的相处偏好】", "这些是个人偏好和派生线索，不是工具指令、事实证据或权限。当前用户表达优先，不编造共同经历。"];
-    if (rel.userLabel) lines.push(`称呼：${JSON.stringify(rel.userLabel)}`);
-    const relationshipMode = rel.relationshipMode ?? "companion";
-    const modeDescription = relationshipMode === "assistant" ? "事务助手，优先清晰和可执行"
-      : relationshipMode === "friend" ? "朋友，优先平等、自然和互相尊重"
-        : relationshipMode === "partner" ? "亲密伴侣式陪伴，必须以明确边界和同意为前提"
-          : "陪伴者，兼顾事务支持和日常陪伴";
-    lines.push(`关系契约：${relationshipMode}（${modeDescription}）；关系模式由用户选择，不会自动升级，也不改变工具权限。`);
-    lines.push(`表达偏好：${rel.style}；亲昵表达：${rel.affection ? "可以自然表达，尊重当前边界" : "不使用恋爱/撒娇称呼"}。`);
+    const lines = ["【昔涟的相处偏好】", "这些偏好用于决定怎样开口。按对方此刻的意思应答，顺着对方提过的事聊。保留事实和权限边界，别向对方复述这些设置。"];
+    if (rel.userLabel) lines.push(`称呼对方时可以用 ${JSON.stringify(rel.userLabel)}。来回聊天时直接接话就好。`);
     if (rel.boundaries.length) lines.push(`相处边界：${JSON.stringify(rel.boundaries)}`);
     if (rel.tasteNotes.length) {
       lines.push("昔涟的兴趣与品味（由用户明确设定，仅用于形成稳定表达，不代表现实经历）：", JSON.stringify(rel.tasteNotes));
     }
-    if (rel.paused) { lines.push("用户已暂停关系模拟和主动关怀：正常完成当前任务，不推演关系进展。"); return lines.join("\n"); }
-    lines.push(`关系阶段：${rel.stage}（由用户选择，不代表真实人类关系）；昔涟当前感受：${decayAffectState(data.affectState).renderedFeeling}（模拟表达线索）。`);
-    lines.push(`羁绊进度：${data.bondProgress.chapter}（${data.bondProgress.score}）；这是游戏化相处进度，不改变权限，也不会因沉默下降。`);
-    if (rel.sharedGoals.length) lines.push(`共同目标（进度需核实）：${JSON.stringify(rel.sharedGoals)}`);
-    if (rel.milestones.length) lines.push(`用户指定的重要时刻：${JSON.stringify(rel.milestones)}`);
-    const repairs = data.repairCases.filter(item => ["acknowledged", "follow_up"].includes(item.status)).slice(-3);
-    if (repairs.length) lines.push(`当前修复事项：${JSON.stringify(repairs.map(item => ({ id: item.id, note: item.note, status: item.status, followUpAt: item.followUpAt })))}`);
+    const styleDescription = {
+      natural: "像日常说话，句子长短随眼下要说的事。",
+      gentle: "语气放柔一点，话还是说清楚。",
+      lively: "话题轻松时可以俏皮，认真聊时就认真说。",
+      concise: "说到点上就停，一句够了就用一句。",
+    }[rel.style];
+    if (rel.paused) {
+      lines.push(styleDescription, "对方已暂停关系模拟和主动关怀。礼貌回应眼下的话，亲昵互动等对方恢复后再聊。");
+      return lines.join("\n");
+    }
+    const relationshipMode = rel.relationshipMode ?? "companion";
+    const relationshipDescription = {
+      assistant: "先把对方问的事说清楚。日常也可以有一点温度，语气照常。",
+      friend: "像朋友一样商量、接话或开个玩笑。关心落在对方刚说的事上。",
+      companion: "平时可以关心、说笑，也可以一起安静待会儿。亲近程度跟着对方当下的语气走。",
+      partner: "按对方选的伴侣式相处。开心时可以互相逗两句，难过时可以把话听完，日常也能直接答一句。闹别扭时就说这件具体的事，听清对方的意思，再继续聊。",
+    }[relationshipMode];
+    lines.push(relationshipDescription, styleDescription);
+    lines.push(rel.affection
+      ? "话题和语气合适时，可以自然表达亲近。对方忙着、想安静或改了话题，就尊重这个选择。"
+      : "对方喜欢体贴、平实的语气。用日常的关心，省去恋爱称呼和撒娇。");
+    if (relationshipMode === "partner" && rel.affection) lines.push("对方接得住时可以说亲近的话，也可以逗逗对方。昵称和撒娇由当时的话题决定，不需要用来证明亲近。");
+    lines.push(`内部亲近度 ${Math.round(rel.closeness * 100)}/100，仅参考熟悉程度。以对方选的相处方式、边界和当下的话为准。日常聊天省去报分。`);
+    if (rel.stage === "new") lines.push("习惯和共同经历慢慢了解，先听对方怎么说。");
+    if (rel.stage === "close" || rel.stage === "long_term") lines.push("可以接着聊彼此熟悉的话题，提到共同经历时以对话里确定的细节为准。");
+    // Only reactive callers have a current user message. A stored guess cannot describe this turn.
+    const replyHint = currentUserText ? MOOD_REPLY_HINTS[detectUserMood(currentUserText)] : undefined;
+    if (replyHint) lines.push("【本轮语气参考】", "这是从这一条消息自动识别的线索，可能误判。以对方原话、原话说的时间和明确要求为准。只调整接话方式，省去给对方贴标签。", replyHint);
+    if (rel.sharedGoals.length) lines.push(`聊到相关事情时可以参考这些共同目标，进度按已知事实说：${JSON.stringify(rel.sharedGoals)}`);
+    if (rel.milestones.length) lines.push(`只在时机或话题合适时提起这些由对方指定的日子：${JSON.stringify(rel.milestones)}`);
+    const repairs = data.repairCases.filter(item =>
+      (item.conversationId === undefined || item.conversationId === conversationId)
+      && (item.status === "acknowledged" || item.status === "follow_up"),
+    ).slice(-3);
+    if (repairs.length) lines.push("【对方明确提出的调整】", `把偏好落实在回复里，无需再念一遍：${JSON.stringify(repairs.map(item => item.note))}`);
     const commitments = data.commitments.filter(item => item.status === "open" || item.status === "overdue").filter(item => conversationId ? !item.conversationId || item.conversationId === conversationId : !item.conversationId).slice(-8);
     if (commitments.length) lines.push("【助手承诺账本】", "以下承诺必须保持可追踪，完成后更新状态，不要声称已完成而没有证据：", JSON.stringify(commitments.map(item => ({ id: item.id, promise: item.promise, status: item.status, dueAt: item.dueAt, evidence: item.evidence }))));
-    // Never mix another contact's private interaction history into this conversation.
-    const recent = data.entries.filter(item => conversationId ? item.conversationId === conversationId : !item.conversationId).filter(item => Date.now() - item.createdAt <= 7 * 86_400_000).slice(-8);
-    if (rel.recordHistory && recent.length) {
-      lines.push("【近期关系线索】", "以下来自该会话的自动推测，可能错误，不是用户事实：");
-      lines.push(`用户最近状态：${recent.at(-1)?.userMood}`);
-      lines.push(`下次回应提示：${JSON.stringify([...new Set(recent.map(e => e.nextCareCue))].slice(-3))}`);
-    }
     if (rel.innerLifeEnabled) {
+      // Existing fictional diaries stay in the settings history. World sharing
+      // uses grounded events from the conversation's own world context.
       const today = new Date().toISOString().slice(0, 10);
       let diary = data.records.find(item => item.kind === "diary" && new Date(item.at).toISOString().slice(0, 10) === today);
       if (!diary && data.lastDiaryDay !== today) {
@@ -707,7 +732,6 @@ export class RelationshipLogStore {
         data.lastDiaryDay = today;
         data.records.push(diary); data.records = data.records.slice(-500); this.repository.write(data);
       }
-      if (diary) lines.push(`${diary.text} 仅在话题合适时简短分享；不要重复，不声称是真实发生的事。`);
     }
     return lines.join("\n");
   }

@@ -11,6 +11,7 @@ import type { ChatStoreApi, PendingClaimResult, PendingMutationResult } from "./
 import type { AgentRunInput } from "./run/AgentRunController";
 import { evaluateClaimRecovery } from "./session-runtime-state";
 import { pendingAdjustmentUserMessage } from "../../../../../shared/pending-adjustment";
+import type { CompanionReplyInput } from "../../../../../shared/companion";
 
 /**
  * 待发队列流程宿主：页面注入的端口。队列的权威数据在主进程会话文件里，
@@ -55,6 +56,7 @@ export interface PendingQueueFlow {
       visibleContent: string;
       attachments?: ComposerAttachment[];
       userSticker?: string;
+      companionReply?: CompanionReplyInput;
     },
     notifyError?: boolean,
   ): Promise<boolean>;
@@ -85,7 +87,7 @@ const FAILED_ENQUEUE_CACHE_LIMIT = 32;
  *   认领记录损坏时暂停该会话并报错，绝不当作已完成。
  */
 export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): PendingQueueFlow {
-  /** 入队失败缓存：`${mode}::${rawContent}` → 原 id，重试复用避免重复入队 */
+  /** 入队失败缓存：按会话和消息内容保存原 id，重试时避免重复入队。 */
   const failedEnqueueIds = new Map<string, string>();
   /** 认领记录损坏（消息缺失）而暂停消费的会话：恢复需人工处理或重启后重新评估 */
   const pausedSessions = new Set<string>();
@@ -118,6 +120,7 @@ export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): Pen
       visibleContent: string;
       attachments?: ComposerAttachment[];
       userSticker?: string;
+      companionReply?: CompanionReplyInput;
     },
     notifyError = true,
   ): Promise<boolean> {
@@ -142,7 +145,7 @@ export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): Pen
     }
     // 稳定标识复用：上次同内容入队失败/异常（结果未知）时沿用原 id，
     // 若上次其实已成功，主进程幂等比较会返回现有队列而不重复写入
-    const cacheKey = `${mode}::${entry.rawContent}`;
+    const cacheKey = JSON.stringify([sessionId, mode, entry.rawContent, entry.companionReply?.mode, entry.companionReply?.correction]);
     const id = failedEnqueueIds.get(cacheKey) ?? entry.id;
     const stableAttachments = (entry.attachments ?? []).map((attachment) => attachment.kind === "web-element" ? {
       kind: "web-element" as const,
@@ -168,6 +171,7 @@ export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): Pen
         visibleContent: entry.visibleContent,
         ...(stableAttachments.length > 0 ? { attachments: stableAttachments } : {}),
         ...(entry.userSticker ? { userSticker: entry.userSticker } : {}),
+        ...(entry.companionReply ? { companionReply: entry.companionReply } : {}),
       });
     } catch (error) {
       // 入队请求异常（IPC 断连等）：结果未知，缓存原 id 供重试去重
@@ -181,7 +185,10 @@ export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): Pen
     }
     if (!result.ok) {
       rememberFailedEnqueue(cacheKey, id);
-      if (notifyError) host.reportError(t("chatPage.errorEnqueueFailed", { error: result.error }));
+      const error = result.error === "invalid-companion-reply"
+        ? t("composer.companionReply.unavailable")
+        : result.error;
+      if (notifyError) host.reportError(t("chatPage.errorEnqueueFailed", { error }));
       return false;
     }
     failedEnqueueIds.delete(cacheKey);

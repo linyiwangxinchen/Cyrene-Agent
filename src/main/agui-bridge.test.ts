@@ -2689,6 +2689,48 @@ describe("agui-bridge transcript dispatch", () => {
     return { bridge, runHandler, seenInputs };
   }
 
+  it.each(["matching-claim", "another-claim", "group-binding"] as const)(
+    "只使用本轮私聊认领的回应指导：%s",
+    async scope => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-companion-"));
+      roots.push(root);
+      mocks.userDataRoot = root;
+      const { runHandler, seenInputs } = await setupBridge();
+      const pendingDispatch = {
+        messageId: scope === "another-claim" ? "u-other" : "u1",
+        claimedAt: 1,
+        companionReply: { mode: "listen", correction: "本轮称呼备注" },
+      };
+      mocks.getSession.mockReturnValue({ id: "companion-test", mode: "chat", messages: [], pendingDispatch });
+      if (scope === "group-binding") {
+        const { getChannelConversationBindingStore } = await import("./channels/conversation-binding-store");
+        const bindings = getChannelConversationBindingStore();
+        bindings.observe({ sessionId: "group", channel: "qq", chatId: "group", chatType: "group", lastAt: 1 });
+        bindings.bind("group", "companion-test");
+      }
+
+      await expect(runHandler({ sender: makeSender() }, {
+        sessionId: "companion-test",
+        assistantTurnId: "a1",
+        currentUser: { turnId: "u1", text: "原文", visibleContent: "原文" },
+        companionReply: { mode: "help", correction: "不可信的渲染进程值" },
+      })).resolves.toMatchObject({ success: true });
+
+      if (scope === "matching-claim") {
+        expect(seenInputs[0]).toMatchObject({ companionReply: pendingDispatch.companionReply });
+      } else if (scope === "another-claim") {
+        expect(seenInputs[0]).toHaveProperty("companionReply", {});
+      } else {
+        expect(seenInputs[0]).not.toHaveProperty("companionReply");
+        expect(seenInputs[0]).toMatchObject({ privateRelationshipContext: false });
+      }
+      const { getConversationTranscriptStore } = await import("./orchestrator/conversation-transcript-store");
+      const transcript = (await getConversationTranscriptStore(root).read("companion-test")).entries;
+      expect(JSON.stringify(transcript)).not.toContain("本轮称呼备注");
+      expect(JSON.stringify(transcript)).not.toContain("不可信的渲染进程值");
+    },
+  );
+
   it.each(["keep_user", "replace_user"] as const)("rejects stale %s before model startup and releases the session guard", async (disposition) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-stale-"));
     roots.push(root);

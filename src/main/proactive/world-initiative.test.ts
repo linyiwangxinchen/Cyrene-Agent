@@ -59,10 +59,11 @@ describe("world facts become initiative opportunities", () => {
 
   it("recognizes a completed personal action as progress and remains a read-only projection", () => {
     const view = world();
-    known(view, { eventId: "personal-action", kind: "routine" });
+    const outcome = "给故事里两句想保留的原话画了线，省得誊写时顺手改掉。";
+    known(view, { eventId: "personal-action", kind: "routine", text: outcome });
     view.personal!.actions.push({ id: "personal-action", residentId: "cyrene", title: "整理读后感", intent: "留一点自己的感想",
       goalId: "goal", locationId: "okhema", activity: "study", startsAt: NOW - hour, endsAt: NOW,
-      status: "completed", version: 2, stage: "整理自己的记录", origin: "local" });
+      status: "completed", version: 2, stage: "整理自己的记录", origin: "local", artifact: "标着原文的故事稿", outcome });
     const before = JSON.stringify(view);
     const random = vi.spyOn(Math, "random");
     try {
@@ -71,6 +72,31 @@ describe("world facts become initiative opportunities", () => {
       expect(random).not.toHaveBeenCalled();
       expect(JSON.stringify(view)).toBe(before);
     } finally { random.mockRestore(); }
+  });
+
+  it("skips routine efforts and old unfinished summaries even with an old artifact", () => {
+    const view = world();
+    const routine = "抽了点时间继续「整理收到的故事」。";
+    const legacy = "为「整理收到的故事」留了一段专心的时间，留下一份还留着空白的清单。还有一点没想明白，想下次接着试。";
+    for (const [index, outcome] of [routine, legacy].entries()) {
+      const id = `personal-${index}`;
+      known(view, { id, eventId: id, kind: "routine", text: outcome });
+      view.personal!.actions.push({ id, residentId: "cyrene", title: "整理收到的故事", intent: "整理手头的记录", goalId: "goal",
+        locationId: "aedes-elysiae", activity: "study", startsAt: NOW - hour, endsAt: NOW, status: "completed", version: 2,
+        stage: "尝试一小段", origin: "local", outcome, ...(index ? { artifact: "一份还留着空白的清单" } : {}) });
+    }
+    expect(worldInitiativeOpportunities(view, NOW)).toEqual([]);
+  });
+
+  it("does not turn a private chat suggestion into a proactive share or association", () => {
+    const view = world();
+    const eventId = "amphoreus:personal:user:1d";
+    known(view, { eventId, kind: "routine", conversationId: "private-a" });
+    view.personal!.currentActivity = { residentId: "cyrene", activity: "work", title: "给私聊里提到的花园记笔记",
+      locationId: "okhema", startsAt: NOW - hour, endsAt: NOW + hour, source: "personal", eventId };
+    expect(worldInitiativeOpportunities(view, NOW, "private-a")).toEqual([]);
+    expect(boredomInitiativeOpportunity(view, life(), NOW, "private-a")).toBeUndefined();
+    expect(relatedConversationOpportunity(view, { content: "上次聊花园", at: NOW }, NOW, "private-a")).toBeUndefined();
   });
 });
 

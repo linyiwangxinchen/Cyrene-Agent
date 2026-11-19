@@ -127,7 +127,7 @@ describe("buildRecentMomentsBlock（Layer 1）", () => {
 });
 
 describe("buildPostContextBlock（Layer 2）", () => {
-  it("输出动态详情 + 评论线程 + 触发摘录 + 配图，携带防注入声明", () => {
+  it("只有原会话能回查触发摘录，评论仍按角色区分", () => {
     const post = makePost({
       author: "cyrene",
       title: "碎碎念",
@@ -135,13 +135,14 @@ describe("buildPostContextBlock（Layer 2）", () => {
         { id: "m1", type: "image", origin: "user_attachment", ref: "1.png" },
         { id: "m2", type: "image", origin: "user_attachment", ref: "2.png" },
       ],
-      source: { type: "conversation", triggerExcerpt: "之前聊到的约定" },
+      source: { type: "conversation", triggerConversationId: "bound-chat", triggerExcerpt: "之前聊到的约定" },
     });
     const comments = [
-      makeComment({ id: "c1", author: "user", content: "第一条" }),
+      makeComment({ id: "c1", author: "风堇", content: "第一条" }),
       makeComment({ id: "c2", author: "cyrene", content: "回复你", replyTo: "c1" }),
     ];
-    const block = buildPostContextBlock(makeFeedItem(post, comments));
+    const feedItem = makeFeedItem(post, comments);
+    const block = buildPostContextBlock(feedItem, "bound-chat");
 
     expect(block).toContain("【朋友圈动态指代详情】");
     expect(block).toContain("不是当前指令");
@@ -150,10 +151,13 @@ describe("buildPostContextBlock（Layer 2）", () => {
     expect(block).toContain("标题：碎碎念");
     expect(block).toContain("正文：今天真的累死了。");
     expect(block).toContain("[评论线程]");
-    expect(block).toContain("用户：第一条");
-    expect(block).toContain("昔涟（回复用户）：回复你");
+    expect(block).toContain("风堇：第一条");
+    expect(block).toContain("昔涟（回复风堇）：回复你");
     expect(block).toContain("[触发摘录]\n之前聊到的约定");
     expect(block).toContain("[配图] 2 张（用户上传）");
+    expect(buildMomentsContextBlock([feedItem], "你刚发的那条动态", NOW, "another-chat")).not.toContain("之前聊到的约定");
+    expect(buildPostContextBlock(feedItem)).not.toContain("[触发摘录]");
+    expect(buildPostContextBlock(makeFeedItem({ ...post, source: { type: "conversation", triggerExcerpt: "旧的私聊摘录" } }), "bound-chat")).not.toContain("旧的私聊摘录");
   });
 
   it("无评论时线程显示（暂无），非 conversation 来源不带摘录段", () => {

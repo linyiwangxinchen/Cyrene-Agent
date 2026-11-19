@@ -1,0 +1,71 @@
+.cy-quiet-companion-trigger.is-counting {
+  color: var(--rb-text-primary);
+  background: var(--rb-surface-hover);
+  border-radius: 7px;
+}
+
+.cy-quiet-companion-trigger img,
+.cy-quiet-companion__presence img {
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.cy-quiet-companion-trigger img {
+  width: 18px;
+  height: 18px;
+}
+
+.cy-quiet-companion-done {
+  color: var(--rb-text-secondary);
+  font-size: 12px;
+}
+
+.cy-quiet-companion {
+  display: grid;
+  gap: 16px;
+  padding-top: 4px;
+}
+
+.cy-quiet-companion__duration {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.cy-quiet-companion__duration legend {
+  margin-bottom: 8px;
+  color: var(--rb-text-secondary);
+}
+
+.cy-quiet-companion__presence,
+.cy-quiet-companion__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.cy-quiet-companion__presence img {
+  width: 34px;
+  height: 34px;
+}
+
+.cy-quiet-companion-trigger__time,
+.cy-quiet-companion__time {
+  font-variant-numeric: tabular-nums;
+}
+
+.cy-quiet-companion__time {
+  font-size: 36px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.cy-quiet-companion-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}

@@ -5,7 +5,32 @@ import { worldClock, worldInstant } from "./clock";
 import { fitsRoutine, remember, travelMinutes } from "./life";
 
 const stageNames = ["收集线索", "尝试一小段", "回看与调整", "整理成自己的记录"];
-const details = ["一张折过角的记录页", "一份还留着空白的清单", "一条准备下次核对的问题", "写在页边的一小段感想", "两种做法的对照笔记", "一张留给下一次的书签"];
+const projectMilestones: Readonly<Record<string, readonly { artifact: string; outcome: string }[]>> = {
+  "cyrene:personal:0": [
+    { artifact: "页边的草稿", outcome: "把手记开头改成了一句话，先写了那天出门时听见的声音。" },
+    { artifact: "两份开头的草稿", outcome: "把两种开头念了一遍，选了更像自己平时说话的那版。" },
+    { artifact: "带删改的手记页", outcome: "划掉了结尾那句解释，读起来顺了些。" },
+    { artifact: "写完的一页手记", outcome: "在手记页脚写上日期，把这一页夹回本子里。" },
+  ],
+  "cyrene:personal:1": [
+    { artifact: "标着出门方向的草图", outcome: "在散步用的草图上标了今天出门的方向。" },
+    { artifact: "标着折返点的散步路线", outcome: "试走了一段近路，在草图上补了折返的位置。" },
+    { artifact: "加了一处停留点的路线图", outcome: "走到一半停下来歇了会儿，回去后顺手把停留的位置画进路线图。" },
+    { artifact: "带有长短两条路线的草图", outcome: "把散步路线分成了长、短两条。下回时间少，也知道可以往哪儿走。" },
+  ],
+  "cyrene:personal:2": [
+    { artifact: "按讲述人分好的故事页", outcome: "把几张故事页按讲述人分开，这回能一眼看出每张是谁讲的了。" },
+    { artifact: "标着原文的故事稿", outcome: "给故事里两句想保留的原话画了线，省得誊写时顺手改掉。" },
+    { artifact: "排好顺序的一叠故事页", outcome: "把同一件事的两份讲述挪到相邻的两页，来回看方便多了。" },
+    { artifact: "有目录的一册故事", outcome: "给这叠故事页补上目录，现在找哪一篇都不用从头翻了。" },
+  ],
+};
+
+/** Old generated filler remains in saved history but has no concrete result to resurface in chat. */
+export function isLegacyPersonalOutcome(text: string): boolean {
+  return /^为「.+」留了一段专心的时间，留下.+。(?:还有一点没想明白，想下次接着试。|这一阶段可以先收起来了。)$/su.test(text);
+}
+
 function hash(text: string): number { let value = 2166136261; for (const char of text) value = Math.imul(value ^ char.charCodeAt(0), 16777619); return value >>> 0; }
 
 function obstruction(state: AmphoreusState, action: PersonalAction): string | undefined {
@@ -34,10 +59,24 @@ export function advancePersonalActions(state: AmphoreusState, now: number): void
       const goal = resident.goals.find((g) => g.id === action.goalId);
       if (!goal || goal.status === "completed") { action.status = "interrupted"; action.reason = "这个阶段已有结果，先放下原来的安排"; action.resolvedAt = Math.min(now, action.endsAt); action.version++; continue; }
       action.status = "completed"; action.version++;
-      action.artifact = details[hash(action.id) % details.length];
-      action.outcome = `为「${goal.title}」留了一段专心的时间，留下${action.artifact}。${goal.progress >= 90 ? "这一阶段可以先收起来了。" : "还有一点没想明白，想下次接着试。"}`;
-      goal.progress = Math.min(100, goal.progress + 8); goal.status = goal.progress === 100 ? "completed" : "active";
-      goal.updatedAt = action.endsAt; goal.lastActionId = action.id; goal.reason = action.outcome;
+      const progress = Math.min(100, goal.progress + 8);
+      const previousCheckpoint = Math.floor(goal.progress / 25);
+      const checkpoint = Math.floor(progress / 25);
+      if (action.origin === "user_suggestion") {
+        action.outcome = `为「${action.title}」留了一段时间，把准备尝试的一小步写进了自己的笔记。`;
+      } else if (action.origin === "model") {
+        action.outcome = `花了一点时间试做「${action.title}」。`;
+      } else {
+        // Each prewritten project result belongs to its first pass. Later passes still record practice.
+        const milestone = (goal.cycle ?? 1) === 1 && checkpoint > previousCheckpoint
+          ? projectMilestones[goal.id]?.[checkpoint - 1]
+          : undefined;
+        action.outcome = milestone?.outcome ?? `抽了点时间继续「${goal.title}」。`;
+        if (milestone) action.artifact = milestone.artifact;
+      }
+      goal.progress = progress; goal.status = progress === 100 ? "completed" : "active";
+      goal.updatedAt = action.endsAt; goal.lastActionId = action.id;
+      goal.reason = action.conversationId ? "给自己的小事留了一点时间，记下了下一步。" : action.outcome;
       goal.stage = `${goal.cycle && goal.cycle > 1 ? `第${goal.cycle}阶段·` : ""}${stageNames[Math.min(3, Math.floor(goal.progress / 25))]}`;
       goal.nextStep = goal.status === "completed" ? "回顾这一阶段，再决定是否继续" : `${goal.stage}，从上次留下的记录接着做`;
     } else { if (action.status === "planned") action.status = "active"; continue; }

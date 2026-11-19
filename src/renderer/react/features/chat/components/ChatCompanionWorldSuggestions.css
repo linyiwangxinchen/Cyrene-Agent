@@ -1,0 +1,61 @@
+.cy-chat-world-suggestions-trigger {
+  gap: 5px;
+}
+
+.cy-chat-world-suggestions-trigger:disabled {
+  color: var(--rb-text-disabled);
+  cursor: default;
+}
+
+.cy-chat-world-suggestions,
+.cy-chat-world-suggestions__form,
+.cy-chat-world-suggestions__form label,
+.cy-chat-world-suggestions__record {
+  display: grid;
+  gap: 9px;
+}
+
+.cy-chat-world-suggestions {
+  gap: 14px;
+}
+
+.cy-chat-world-suggestions__description,
+.cy-chat-world-suggestions__record p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.cy-chat-world-suggestions__description,
+.cy-chat-world-suggestions__record small {
+  color: var(--rb-text-secondary);
+}
+
+.cy-chat-world-suggestions__header,
+.cy-chat-world-suggestions__record-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+
+.cy-chat-world-suggestions__header {
+  justify-content: space-between;
+  margin-block-end: 7px;
+}
+
+.cy-chat-world-suggestions__header h3 {
+  margin: 0;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.cy-chat-world-suggestions__records {
+  max-block-size: min(240px, 32vh);
+  overflow-y: auto;
+}
+
+.cy-chat-world-suggestions__record {
+  padding-block: 9px;
+  border-block-start: 1px solid var(--rb-border-subtle);
+  overflow-wrap: anywhere;
+}

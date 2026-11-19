@@ -1,10 +1,15 @@
 import { WorkspacePreviewContext, type WorkspacePreview } from "../components/WorkspacePreview";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { Globe, MessageSquareText } from "lucide-react";
 import { useTranslation } from "../../../i18n";
 import { DownOutlined } from "@ant-design/icons";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { ChatComposer, parseComposerMessage } from "../components/ChatComposer";
+import { ChatCompanionCorrection } from "../components/ChatCompanionCorrection";
+import { ChatCompanionFollowups } from "../components/ChatCompanionFollowups";
+import { ChatCompanionReplyMode } from "../components/ChatCompanionReplyMode";
+import { ChatCompanionWorldSuggestions } from "../components/ChatCompanionWorldSuggestions";
+import { ChatQuietCompanion, useQuietCompanion } from "../components/ChatQuietCompanion";
 import { collectNewlyUnreadSessionIds } from "../components/session-unread";
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
@@ -33,6 +38,7 @@ import type {
   PendingChatMessage,
   TaskDelegationDisplayRecord,
 } from "../../../../../shared/chat-types";
+import type { CompanionReplyInput } from "../../../../../shared/companion";
 import type { SidebarOrganizationDraft, SidebarOrganizationSnapshot } from "../../../../../shared/sidebar-organization";
 import { isContextUsageSnapshot, type ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import type { ModelFailureInfo } from "../../../../../shared/model-error";
@@ -168,6 +174,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   // 统一反馈入口：错误轻提示 / 需阅读的错误弹窗 / 危险确认
   const feedback = useFeedback();
   const preferredAddress = useUserCallPreference();
+  const quietCompanion = useQuietCompanion();
   // 侧栏收起不进 React 状态：直接翻转根节点 class，避免整棵页面树为一次点击重渲染
   // （ZCode 同思路：布局类状态走 DOM，React 只负责内容）
   const pageRef = useRef<HTMLDivElement>(null);
@@ -208,6 +215,8 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   });
   const [mode, setMode] = useState<ConversationMode>(getInitialMode);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [companionReplyDrafts, setCompanionReplyDrafts] = useState<Record<string, CompanionReplyInput>>({});
+  const submittedCompanionReplies = useRef(new WeakSet<CompanionReplyInput>());
 
   const [workspaceNames, setWorkspaceNames] = useState<Partial<Record<ConversationMode, string>>>({});
   const [pendingWorkspaceByMode, setPendingWorkspaceByMode] = useState<
@@ -436,6 +445,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     messageId: string;
   } | null>(null);
 
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const activeSessionId = activeSessionIds[mode];
   const scopeKey = activeSessionId ?? `mode:${mode}`;
   useEffect(() => {
@@ -444,6 +454,19 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   }, [scopeKey]);
   const draft = drafts[scopeKey] ?? "";
   const messages = activeSessionId ? (messagesBySession[activeSessionId] ?? []) : [];
+  const canUseCompanionControls = mode === "chat"
+    && !(activeSession?.id === activeSessionId && activeSession?.purpose)
+    && !messages.some((message) => message.channelSource?.chatType === "group");
+  const companionReply = canUseCompanionControls ? companionReplyDrafts[scopeKey] : undefined;
+  function updateCompanionReply(patch: Partial<CompanionReplyInput>) {
+    setCompanionReplyDrafts((current) => {
+      const next = { ...current };
+      const reply = { ...next[scopeKey], ...patch };
+      if (reply.mode || reply.correction) next[scopeKey] = reply;
+      else delete next[scopeKey];
+      return next;
+    });
+  }
   const activeInteraction = sessionInteraction(interactionsBySession, activeSessionId);
   useEffect(() => {
     if (!activeSessionId || mode !== "learn") return;
@@ -523,7 +546,6 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   }
   const queueFlow = queueFlowRef.current;
   const sessions = sessionsByMode[mode] ?? EMPTY_SESSIONS;
-  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
   const activeSessionTitle = sessions.find((session) => session.id === activeSessionId)?.title
     ?? (activeSession && activeSession.id === activeSessionId ? activeSession.title : "");
   // 对话级模型切换的竞态防护两件套（barrier + operation token，阶段③）：
@@ -1417,6 +1439,11 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       delete next[`mode:${targetMode}`];
       return next;
     });
+    setCompanionReplyDrafts((current) => {
+      const next = { ...current };
+      delete next[`mode:${targetMode}`];
+      return next;
+    });
     deleteScopeAttachments(`mode:${targetMode}`);
     setPendingWorkspaceByMode((current) => {
       const next = { ...current };
@@ -1457,6 +1484,11 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       await feedback.alert({ tone: "error", title: t("chatPage.backgroundSettlementTitle"), message: t("chatPage.backgroundSettlementPending") });
       return;
     }
+    setCompanionReplyDrafts((current) => {
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
     await refreshSessionsRef.current(mode, true);
   }
 
@@ -1467,6 +1499,32 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     await refreshSessionsRef.current(mode, false);
   }
 
+
+  async function enqueueComposerMessage(
+    sessionId: string,
+    targetMode: ConversationMode,
+    entry: Parameters<PendingQueueFlow["enqueue"]>[2],
+  ): Promise<boolean> {
+    const reply = companionReply;
+    if (!reply) return queueFlow.enqueue(sessionId, targetMode, entry);
+    if (submittedCompanionReplies.current.has(reply)) return false;
+    submittedCompanionReplies.current.add(reply);
+    let enqueued = false;
+    try {
+      enqueued = await queueFlow.enqueue(sessionId, targetMode, { ...entry, companionReply: reply });
+      if (enqueued) {
+        setCompanionReplyDrafts((current) => {
+          if (current[scopeKey] !== reply) return current;
+          const next = { ...current };
+          delete next[scopeKey];
+          return next;
+        });
+      }
+      return enqueued;
+    } finally {
+      if (!enqueued) submittedCompanionReplies.current.delete(reply);
+    }
+  }
 
   async function sendMessage(content: string) {
     // renderer barrier（决策 10）：等待最近一次模型状态变更提交完成再发送，
@@ -1482,7 +1540,9 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     const userMessageId = crypto.randomUUID();
     const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
     const targetMode = mode;
-    const sessionId = await ensureSession(targetMode);
+    // 带会话内指引时，将消息留在点击发送时的会话，即使等待模型切换期间切了页面。
+    if (companionReply && !activeSessionId && activeSessionIdsRef.current[targetMode]) return;
+    const sessionId = companionReply && activeSessionId ? activeSessionId : await ensureSession(targetMode);
 
     // 如果新建任务时已选好工作区但尚未创建 session，在这里一并绑定。
     const pendingWorkspace = pendingWorkspaceByMode[targetMode];
@@ -1538,7 +1598,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     // 会话忙时留在队列等 run 结束消费；空闲时立即认领派发——
     // 发送瞬间的并发由主进程 claim 原子性与 SESSION_RUN_ACTIVE 守卫兜底。
     // 入队失败/异常时流程内部复用原稳定标识，重试靠主进程幂等去重不产生重复消息。
-    const enqueued = await queueFlow.enqueue(sessionId, targetMode, {
+    const enqueued = await enqueueComposerMessage(sessionId, targetMode, {
       id: userMessageId,
       rawContent: message,
       visibleContent: visibleMessage,
@@ -1671,7 +1731,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     const visibleContent = parsedMessage.visibleContent;
     const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
     const userMessageId = crypto.randomUUID();
-    const enqueued = await queueFlow.enqueue(sessionId, mode, {
+    const enqueued = await enqueueComposerMessage(sessionId, mode, {
       id: userMessageId,
       rawContent: parsedMessage.rawContent,
       visibleContent,
@@ -1691,6 +1751,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       id: item.id,
       content: item.visibleContent || item.rawContent,
       attachmentCount: item.attachments?.length,
+      companionGuided: Boolean(item.companionReply),
     }))
     : [];
   // 上下文容量圆环：session 级快照优先（手动压缩等不产生新消息的操作也即时刷新），
@@ -2128,6 +2189,36 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
             modelBusy={isCurrentScopeRunning}
             onCompactPhaseChange={handleCompactPhaseChange}
             pendingQueue={currentPendingQueue}
+            companionControls={(canUseCompanionControls || quietCompanion.active) && (
+              <div className="cy-chat-companion-controls">
+                {canUseCompanionControls && (
+                  <Fragment key={scopeKey}>
+                    <ChatCompanionReplyMode
+                      mode={companionReply?.mode}
+                      onChange={(replyMode) => updateCompanionReply({ mode: replyMode })}
+                    />
+                    <ChatCompanionCorrection
+                      conversationId={activeSessionId ?? null}
+                      correction={companionReply?.correction ?? ""}
+                      onCorrectionChange={(correction) => updateCompanionReply({ correction })}
+                    />
+                    {activeSessionId && (
+                      <>
+                        <ChatCompanionFollowups
+                          conversationId={activeSessionId}
+                          conversationTitle={activeSessionTitle || undefined}
+                        />
+                        <ChatCompanionWorldSuggestions
+                          conversationId={activeSessionId}
+                          conversationTitle={activeSessionTitle || undefined}
+                        />
+                      </>
+                    )}
+                  </Fragment>
+                )}
+                <ChatQuietCompanion companion={quietCompanion} />
+              </div>
+            )}
             onChange={(value) => setDrafts((current) => ({ ...current, [scopeKey]: value }))}
             onSubmit={(value) => void sendMessage(value)}
             onCancel={() => void cancelCurrentRun()}

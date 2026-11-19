@@ -3,7 +3,7 @@ import type { AmphoreusEvent, AmphoreusState, AmphoreusView, EventResolution, Pe
 import type { XilianTimelineEvent, XilianWorldData } from "../../shared/xilian-world";
 import { worldClock, worldInstant } from "./clock";
 import { advanceResidents, createPlaces, createResidents, fitsRoutine, remember, residentActivity, terminalEvent, travelMinutes } from "./life";
-import { advancePersonalActions, planPersonalLife } from "./personal-life";
+import { advancePersonalActions, isLegacyPersonalOutcome, planPersonalLife } from "./personal-life";
 import { narrativeRecovery } from "./narrative-recovery";
 export { residentActivity as residentNow } from "./life";
 
@@ -118,7 +118,7 @@ function personalEvent(activity: ResidentNow, state: AmphoreusState, now: number
     ...(completed ? { outcome: global?.outcome ?? action?.outcome ?? action?.reason ?? `这段${activity.title}的时间已经结束。`, diaryText: global?.outcome ?? action?.outcome ?? action?.reason ?? `在${location}度过了${activity.title}的时间。` } : {}),
     participants: (global?.participants ?? ["cyrene"]).map((id) => AMPHOREUS_RESIDENTS.find((r) => r.id === id)!.name), mood: resident.mood, energyAfter: resident.energy,
     status: global?.status === "failed" || global?.status === "cancelled" || action?.status === "interrupted" ? "interrupted" : completed ? "completed" : activity.startsAt > now ? "planned" : "active",
-    visibility: global?.visibility === "participants" ? "private" : "shareable", source: "simulated_world", memoryTags: ["翁法罗斯", activity.source] };
+    visibility: global?.visibility === "participants" || action?.conversationId ? "private" : "shareable", source: "simulated_world", memoryTags: ["翁法罗斯", activity.source] };
 }
 export function reconcileAmphoreus(data: XilianWorldData, actualNow: number, timezone: string): void {
   const state = data.amphoreus ??= createAmphoreusState(actualNow);
@@ -194,7 +194,8 @@ export function personalWorldView(state: AmphoreusState, now: number, timezone: 
 export function formatAmphoreusContext(view: AmphoreusView, conversationId?: string): string {
   const resident = view.residentStates.find((person) => person.id === "cyrene");
   const permitted = (scope: string | undefined) => !scope || scope === conversationId;
-  const memories = (view.personal?.experiences ?? resident?.memories ?? []).filter((memory) => permitted(memory.conversationId));
+  const memories = (view.personal?.experiences ?? resident?.memories ?? [])
+    .filter((memory) => permitted(memory.conversationId) && !isLegacyPersonalOutcome(memory.text));
   const knownIds = new Set(memories.map((memory) => memory.eventId));
   const knownParticipants = view.events.filter((event) => knownIds.has(event.id)).flatMap((event) => event.participants);
   const focusIds = [...new Set(["cyrene", ...knownParticipants])].slice(0, 6);

@@ -706,6 +706,7 @@ describe("CyreneHarness completion", () => {
 
     await runCyreneHarness({
       systemPrompt: "test system prompt",
+      companionReplyContext: "仅在本轮采用简短称呼",
       messages: [
         ...historicalMessages,
         { role: "user", content: "请继续完成".repeat(40) },
@@ -728,6 +729,8 @@ describe("CyreneHarness completion", () => {
     };
     expect(summaryRequest.messages.some((entry) => entry.content === "旧任务".repeat(100))).toBe(true);
     expect(summaryRequest.messages.at(-1)?.content ?? "").toContain("## 原始任务与意图");
+    expect(JSON.stringify(summaryRequest)).not.toContain("仅在本轮采用简短称呼");
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).body).toContain("仅在本轮采用简短称呼");
     expect(compactions).toEqual([
       expect.objectContaining({ status: "started", messageCountBefore: historicalMessages.length + 1 }),
       expect.objectContaining({ status: "committed", cache: { cacheEpoch: 2, epochReason: "compaction" } }),
@@ -773,6 +776,7 @@ describe("CyreneHarness completion", () => {
         runId: "run-first", tools: [safeReadTool("read_file")],
         messages: (await journal.buildModelContext("c1")).messages,
         initialInternalContext: { kind: "run_start", content: "当前运行环境仅供本轮使用" },
+        companionReplyContext: "本轮修正仅影响本次回复",
         transcriptSink: journal.createRunSink({ conversationId: "c1", runId: "run-first" }),
         compactTranscript, onEvent: (event) => events.push(event),
       });
@@ -784,6 +788,9 @@ describe("CyreneHarness completion", () => {
       expect(after.messages.some((message) => message.visibility === "internal")).toBe(false);
       const secondRequest = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string);
       expect(secondRequest.messages.some((message: ChatMessage) => String(message.content).includes("当前运行环境仅供本轮使用"))).toBe(true);
+      expect(JSON.stringify(secondRequest)).toContain("本轮修正仅影响本次回复");
+      expect(JSON.stringify(summarize.mock.calls)).not.toContain("本轮修正仅影响本次回复");
+      expect(JSON.stringify((await store.read("c1")).entries)).not.toContain("本轮修正仅影响本次回复");
       const usages = events.filter((event): event is Extract<HarnessEvent, { type: "context_usage" }> => event.type === "context_usage");
       const beforeIndex = usages.findIndex((event) => event.snapshot.phase === "preCompaction");
       expect(beforeIndex).toBeGreaterThan(0);
@@ -796,6 +803,7 @@ describe("CyreneHarness completion", () => {
         transcriptSink: journal.createRunSink({ conversationId: "c1", runId: "run-next" }), compactTranscript,
       });
       expect(next.finalAnswer).toBe("继续下一条任务");
+      expect((fetchMock.mock.calls[2]![1] as RequestInit).body).not.toContain("本轮修正仅影响本次回复");
       expect(summarize).toHaveBeenCalledTimes(1);
       expect((await store.read("c1")).entries.filter((entry) => entry.kind === "compaction_checkpoint")).toHaveLength(1);
       expect(fetchMock).toHaveBeenCalledTimes(3);

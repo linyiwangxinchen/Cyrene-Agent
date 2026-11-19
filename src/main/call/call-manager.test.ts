@@ -42,6 +42,7 @@ import {
   stopCall,
   submitExternalText,
 } from "./call-manager";
+import { getCallWeatherCity } from "./call-weather";
 
 describe("call turn submission", () => {
   const sentStates: string[] = [];
@@ -138,6 +139,68 @@ describe("call turn submission", () => {
     await endTurn();
 
     expect(sentAudio).toEqual([{ base64: Buffer.from("spoken reply").toString("base64"), text: "模型回复", format: "wav" }]);
+  });
+
+  it("continues the conversation when bad weather is part of the user's story", async () => {
+    const stop = vi.fn().mockResolvedValueOnce("总算到家了").mockResolvedValueOnce("刚才下雨，我全淋湿了");
+    mocks.createAsrStream.mockImplementation(() => ({
+      start: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      stop,
+    }));
+    mocks.synthesizeByEngine.mockResolvedValue({ audio: Buffer.from("reply"), format: "wav" });
+    const weather = vi.fn();
+    const buildPrompt = vi.fn(async (_text, _messages) => "电话里的说话方式");
+    setCallSettings(
+      () => ({ provider: "openai", baseUrl: "https://example.test/v1", model: "test", apiKey: "test-key" }),
+      () => ({ ttsEngine: "minimax", ttsMinimaxKey: "key", ttsMinimaxVoiceId: "voice" } as never),
+      buildPrompt,
+      weather,
+    );
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(responseBody("openai", { text: "到家就好。" })))
+      .mockResolvedValueOnce(jsonResponse(responseBody("openai", { text: "<think>private</think>衣服都湿了呀。[sticker:x]♪" })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    startCall();
+    await endTurn();
+    onTtsDone();
+    await endTurn();
+
+    expect(weather).not.toHaveBeenCalled();
+    expect(buildPrompt).toHaveBeenLastCalledWith("刚才下雨，我全淋湿了", [
+      { role: "user", content: "总算到家了" },
+      { role: "assistant", content: "到家就好。" },
+      { role: "user", content: "刚才下雨，我全淋湿了" },
+    ]);
+    expect(mocks.synthesizeByEngine).toHaveBeenLastCalledWith("minimax", expect.objectContaining({ text: "衣服都湿了呀。" }));
+    expect(sentAudio.at(-1)?.text).toBe("衣服都湿了呀。");
+  });
+
+  it("speaks the weather result in plain language when asked directly", async () => {
+    mocks.createAsrStream.mockReturnValue({
+      start: vi.fn(async () => undefined),
+      sendAudio: vi.fn(),
+      stop: vi.fn(async () => "帮我查一下无锡的天气"),
+    });
+    mocks.synthesizeByEngine.mockResolvedValue({ audio: Buffer.from("weather"), format: "wav" });
+    const weather = vi.fn(async (query: string) => JSON.stringify({
+      city: getCallWeatherCity(query), weather: "多云", temperature: 18,
+    }));
+    setCallSettings(
+      () => ({ provider: "openai", baseUrl: "https://example.test/v1", model: "test", apiKey: "" }),
+      () => ({ ttsEngine: "minimax", ttsMinimaxKey: "key", ttsMinimaxVoiceId: "voice" } as never),
+      async () => "",
+      weather,
+    );
+
+    startCall();
+    await endTurn();
+
+    expect(getCallWeatherCity("今天天气怎么样")).toBe("");
+    expect(weather).toHaveBeenCalledOnce();
+    expect(sentAudio.at(-1)?.text).toBe("现在查到无锡，多云，18度。");
+    expect(mocks.synthesizeByEngine).toHaveBeenCalledWith("minimax", expect.objectContaining({ text: "现在查到无锡，多云，18度。" }));
   });
 
   it("returns to LISTENING when batch transcription fails", async () => {

@@ -27,6 +27,16 @@
     "logoutFailed": "退出登录失败，请重试。"
   },
   "composer": {
+    "companionReply": {
+      "label": "下一条消息的回应方式",
+      "natural": "自然回应",
+      "listen": "先听我说",
+      "reflect": "陪我理一理",
+      "help": "帮我做一步",
+      "light": "聊点轻松的",
+      "queued": "这条消息带有回应指引，将在下一轮发送",
+      "unavailable": "当前会话无法使用这条回应指引。请清除回应方式和下次纠正后重试。"
+    },
     "placeholderChat": "昔涟期待和你一起聊天♪",
     "greetingMorningEarly": "早上好呀，{{name}}，新的一天开始啦♪",
     "greetingMorning": "上午好呀，{{name}}，有什么想让我帮忙的吗♪",

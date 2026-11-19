@@ -38,6 +38,9 @@ export const IPC = {
   COMPANION_WORLD_HISTORY: "companion:world:history",
   COMPANION_WORLD_UPDATE: "companion:world:update",
   COMPANION_WORLD_ARTIFACT: "companion:world:artifact",
+  COMPANION_WORLD_SUGGESTIONS_GET: "companion:world:suggestions:get",
+  COMPANION_WORLD_SUGGESTION_ADD: "companion:world:suggestion:add",
+  COMPANION_WORLD_SUGGESTION_WITHDRAW: "companion:world:suggestion:withdraw",
   COMPANION_UPDATE: "companion:update",
   COMPANION_EXPORT: "companion:export",
   // pet window
