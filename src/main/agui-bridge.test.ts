@@ -1,4 +1,4 @@
-import { closeConversationDatabases } from "./storage/conversation-database-client";
+import { closeConversationDatabases, getConversationDatabase } from "./storage/conversation-database-client";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   listeners: new Map<string, (...args: any[]) => void>(),
   getSession: vi.fn(),
   getSessionRecord: vi.fn(),
+  getWorkspaceBinding: vi.fn(),
   getPendingDispatch: vi.fn(),
   composeSession: vi.fn(),
   getPendingMessages: vi.fn(),
@@ -18,6 +19,11 @@ const mocks = vi.hoisted(() => ({
   markPendingAdjust: vi.fn(),
   resetPendingAdjustByRun: vi.fn(),
   runCyreneAgent: vi.fn(),
+  relationshipControls: vi.fn(),
+  taskLearningRevision: vi.fn(),
+  taskLessons: vi.fn(),
+  recordTaskObservation: vi.fn(),
+  retainCompanionFeedbackTurns: vi.fn(),
   requestUserClarification: vi.fn(),
   agentEvents: [] as unknown[],
   failRuns: new Map<string, () => void>(),
@@ -35,6 +41,16 @@ const mocks = vi.hoisted(() => ({
   beforeAbortSettlement: null as (() => Promise<void>) | null,
   // 轨迹派发测试：主进程 app.getPath("userData") 的可替换根目录
   userDataRoot: "",
+}));
+
+vi.mock("./relationship/relationship-log", () => ({
+  getRelationshipStore: () => ({
+    getControls: mocks.relationshipControls,
+    getTaskLearningRevision: mocks.taskLearningRevision,
+    getTaskLessons: mocks.taskLessons,
+    recordTaskObservation: mocks.recordTaskObservation,
+    retainCompanionFeedbackTurns: mocks.retainCompanionFeedbackTurns,
+  }),
 }));
 
 vi.mock("electron", () => ({
@@ -117,6 +133,7 @@ vi.mock("./orchestrator/tools/history-tools", () => ({
 vi.mock("./chats/chats-store", () => ({
   getSession: mocks.getSession,
   getSessionRecord: mocks.getSessionRecord,
+  getWorkspaceBinding: mocks.getWorkspaceBinding,
   getPendingDispatch: mocks.getPendingDispatch,
   composeSession: mocks.composeSession,
   getPendingMessages: mocks.getPendingMessages,
@@ -2665,7 +2682,14 @@ describe("agui-bridge transcript dispatch", () => {
     mocks.getSessionRecord.mockReset();
     mocks.getPendingDispatch.mockReset();
     mocks.composeSession.mockReset();
+    mocks.relationshipControls.mockReset().mockReturnValue({ learningRevision: 12 });
+    mocks.taskLearningRevision.mockReset().mockReturnValue(4);
+    mocks.taskLessons.mockReset().mockReturnValue([]);
+    mocks.recordTaskObservation.mockReset();
+    mocks.getWorkspaceBinding.mockReset();
+    mocks.retainCompanionFeedbackTurns.mockReset();
     const seenInputs: unknown[] = [];
+    const onFinished = vi.fn(async (..._args: unknown[]) => undefined);
     const bridge = await import("./agui-bridge");
     bridge.registerAgUiIpc(
       buildOptions ?? (async (input: unknown) => {
@@ -2681,21 +2705,70 @@ describe("agui-bridge transcript dispatch", () => {
           latestUserText: "当前输入",
         };
       }),
-      async () => {},
+      onFinished,
       () => null,
     );
     const runHandler = mocks.handlers.get(IPC.AGUI_RUN);
     if (!runHandler) throw new Error("AGUI_RUN handler was not registered");
-    return { bridge, runHandler, seenInputs };
+    return { bridge, runHandler, seenInputs, onFinished };
   }
 
-  it.each(["matching-claim", "another-claim", "group-binding"] as const)(
+  it.each(["private", "cancelled", "rebound", "shared"] as const)("按真实前台轮次保存做事经验：%s", async scope => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-task-"));
+    roots.push(root);
+    mocks.userDataRoot = root;
+    const file = path.join(root, "notes.md");
+    fs.writeFileSync(file, "会议纪要");
+    const binding = { workspaceRoot: root, boundAt: 1, displayName: "文档" };
+    const { runHandler, onFinished } = await setupBridge(async raw => {
+      const input = raw as import("./orchestrator/build-options").BuildOptionsInput;
+      const taskMethodRun = input.prepareTaskMethodRun?.(root, new Set(["Read"]));
+      taskMethodRun?.observe({
+        toolId: "Read", status: "succeeded", output: "    1 | 会议纪要", args: { file_path: file },
+      }, 1);
+      return { options: { messages: [], taskMethodRun }, latestUserText: "读一下 notes.md" };
+    });
+    mocks.getSession.mockReturnValue({
+      id: "task-test", mode: "work", workspaceBinding: binding,
+      messages: scope === "shared" ? [{ channelSource: { chatType: "group" } }] : [],
+    });
+    mocks.getWorkspaceBinding.mockReturnValue(scope === "rebound" ? { ...binding, boundAt: 2 } : binding);
+    mocks.runFinishedResult = scope === "cancelled"
+      ? { status: "cancelled", externalEffectsMayContinue: false }
+      : { status: "success", externalEffectsMayContinue: false };
+    try {
+      await expect(runHandler({ sender: makeSender() }, {
+        sessionId: "task-test", assistantTurnId: "a1",
+        currentUser: { turnId: "u1", text: "模型侧输入", visibleContent: "读一下 notes.md" },
+      })).resolves.toMatchObject({ success: true });
+      if (scope === "cancelled") {
+        await expect.poll(async () => {
+          return (await getConversationDatabase(root).call<Array<{ status: string }>>("runs.all"))[0]?.status;
+        }).toBe("cancelled");
+      } else {
+        await expect.poll(() => onFinished.mock.calls.length).toBe(1);
+      }
+      if (scope === "private") {
+        expect(mocks.recordTaskObservation).toHaveBeenCalledExactlyOnceWith({
+          workspaceKey: expect.stringMatching(/^[a-f0-9]{64}$/), task: "read-document",
+          method: "read-direct", outcome: "worked", conversationId: "task-test", userTurnId: "u1", revision: 4,
+        });
+      } else {
+        expect(mocks.recordTaskObservation).not.toHaveBeenCalled();
+      }
+      if (scope === "shared") expect(mocks.taskLessons).not.toHaveBeenCalled();
+    } finally {
+      mocks.runFinishedResult = undefined;
+    }
+  });
+
+  it.each(["matching-claim", "another-claim", "group-binding", "settings-unavailable"] as const)(
     "只使用本轮私聊认领的回应指导：%s",
     async scope => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-companion-"));
       roots.push(root);
       mocks.userDataRoot = root;
-      const { runHandler, seenInputs } = await setupBridge();
+      const { runHandler, seenInputs, onFinished } = await setupBridge();
       const pendingDispatch = {
         messageId: scope === "another-claim" ? "u-other" : "u1",
         claimedAt: 1,
@@ -2708,21 +2781,33 @@ describe("agui-bridge transcript dispatch", () => {
         bindings.observe({ sessionId: "group", channel: "qq", chatId: "group", chatType: "group", lastAt: 1 });
         bindings.bind("group", "companion-test");
       }
+      if (scope === "settings-unavailable") {
+        mocks.relationshipControls.mockImplementationOnce(() => { throw new Error("read failed"); });
+      }
 
       await expect(runHandler({ sender: makeSender() }, {
         sessionId: "companion-test",
         assistantTurnId: "a1",
-        currentUser: { turnId: "u1", text: "原文", visibleContent: "原文" },
+        currentUser: { turnId: "u1", text: "模型输入", visibleContent: "原文" },
         companionReply: { mode: "help", correction: "不可信的渲染进程值" },
       })).resolves.toMatchObject({ success: true });
 
-      if (scope === "matching-claim") {
+      if (scope === "matching-claim" || scope === "settings-unavailable") {
         expect(seenInputs[0]).toMatchObject({ companionReply: pendingDispatch.companionReply });
       } else if (scope === "another-claim") {
         expect(seenInputs[0]).toHaveProperty("companionReply", {});
       } else {
         expect(seenInputs[0]).not.toHaveProperty("companionReply");
         expect(seenInputs[0]).toMatchObject({ privateRelationshipContext: false });
+      }
+      await expect.poll(() => onFinished.mock.calls.length).toBe(1);
+      if (scope === "group-binding") {
+        expect(onFinished.mock.calls[0][2]).not.toHaveProperty("companionFeedback");
+        expect(mocks.relationshipControls).not.toHaveBeenCalled();
+      } else if (scope === "settings-unavailable") {
+        expect(onFinished.mock.calls[0][2]).not.toHaveProperty("companionFeedback");
+      } else {
+        expect(onFinished.mock.calls[0][2]).toHaveProperty("companionFeedback", { text: "原文", userTurnId: "u1", revision: 12 });
       }
       const { getConversationTranscriptStore } = await import("./orchestrator/conversation-transcript-store");
       const transcript = (await getConversationTranscriptStore(root).read("companion-test")).entries;
@@ -3007,7 +3092,7 @@ describe("agui-bridge transcript dispatch", () => {
     await journal.appendUser("rewind-session", { id: "u1", turnId: "u1", text: "old", at: 1, revision: 1 });
     await journal.createRunSink({ conversationId: "rewind-session", runId: "old", assistantTurnId: "old-answer" })
       .appendAssistant({ message: { role: "assistant", content: "old answer" }, roundId: "reply" });
-    const { runHandler } = await setupBridge(async (input: any) => ({
+    const { runHandler, onFinished } = await setupBridge(async (input: any) => ({
       options: {
         settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
         messages: input.modelContext.messages,
@@ -3027,6 +3112,9 @@ describe("agui-bridge transcript dispatch", () => {
     expect(transcript.entries.filter((entry) => entry.kind === "turn_rewind")).toHaveLength(1);
     const model = await journal.buildModelContext("rewind-session");
     expect(model.messages.filter((message) => message.role === "user").map((message) => message.content)).toEqual(["edited"]);
+    expect(mocks.retainCompanionFeedbackTurns).toHaveBeenCalledWith("rewind-session", new Set());
+    await expect.poll(() => onFinished.mock.calls.length).toBe(1);
+    expect(onFinished.mock.calls[0][2]).not.toHaveProperty("companionFeedback");
     mocks.userDataRoot = "";
   });
 
@@ -3063,6 +3151,7 @@ describe("agui-bridge transcript dispatch", () => {
     expect(transcript.entries.filter((entry) => entry.kind === "user")).toHaveLength(1);
     expect(transcript.entries.filter((entry) => entry.kind === "turn_rewind")).toHaveLength(1);
     expect(transcript.entries.filter((entry) => entry.kind === "presentation_patch")).toHaveLength(0);
+    expect(mocks.retainCompanionFeedbackTurns).toHaveBeenCalledWith("keep-session", new Set(["u1"]));
     mocks.userDataRoot = "";
   });
 

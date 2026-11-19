@@ -27,7 +27,9 @@ import { RunSettlementGate } from "./orchestrator/run-settlement";
 import type { AguiRunAck, CyreneRunTerminalResult } from "../shared/run-terminal";
 import type { CacheDiagnostic } from "../shared/cache-diagnostic";
 import { indexConversationTurn } from "./orchestrator/tools/history-tools";
-import type { RelationshipChannel } from "./relationship/relationship-log";
+import { getRelationshipStore, type RelationshipChannel } from "./relationship/relationship-log";
+import { classifyTaskMethodRequest, createTaskMethodRun, workspaceTaskKey } from "./orchestrator/task-method-learning";
+import type { AgentRunFinishedContext } from "./orchestrator/agent-runtime";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
 import { ChatTimeStreamPrefixFilter } from "./chat-time-stream-filter";
 import { runLearnPostTurnHook } from "./learn/progress/learn-post-turn";
@@ -61,7 +63,6 @@ import {
 } from "./user-choice";
 import { cancelPendingApprovalsForRun } from "./permission";
 import { cancelPendingQuizzesForRun, takeQuizEvidenceForRun } from "./orchestrator/pop-quiz";
-import type { PluginPromptMode, PluginTurnCompletedEvent } from "../plugins/types";
 import { ShellCompletionDispatcher, type ShellCompletionSource } from "./orchestrator/shell-completion-dispatcher";
 
 let shellCompletions: ShellCompletionDispatcher | undefined;
@@ -238,16 +239,7 @@ export interface RunFinishedEffects {
 export type OnRunFinishedFn = (
   result: CyreneRunResult,
   latestUserText: string,
-  context: {
-    source: PluginTurnCompletedEvent["source"];
-    mode: PluginPromptMode;
-    conversationId: string;
-    channel?: string;
-    runId?: string;
-    assistantEntryId?: string;
-    privateRelationshipContext?: boolean;
-    userTurnId?: string;
-  },
+  context: AgentRunFinishedContext,
 ) => Promise<void | RunFinishedEffects> | void | RunFinishedEffects;
 
 /** 调用方注入：拿聊天窗口（广播副作用用，可空）。 */
@@ -813,6 +805,19 @@ export function registerAgUiIpc(
             } : {}),
           });
           presentationRevision = rewindEntry.revision ?? 1;
+          try {
+            const projection = await journal.readProjection(sessionId);
+            if (projection.state) {
+              const retainedUserTurnIds = new Set(projection.state.nodes.flatMap(node =>
+                node.kind === "user" && node.turnId ? [node.turnId] : []));
+              if (input.transcriptRewind.disposition === "replace_user") {
+                retainedUserTurnIds.delete(input.transcriptRewind.anchorUserTurnId);
+              }
+              getRelationshipStore().retainCompanionFeedbackTurns(sessionId, retainedUserTurnIds);
+            }
+          } catch {
+            console.warn("[AgUiBridge] 未能清理回退消息的陪伴偏好");
+          }
         } else {
           const userEntry = await journal.appendUser(sessionId, {
             id: `user:v1:${currentUser.turnId}:r1`,
@@ -853,9 +858,12 @@ export function registerAgUiIpc(
     const agentExecutionMode: AgentExecutionMode = mode === "chat" ? "chat" : "work";
     let built;
     let privateRelationshipContext = input.privateRelationshipContext;
+    let companionFeedback: AgentRunFinishedContext["companionFeedback"];
+    let taskLearningRevision: number | undefined;
     try {
     // 运行时拒绝未知的历史旁路字段；类型层已不再声明 renderer messages。
-    const { messages: _ignoredLegacyMessages, companionReply: _ignoredRendererReply, ...safeInput } = input as AguiRunInput & Record<string, unknown>;
+    const { messages: _ignoredLegacyMessages, companionReply: _ignoredRendererReply,
+      prepareTaskMethodRun: _ignoredTaskMethodRun, ...safeInput } = input as AguiRunInput & Record<string, unknown>;
     // 会话级模型解析（consumer #4）：bridge 完成唯一一次解析（binding + effective model），
     // build-options 直接消费，不再按 modelProfileId 重解析（#26：防 effective 被覆盖回默认）
     const sessionModelSettings = resolveSessionModelSettings(loadModelSettings(), session);
@@ -864,18 +872,47 @@ export function registerAgUiIpc(
       privateRelationshipContext = false;
     }
     const pendingDispatch = session.pendingDispatch;
-    const companionReply = !background && mode === "chat" && !session.purpose && privateRelationshipContext !== false
-      && !input.channel && input.promptSource !== "plugin-agent" && currentUser
+    const ordinaryPrivateRun = !background && !session.purpose && privateRelationshipContext !== false
+      && !input.channel && input.promptSource !== "plugin-agent";
+    const ordinaryPrivateChat = ordinaryPrivateRun && mode === "chat";
+    const companionReply = ordinaryPrivateChat && currentUser
       ? (pendingDispatch?.messageId === currentUser.turnId && !input.transcriptRewind
         ? normalizeCompanionReply(pendingDispatch.companionReply) ?? {}
         : {})
       : undefined;
+    if (ordinaryPrivateChat && !input.transcriptRewind && input.currentUser?.visibleContent.trim()) {
+      try {
+        const revision = getRelationshipStore().getControls().learningRevision;
+        if (typeof revision === "number") {
+          companionFeedback = { text: input.currentUser.visibleContent, userTurnId: input.currentUser.turnId, revision };
+        }
+      } catch {
+        // 回复可以在读取关系设置失败时继续，学习需要已知的版本。
+      }
+    }
+    const taskText = currentUser?.visibleContent ?? "";
+    const taskKind = ordinaryPrivateRun && session.workspaceBinding && !input.transcriptRewind
+      && !currentUserAttachments?.length && !input.attachments?.length && !input.imageAttachments?.length
+      ? classifyTaskMethodRequest(taskText) : undefined;
     built = await perf.track("build_options", () => buildOptionsFn!({
       ...safeInput,
       mode,
       skipCurrentUserMood: background || Boolean(session.purpose) || !input.currentUser,
       ...(privateRelationshipContext !== undefined ? { privateRelationshipContext } : {}),
       ...(companionReply ? { companionReply } : {}),
+      ...(taskKind ? { prepareTaskMethodRun: (workspaceRoot: string, toolIds: ReadonlySet<string>) => {
+        try {
+          if (workspaceRoot !== session.workspaceBinding?.workspaceRoot) return;
+          const store = getRelationshipStore();
+          taskLearningRevision = store.getTaskLearningRevision();
+          if (taskLearningRevision === undefined) return;
+          return createTaskMethodRun(taskKind, taskText, workspaceRoot, toolIds,
+            (key, kind) => store.getTaskLessons(key, kind));
+        } catch {
+          // 学习读取失败时，正常任务照常执行。
+          return undefined;
+        }
+      } } : {}),
       ...(currentUser ? {
         currentUser: {
           ...currentUser,
@@ -941,13 +978,17 @@ export function registerAgUiIpc(
       const id = message.internal!.id;
       if (seenShellEvents.has(id)) return false;
       seenShellEvents.add(id);
+      options.taskMethodRun?.discard();
       return true;
     });
     // 插话轮询：把"插入当前运行下一步"的待发条目在模型请求边界提交并注入。
     // Chat 无工具链路是单请求运行，没有安全的下一步，不接轮询（IPC 侧同步拒绝）。
     // 数据库事务同时提交插话与队列变更，成功后才注入运行。
     if (mode !== "chat") options.pollRunAdjustments = createRunAdjustmentPoller(
-      sessionId, runId, chatsStore, undefined, () => broadcastChatsChanged(),
+      sessionId, runId, chatsStore, undefined, () => {
+        options.taskMethodRun?.discard();
+        broadcastChatsChanged();
+      },
     );
     options.requestUserClarification = background ? undefined : (card) => requestUserClarification(card, (cardData) => {
       send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId });
@@ -1298,6 +1339,26 @@ export function registerAgUiIpc(
           // 这些副作用假定 run 已经成功产出回复；其他终态不能保证有可用 finalAnswer。
           if (agent.lastResult && isSuccessfulCompletion && !background) {
             const lastResult = agent.lastResult;
+            const taskRun = options.taskMethodRun;
+            const observations = taskRun?.observations();
+            if (taskRun && observations?.length && currentUser && taskLearningRevision !== undefined
+              && lastResult.reply.trim() && !settlement.externalEffectsMayContinue) {
+              try {
+                const binding = await chatsStore.getWorkspaceBinding(sessionId);
+                if (binding && binding.boundAt === session.workspaceBinding?.boundAt
+                  && workspaceTaskKey(binding.workspaceRoot) === taskRun.workspaceKey && !isGroupBoundConversation(sessionId)) {
+                  const store = getRelationshipStore();
+                  for (const observation of observations) {
+                    store.recordTaskObservation({
+                      ...observation, workspaceKey: taskRun.workspaceKey, task: taskRun.task,
+                      conversationId: sessionId, userTurnId: currentUser.turnId, revision: taskLearningRevision,
+                    });
+                  }
+                }
+              } catch {
+                // 经验保存是旁路操作，失败不影响回复完成。
+              }
+            }
             const effects = await perf.track("on_run_finished", async () => onFinished(lastResult, latestUserText, {
               source: "desktop",
               mode,
@@ -1306,6 +1367,7 @@ export function registerAgUiIpc(
               assistantEntryId: options.transcriptSink?.getLastAssistantEntryId?.() ?? input.assistantTurnId ?? runId,
               userTurnId: currentUser?.turnId,
               ...(privateRelationshipContext === false ? { privateRelationshipContext } : {}),
+              ...(companionFeedback ? { companionFeedback } : {}),
             }));
             if (mode !== "code" && effects?.sticker !== undefined) {
               send({

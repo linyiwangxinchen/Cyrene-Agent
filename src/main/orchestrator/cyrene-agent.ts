@@ -235,6 +235,7 @@ export interface CyreneRunOptions {
    * 只携带稳定元数据供插件事件旁路使用，不参与执行决策。
    */
   onToolFinished?: (event: import("./harness/types").HarnessToolFinishedEvent) => void;
+  taskMethodRun?: import("./task-method-learning").TaskMethodRun;
   /**
    * 插话轮询（AG-UI bridge 注入，透传给 harness）：
    * 返回待插入当前运行的用户消息；harness 在每轮模型请求前与最终结算前调用。

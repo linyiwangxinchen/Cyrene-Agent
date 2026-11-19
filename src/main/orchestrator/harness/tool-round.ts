@@ -105,6 +105,7 @@ export async function runToolRound(run: HarnessRun, toolCalls: ToolCall[]): Prom
   if (askCalls.length > 0) {
     input.onEvent?.({ type: "candidate_text_discard", roundId: `round-${run.rounds}` });
     try {
+      input.discardTaskMethod?.();
       await runAskUserRound(run, askCalls, otherCalls);
     } catch (error) {
       // ask_user 等待期间 abort → cancelled
@@ -388,6 +389,13 @@ async function commitToolResult(
   const startedAt = run.toolCallStartedAt.get(call.id);
   run.toolCallStartedAt.delete(call.id);
   notifyToolFinished(run, call, result.outcome, startedAt);
+  if (input.observeTaskTool && result.rawResult && result.rawResult.toolExecuted !== false) {
+    if (toolSideEffect === "read_only" && tool?.risk === "fs-read" && !sensitiveOutput && !tool.sensitiveArgs) {
+      input.observeTaskTool(result.rawResult, run.rounds);
+    } else {
+      input.discardTaskMethod?.();
+    }
+  }
 
   if (result.outcome === "unknown" && toolSideEffect === "non_idempotent_side_effect") {
     const fingerprint = toolCallFingerprint(call.name, parseToolCallArgs(call));

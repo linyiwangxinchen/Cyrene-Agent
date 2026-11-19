@@ -354,6 +354,8 @@ async function executeGrep(
     durationMs: Date.now() - startedAt,
     numFiles: fileMatches.size,
     filenames: outputMode === "files_with_matches" ? selectedFiles : [],
+    ...(outputMode === "content" ? { matchedPaths: [...new Set(visibleMatches.map(match => match.path))] } : {}),
+    ...(outputMode === "count" ? { matchedPaths: selectedFiles } : {}),
     ...(outputMode === "content" ? { content, numLines: visibleMatches.length } : {}),
     ...(outputMode === "count" ? { content: selectedFiles.map((file) => `${file}:${fileMatches.get(file) ?? 0}`).join("\n") } : {}),
     numMatches: result.totalMatches ?? matches.length,

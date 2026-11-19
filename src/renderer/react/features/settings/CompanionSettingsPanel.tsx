@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Alert, Button, Input, Modal, Select, Slider, Spin, Switch, Tabs, Tag } from "antd";
-import type { CompanionCommand, CompanionPermissions, CompanionSnapshot, RelationshipPreferences, CompanionFollowup, RepairCase, CompanionCommitment } from "../../../../shared/companion";
+import type { CompanionCommand, CompanionPermissions, CompanionSnapshot, RelationshipPreferences, CompanionFollowup, RepairCase, CompanionCommitment, CompanionLearnedPreference, CompanionTaskLesson } from "../../../../shared/companion";
 import "./companion-settings.css";
 
 const stages = { new: "初识", familiar: "熟悉", close: "亲密", long_term: "长期陪伴" };
@@ -10,8 +10,35 @@ const recordKinds = { turn: "互动线索", repair: "修复约定", diary: "虚�
 const followupStatuses = { active: "等待合适时间", awaiting_reply: "已关心，等待回复", completed: "已完成", paused: "已暂停", cancelled: "已取消" };
 const repairStatuses = { acknowledged: "已确认", follow_up: "待回访", resolved: "已解决", dismissed: "已忽略" };
 const commitmentStatuses = { open: "进行中", fulfilled: "已兑现", overdue: "已逾期", cancelled: "已取消" };
+const learnedPreferenceLabels: Record<CompanionLearnedPreference["topic"], string> = {
+  length: "日常回复短一点",
+  questions: "少用问句收尾",
+  nicknames: "少用昵称",
+  flourishes: "说话自然一点",
+  support: "倾诉时先听我说",
+};
+const taskLabels: Record<CompanionTaskLesson["task"], string> = {
+  "find-content": "找内容",
+  "survey-directory": "查看目录",
+  "read-document": "读文件",
+};
+const taskMethodLabels: Record<CompanionTaskLesson["method"], string> = {
+  "search-then-read": "搜关键词，再读命中的文件",
+  "list-then-read": "先看目录，再读相关文件",
+  "read-direct": "直接读取指定文件",
+  "list-directory": "列出目录中的文件和子目录",
+};
 const localTime = (at: number) => new Date(at - new Date(at).getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 type Command = CompanionCommand extends infer T ? T extends CompanionCommand ? Omit<T, "expectedRevision"> : never : never;
+const confirmationCopy = {
+  reset_relationship: { title: "重置关系设置与记录", detail: "称呼、目标、边界、修复记录和模拟情绪将恢复默认。工具授权不变。" },
+  reset_bond_progress: { title: "重置羁绊进度", detail: "羁绊章节、进度和奖励记录会恢复到序章；关系偏好、工具授权和聊天记录不变。" },
+  clear_history: { title: "删除关系记录", detail: "删除所选关系记录及其派生线索。原始聊天与其他记忆仍保留。" },
+  delete_record: { title: "删除关系记录", detail: "删除所选关系记录及其派生线索。原始聊天与其他记忆仍保留。" },
+  forget_learned_preference: { title: "忘记聊天偏好", detail: "昔涟会忘掉这段聊天里的这项偏好。" },
+  forget_task_method: { title: "忘记做事经验", detail: "昔涟会清除这项方法在对应工作区积累的经验。" },
+};
+type ConfirmCommand = Extract<Command, { type: keyof typeof confirmationCopy }>;
 type Tool = { id: string; name: string; risk?: string; effectKind?: string };
 const lines = (text: string) => text.split("\n").map(line => line.trim()).filter(Boolean);
 
@@ -21,18 +48,19 @@ export function CompanionSettingsPanel() {
   const [snapshot, setSnapshot] = useState<CompanionSnapshot>();
   const [draft, setDraft] = useState<RelationshipPreferences>();
   const [permissions, setPermissions] = useState<CompanionPermissions>();
+  const [taskLearningDraft, setTaskLearningDraft] = useState<boolean>();
   const [tools, setTools] = useState<Tool[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [repair, setRepair] = useState("");
-  const [confirm, setConfirm] = useState<Command>();
+  const [confirm, setConfirm] = useState<ConfirmCommand>();
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
   const [followup, setFollowup] = useState<{ id?: string; topic: string; conversationId: string; time: string }>({ topic: "", conversationId: "", time: localTime(Date.now() + 3_600_000) });
   function accept(value: CompanionSnapshot) {
     setSnapshot(value);
     const r = value.relationship;
-    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion" });
+    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion", learnConversationStyle: r.learnConversationStyle ?? true });
     setPermissions({ ...value.permissions });
   }
   useEffect(() => {
@@ -59,19 +87,37 @@ export function CompanionSettingsPanel() {
     setBusy(true); setError(""); setNotice("");
     try {
       accept(await window.companion.get());
+      setTaskLearningDraft(undefined);
     } catch (reason) { setError(String(reason)); }
     finally { setBusy(false); }
   }
-  async function command(value: Command) {
+  async function command(value: Command, preserveDraftNotice?: string) {
     if (!snapshot) return false;
     setBusy(true); setError(""); setNotice("");
     try {
-      accept(await window.companion.update({ ...value, expectedRevision: snapshot.revision } as CompanionCommand));
-      setNotice("已保存，下次回应会使用当前设置。"); setConfirm(undefined);
+      const updated = await window.companion.update({ ...value, expectedRevision: snapshot.revision } as CompanionCommand);
+      const savedNotice = value.type === "forget_learned_preference" ? "已忘记这项聊天偏好。"
+        : value.type === "forget_task_method" ? "已忘记这项做事经验。"
+          : preserveDraftNotice;
+      if (savedNotice) {
+        setSnapshot(updated);
+        setNotice(savedNotice);
+      } else {
+        accept(updated);
+        setNotice("已保存，下次回应会使用当前设置。");
+      }
+      setConfirm(undefined);
       if (value.type === "repair") setRepair("");
+      if (value.type === "reset_relationship") setTaskLearningDraft(undefined);
       return true;
     } catch (reason) { setError(String(reason)); return false; }
     finally { setBusy(false); }
+  }
+  async function saveTaskLearning() {
+    if (taskLearningDraft === undefined) return;
+    if (await command({ type: "preferences", patch: { learnTaskMethods: taskLearningDraft } }, "已保存学习设置。")) {
+      setTaskLearningDraft(undefined);
+    }
   }
   async function exportData() {
     setBusy(true); setError("");
@@ -84,6 +130,8 @@ export function CompanionSettingsPanel() {
     finally { setBusy(false); }
   }
   const field = <K extends keyof RelationshipPreferences>(key: K, value: RelationshipPreferences[K]) => setDraft(current => current ? { ...current, [key]: value } : current);
+  const taskLearningEnabled = snapshot?.relationship.learnTaskMethods ?? true;
+  const sessionName = (conversationId: string) => sessions.find(session => session.id === conversationId)?.title || conversationId;
   function editFollowup(item: CompanionFollowup) { setFollowup({ id: item.id, topic: item.topic, conversationId: item.conversationId, time: localTime(Math.max(item.nextEligibleAt, Date.now() + 3_600_000)) }); }
   async function saveFollowup() {
     if (await command({ type: "followup_save", ...(followup.id ? { id: followup.id } : {}), topic: followup.topic.trim(), conversationId: followup.conversationId, nextEligibleAt: new Date(followup.time).getTime() })) {
@@ -110,13 +158,30 @@ export function CompanionSettingsPanel() {
           <label className="cy-companion__switch">自然的亲昵表达<Switch aria-label="自然的亲昵表达" checked={draft.affection} onChange={value => field("affection", value)} /></label>
           <label className="cy-companion__switch">暂停关系模拟及主动关怀<Switch aria-label="暂停关系模拟及主动关怀" checked={draft.paused} onChange={value => field("paused", value)} /></label>
           <label className="cy-companion__switch">记录本轮关系线索<Switch aria-label="记录本轮关系线索" checked={draft.recordHistory} onChange={value => field("recordHistory", value)} /></label>
+          <label className="cy-companion__switch">记住聊天偏好<Switch aria-label="记住聊天偏好" checked={draft.learnConversationStyle ?? true} onChange={value => field("learnConversationStyle", value)} /></label>
           <label className="cy-companion__switch">虚构角色小记<Switch aria-label="虚构角色小记" checked={draft.innerLifeEnabled} onChange={value => field("innerLifeEnabled", value)} /></label>
-          <label className="cy-companion__switch cy-companion__wide">主动关怀<Switch aria-label="主动关怀" checked={draft.proactiveLifeEnabled} onChange={value => field("proactiveLifeEnabled", value)} /></label>
+          <label className="cy-companion__switch">主动关怀<Switch aria-label="主动关怀" checked={draft.proactiveLifeEnabled} onChange={value => field("proactiveLifeEnabled", value)} /></label>
           <label className="cy-companion__wide">昔涟的兴趣与品味<Input.TextArea aria-label="昔涟的兴趣与品味" autoSize={{ minRows: 2, maxRows: 6 }} value={draft.tasteNotes.join("\n")} onChange={e => field("tasteNotes", e.target.value.split("\n"))} placeholder="每行一项，最多 30 项，每项 120 字；例如：喜欢雨天、蓝色和把复杂问题讲清楚" /></label>
           <p className="cy-companion__wide">同时开启偏好设置中的主动聊天后，昔涟会在合适的时候偶尔发一句日常关心，也可以跟进共同目标和重要时刻。重要时刻可写“MM-DD 名称”（每年）或“YYYY-MM-DD 名称”（单次）。精确时间提醒请使用定时任务。</p>
           <p className="cy-companion__wide">角色小记每天最多一条，并明确标记虚构；不会为它单独发送消息。关闭关系记录不影响原始聊天历史和已启用的长期记忆，长期记忆请在“记忆”中设置。</p>
           {([ ["sharedGoals", "共同目标"], ["milestones", "重要时刻"], ["boundaries", "相处边界"] ] as const).map(([key, label]) => <label className="cy-companion__wide" key={key}>{label}<Input.TextArea aria-label={label} autoSize={{ minRows: 2, maxRows: 6 }} value={draft[key].join("\n")} onChange={e => field(key, e.target.value.split("\n"))} placeholder="每行一项，最多 30 项，每项 200 字" /></label>)}
           <div className="cy-companion__actions cy-companion__wide"><Button type="primary" loading={busy} onClick={() => void command({ type: "preferences", patch: { ...draft, sharedGoals: lines(draft.sharedGoals.join("\n")), milestones: lines(draft.milestones.join("\n")), boundaries: lines(draft.boundaries.join("\n")), tasteNotes: lines(draft.tasteNotes.join("\n")) } })}>保存相处偏好</Button><Button danger disabled={busy} onClick={() => setConfirm({ type: "reset_relationship" })}>重置关系</Button></div>
+          <section className="cy-companion__wide" aria-labelledby="cy-companion-learned-preferences">
+            <h3 id="cy-companion-learned-preferences">已记住的聊天偏好</h3>
+            <p>昔涟会把你对聊天方式的反馈记在那段私聊里。关闭“记住聊天偏好”并保存后，她会停止学习和使用这些偏好。暂停关系模拟或关闭关系记录时也一样。</p>
+            {snapshot.learnedPreferences?.length ? snapshot.learnedPreferences.map(item => {
+              const session = sessionName(item.conversationId);
+              const label = learnedPreferenceLabels[item.topic];
+              return <article className="cy-companion__record" key={`${item.conversationId}:${item.topic}`}>
+                <div><strong>{label}</strong><p>{session}</p><time>{new Date(item.updatedAt).toLocaleString()}</time></div>
+                <Button size="small" danger disabled={busy} aria-label={`忘记${session}中的“${label}”偏好`} onClick={() => setConfirm({
+                  type: "forget_learned_preference",
+                  conversationId: item.conversationId,
+                  topic: item.topic,
+                })}>忘记</Button>
+              </article>;
+            }) : <p>暂时还没有记住聊天偏好。</p>}
+          </section>
         </div> },
         { key: "followups", label: "具体跟进", children: <div className="cy-companion__form">
           <p className="cy-companion__wide">把希望昔涟之后关心的一件事记在这里。到达最早时间后，还会遵守主动聊天开关、评分、勿扰和渠道设置；不是精确定时提醒。微信或飞书只跟进当前绑定会话的事项。</p>
@@ -127,7 +192,7 @@ export function CompanionSettingsPanel() {
           <div className="cy-companion__actions cy-companion__wide"><Button type="primary" disabled={busy || !followup.topic.trim() || !followup.conversationId || !followup.time} onClick={() => void saveFollowup()}>{followup.id ? "保存并重新约时间" : "添加跟进事项"}</Button>{followup.id && <Button disabled={busy} onClick={() => setFollowup({ topic: "", conversationId: "", time: localTime(Date.now() + 3_600_000) })}>取消编辑</Button>}</div>
           <p className="cy-companion__wide">发出一次后等待你回复，不会因为没有回复而反复催促。可在这里完成、暂停、取消或重新约时间。明确回复“事项名称已完成”或“事项名称不要再问了”也会关闭该事项；含糊表达不会自动猜测。</p>
           <div className="cy-companion__wide">{!(snapshot.followups?.length) ? <p>暂无具体跟进事项。</p> : snapshot.followups.map(item => <article className="cy-companion__record" key={item.id}>
-            <div><strong>{item.topic}</strong> <Tag>{followupStatuses[item.status]}</Tag><p>会话：{sessions.find(session => session.id === item.conversationId)?.title || item.conversationId}</p><small>最早：{new Date(item.nextEligibleAt).toLocaleString()}{item.lastAskedAt ? ` · 上次关心：${new Date(item.lastAskedAt).toLocaleString()}` : ""}</small>{item.resolutionReason && <p>{item.resolutionReason}</p>}</div>
+            <div><strong>{item.topic}</strong> <Tag>{followupStatuses[item.status]}</Tag><p>会话：{sessionName(item.conversationId)}</p><small>最早：{new Date(item.nextEligibleAt).toLocaleString()}{item.lastAskedAt ? ` · 上次关心：${new Date(item.lastAskedAt).toLocaleString()}` : ""}</small>{item.resolutionReason && <p>{item.resolutionReason}</p>}</div>
             <div className="cy-companion__actions"><Button size="small" disabled={busy} onClick={() => editFollowup(item)}>编辑 / 再约时间</Button>{item.status !== "completed" && <Button size="small" disabled={busy} onClick={() => void command({ type: "followup_status", id: item.id, conversationId: item.conversationId, status: "completed" })}>完成</Button>}{item.status === "active" && <Button size="small" disabled={busy} onClick={() => void command({ type: "followup_status", id: item.id, conversationId: item.conversationId, status: "paused" })}>暂停</Button>}{item.status !== "cancelled" && <Button size="small" disabled={busy} onClick={() => void command({ type: "followup_status", id: item.id, conversationId: item.conversationId, status: "cancelled" })}>取消</Button>}</div>
           </article>)}</div>
         </div> },
@@ -139,6 +204,29 @@ export function CompanionSettingsPanel() {
           <label className="cy-companion__wide">每次确认<Select aria-label="每次确认" mode="multiple" showSearch optionFilterProp="label" value={permissions.confirmTools} onChange={confirmTools => setPermissions({ ...permissions, confirmTools })} options={tools.map(tool => ({ value: tool.id, label: `${tool.name} · ${tool.id}` }))} /></label>
           <p className="cy-companion__wide">桌面和 Web 普通运行会遵守“每次确认”；外部渠道选择后台执行时不会把确认卡投到 Web 等待。已有的工具轨迹与执行账本继续记录实际调用结果。</p>
           <div className="cy-companion__wide"><Button type="primary" loading={busy} onClick={() => void command({ type: "permissions", patch: permissions })}>保存能力限制</Button></div>
+          <section className="cy-companion__wide" aria-labelledby="companion-task-learning-heading">
+            <h3 id="companion-task-learning-heading">做事经验</h3>
+            <p>昔涟会记住在工作区反复有效的查找和阅读方法，遇到同类任务时用上。</p>
+            <div className="cy-companion__actions">
+              <label className="cy-companion__switch">从办事结果学习<Switch aria-label="从办事结果学习" checked={taskLearningDraft ?? taskLearningEnabled} disabled={busy} onChange={value => setTaskLearningDraft(value === taskLearningEnabled ? undefined : value)} /></label>
+              <Button disabled={busy || taskLearningDraft === undefined} onClick={() => void saveTaskLearning()}>保存学习设置</Button>
+            </div>
+            {taskLearningEnabled && (snapshot.relationship.paused || !snapshot.relationship.recordHistory) && <p>相处与形象设置已暂停记录，做事经验暂时停用。</p>}
+            {snapshot.taskLessons?.length ? snapshot.taskLessons.map(item => {
+              const workspace = `工作区 ${item.workspaceKey.slice(0, 8)}`;
+              const task = taskLabels[item.task];
+              const method = taskMethodLabels[item.method];
+              return <article className="cy-companion__record" key={`${item.workspaceKey}:${item.task}:${item.method}`}>
+                <div><strong>{method}</strong><p>{task} · {workspace} · 已验证 {item.confirmations} 次</p><time>{new Date(item.updatedAt).toLocaleString()}</time></div>
+                <Button size="small" danger disabled={busy} aria-label={`忘记${workspace}中${task}的方法“${method}”`} onClick={() => setConfirm({
+                  type: "forget_task_method",
+                  workspaceKey: item.workspaceKey,
+                  task: item.task,
+                  method: item.method,
+                })}>忘记</Button>
+              </article>;
+            }) : <p>暂时还没有做事经验。</p>}
+          </section>
         </div> },
         { key: "history", label: "记录与修复", children: <div className="cy-companion__form">
           <p className="cy-companion__wide">自动线索可能误判，可删除。这里管理关系派生记录；聊天原文、向量记忆、Wiki、摘要及你自行保存的导出文件仍分别在原有入口管理。</p>
@@ -152,6 +240,6 @@ export function CompanionSettingsPanel() {
         </div> },
       ]} />
     </>}
-    <Modal open={Boolean(confirm)} title={confirm?.type === "reset_relationship" ? "重置关系设置与记录" : confirm?.type === "reset_bond_progress" ? "重置羁绊进度" : "删除关系记录"} onCancel={() => setConfirm(undefined)} onOk={() => confirm && void command(confirm)} okText="确认" cancelText="取消" confirmLoading={busy} okButtonProps={{ danger: true }}><p>{confirm?.type === "reset_relationship" ? "称呼、目标、边界、修复记录和模拟情绪将恢复默认。工具授权不变。" : confirm?.type === "reset_bond_progress" ? "羁绊章节、进度和奖励记录会恢复到序章；关系偏好、工具授权和聊天记录不变。" : "删除所选关系记录及其派生线索。原始聊天与其他记忆仍保留。"}</p></Modal>
+    <Modal open={Boolean(confirm)} title={confirm && confirmationCopy[confirm.type].title} onCancel={() => setConfirm(undefined)} onOk={() => confirm && void command(confirm)} okText="确认" cancelText="取消" confirmLoading={busy} okButtonProps={{ danger: true }}><p>{confirm && confirmationCopy[confirm.type].detail}</p></Modal>
   </section>;
 }

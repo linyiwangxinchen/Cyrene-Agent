@@ -98,6 +98,10 @@ export async function runHarnessWithAdapter(
     },
     ...(options.onCacheDiagnostic ? { onCacheDiagnostic: options.onCacheDiagnostic } : {}),
     ...(options.onToolFinished ? { onToolFinished: options.onToolFinished } : {}),
+    ...(options.taskMethodRun ? {
+      observeTaskTool: options.taskMethodRun.observe,
+      discardTaskMethod: options.taskMethodRun.discard,
+    } : {}),
     ...(options.pollRunAdjustments ? { pollRunAdjustments: options.pollRunAdjustments } : {}),
     ...(options.pollShellCompletions ? { pollShellCompletions: options.pollShellCompletions } : {}),
     requestUserClarification: options.requestUserClarification

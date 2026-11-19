@@ -8,6 +8,8 @@ import { sendHarnessEventAsAgui } from "../orchestrator/harness/adapter/event-ma
 const channelMocks = vi.hoisted(() => ({
   resolveBoundConversation: undefined as ((sessionId: string) => string | null) | undefined,
   bindingResolve: vi.fn(),
+  isGroupBoundConversation: vi.fn(),
+  relationshipControls: vi.fn(),
   flush: vi.fn(),
   listSessions: vi.fn(),
   getSession: vi.fn(),
@@ -27,6 +29,10 @@ const channelMocks = vi.hoisted(() => ({
       externalEffectsMayContinue: boolean;
     };
   },
+}));
+
+vi.mock("../relationship/relationship-log", () => ({
+  getRelationshipStore: () => ({ getControls: channelMocks.relationshipControls }),
 }));
 
 vi.mock("electron", () => ({
@@ -84,6 +90,7 @@ vi.mock("./channel-context", () => ({
 
 vi.mock("./conversation-binding-store", () => ({
   getChannelConversationBindingStore: () => ({ resolve: channelMocks.bindingResolve, flush: channelMocks.flush }),
+  isGroupBoundConversation: channelMocks.isGroupBoundConversation,
 }));
 vi.mock("../chats/chats-store", () => ({
   listSessions: channelMocks.listSessions,
@@ -177,6 +184,8 @@ beforeEach(() => {
   channelMocks.agentResult = { reply: "渠道回复", toolResults: [] };
   channelMocks.dispatcherDeps.length = 0;
   channelMocks.getSessionRecord.mockResolvedValue(null);
+  channelMocks.relationshipControls.mockReset().mockReturnValue({ learningRevision: 7 });
+  channelMocks.isGroupBoundConversation.mockReset().mockReturnValue(false);
 });
 
 describe("createChannelsSubsystem lifecycle", () => {
@@ -359,7 +368,7 @@ describe("createChannelsSubsystem lifecycle", () => {
     void shutdownChannels;
   });
 
-  it("渠道成功回复把规范化文本和渠道上下文交给统一收尾路径", async () => {
+  it.each(["wechat-private", "group", "group-binding", "settings-unavailable"] as const)("渠道收尾只学习私聊原文：%s", async (scope) => {
     const onRunFinished = vi.fn(async () => ({ sticker: null }));
     const agentRuntime = makeAgentRuntime(onRunFinished);
     const publishLifecycle = makePublishLifecycle();
@@ -371,10 +380,15 @@ describe("createChannelsSubsystem lifecycle", () => {
 
     const buildAndRunAgent = channelMocks.buildAndRunAgent;
     if (!buildAndRunAgent) throw new Error("渠道 Agent 执行函数未注册");
+    if (scope === "group-binding") channelMocks.isGroupBoundConversation.mockReturnValueOnce(true);
+    if (scope === "settings-unavailable") {
+      channelMocks.relationshipControls.mockImplementationOnce(() => { throw new Error("read failed"); });
+    }
     await buildAndRunAgent({
-      channel: "telegram",
-      chatType: "direct",
+      channel: "wechat",
+      ...(scope === "group" ? { chatType: "group" } : {}),
       senderId: "user-1",
+      text: "用户原文",
       at: new Date("2026-09-02T00:00:00Z"),
     }, {
       sessionId: "channel-session",
@@ -391,13 +405,14 @@ describe("createChannelsSubsystem lifecycle", () => {
       "渠道问题",
       {
         source: "channel",
-        privateRelationshipContext: true,
+        privateRelationshipContext: scope !== "group",
         runId: "channel-run",
         mode: "chat",
         conversationId: "channel-session",
-        channel: "telegram",
+        channel: "wechat",
         userTurnId: "channel-user",
         assistantEntryId: "channel-reply-entry",
+        ...(scope === "wechat-private" ? { companionFeedback: { text: "用户原文", userTurnId: "channel-user", revision: 7 } } : {}),
       },
     );
 
@@ -406,7 +421,7 @@ describe("createChannelsSubsystem lifecycle", () => {
     const startedPayload = publishLifecycle.publishTurnStarted.mock.calls[0][0] as Record<string, unknown>;
     expect(startedPayload).toMatchObject({
       source: "channel",
-      channel: "telegram",
+      channel: "wechat",
       conversationId: "channel-session",
       mode: "chat",
     });
@@ -418,7 +433,7 @@ describe("createChannelsSubsystem lifecycle", () => {
     const finishedPayload = publishLifecycle.publishTurnFinished.mock.calls[0][0] as Record<string, unknown>;
     expect(finishedPayload).toMatchObject({
       source: "channel",
-      channel: "telegram",
+      channel: "wechat",
       conversationId: "channel-session",
       runId: startedPayload.runId,
       mode: "chat",

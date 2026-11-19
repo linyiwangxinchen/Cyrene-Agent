@@ -54,6 +54,8 @@ export function createDefaultRelationshipState(now = Date.now()): RelationshipSt
     tasteNotes: [],
     paused: false,
     recordHistory: true,
+    learnConversationStyle: true,
+    learnTaskMethods: true,
     style: "natural",
     affection: true,
     innerLifeEnabled: false,

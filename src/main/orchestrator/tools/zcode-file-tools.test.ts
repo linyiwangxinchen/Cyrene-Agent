@@ -272,7 +272,7 @@ describe("ZCode file tool adapters", () => {
       "-C": 1,
     }, context()));
 
-    expect(result).toMatchObject({ numMatches: 1 });
+    expect(result).toMatchObject({ numMatches: 1, matchedPaths: ["src/match.test.ts"] });
     expect(result.content).toBe("src/match.test.ts:1-before\nsrc/match.test.ts:2:needle\nsrc/match.test.ts:3-after");
   });
 });

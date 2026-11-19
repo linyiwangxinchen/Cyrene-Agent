@@ -3,7 +3,6 @@ import { app } from "electron";
 import path from "node:path";
 import { InitiativeOpportunityStore } from "../proactive/initiative-opportunities";
 import { loadPromptFile } from "../prompts/prompt-loader";
-import type { AguiRunInput } from "../agui-bridge";
 import type { ScheduledTask } from "../scheduler/types";
 import type { ChannelId } from "../channels/types";
 import type { ModelSettings } from "../settings/model-settings";
@@ -22,7 +21,7 @@ import { scheduleSummaryTurn } from "../memory/summary-memory-scheduler";
 import { scheduleWikiTurn } from "../memory/wiki-memory-scheduler";
 import { matchSticker } from "../sticker-text-matcher";
 import type { StickerTextEntry } from "../sticker-text-matcher";
-import { buildRelationshipContext, recordRelationshipTurn, getRelationshipStore } from "../relationship/relationship-log";
+import { buildRelationshipContext, recordRelationshipTurn, getRelationshipStore, type CompanionFeedbackInput } from "../relationship/relationship-log";
 import { compileSocialContextBlock } from "../social-context/context";
 import * as momentsStore from "../moments/moments-store";
 import { momentsService } from "../moments/moments-service";
@@ -45,6 +44,7 @@ import {
   onAgentRunFinished,
   type BuildOptionsDeps,
   type OnRunFinishedDeps,
+  type BuildOptionsInput,
   type ModelSettingsLite,
 } from "./build-options";
 import { buildModelContext } from "./conversation-transcript-context";
@@ -122,10 +122,11 @@ export interface AgentRunFinishedContext {
   assistantEntryId?: string;
   privateRelationshipContext?: boolean;
   userTurnId?: string;
+  companionFeedback?: CompanionFeedbackInput;
 }
 
 export interface AgentRuntime {
-  buildOptions(input: AguiRunInput): Promise<{ options: CyreneRunOptions; latestUserText: string }>;
+  buildOptions(input: BuildOptionsInput): Promise<{ options: CyreneRunOptions; latestUserText: string }>;
   onRunFinished(result: CyreneRunResult, latestUserText: string, context: AgentRunFinishedContext): Promise<{ sticker: string | null }>;
   buildSchedulerOptions(task: ScheduledTask): Promise<SchedulerRunOptions>;
 }
@@ -388,6 +389,10 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
 
     onRunFinished: async (result, latestUserText, context) => {
       const onRunFinishedDeps = buildOnRunFinishedDeps();
+      const terminalStatus = result.terminal?.status;
+      const companionFeedback = (terminalStatus === undefined || terminalStatus === "success")
+        && context.mode === "chat" && context.privateRelationshipContext !== false
+        ? context.companionFeedback : undefined;
       const effects = await onAgentRunFinished(
         result,
         latestUserText,
@@ -397,12 +402,12 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         { runId: context.runId, source: context.source, mode: context.mode,
           privateRelationshipContext: context.privateRelationshipContext,
           assistantEntryId: context.assistantEntryId, userTurnId: context.userTurnId,
+          ...(companionFeedback ? { companionFeedback } : {}),
           vectorMemorySource: context.userTurnId && context.assistantEntryId
             ? { userTurnId: context.userTurnId, assistantEntryId: context.assistantEntryId }
             : undefined },
       );
       // 调用方应只在成功终态进入收尾；此处再守住插件事件契约，避免未来新增入口误报完成。
-      const terminalStatus = result.terminal?.status;
       if (terminalStatus !== undefined && terminalStatus !== "success") {
         return effects;
       }

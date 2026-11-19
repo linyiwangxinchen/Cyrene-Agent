@@ -17,13 +17,14 @@ import { ConversationJournalService } from "../orchestrator/conversation-journal
 import { getConversationTranscriptStore } from "../orchestrator/conversation-transcript-store";
 import { getHarnessRunStore } from "../orchestrator/harness/run-store";
 import { indexConversationTurn } from "../orchestrator/tools/history-tools";
-import type { AgentRuntime } from "../orchestrator/agent-runtime";
+import type { AgentRunFinishedContext, AgentRuntime } from "../orchestrator/agent-runtime";
+import { getRelationshipStore } from "../relationship/relationship-log";
 import type { TtsSynthesisService } from "../services/tts/tts-synthesis-service";
 import { buildChannelAttachmentInputs } from "./agent-input";
 import { isChannelToolAuthorized, loadChannelsSettings, resolveChannelToolSandbox } from "./settings-store";
 import { enforceChannelAgentPolicy, resolveChannelAgentPolicy } from "./agent-policy";
 import { listSessions, getSessionRecord } from "../chats/chats-store";
-import { getChannelConversationBindingStore } from "./conversation-binding-store";
+import { getChannelConversationBindingStore, isGroupBoundConversation } from "./conversation-binding-store";
 import { ChannelDispatcher, type ChannelAgentInput, type DispatcherDeps } from "./dispatcher";
 import {
   createChannelContext,
@@ -150,9 +151,31 @@ export function createChannelsSubsystem(
 
     // Bound chats reuse the conversation's selected model; unbound chats use the default profile.
     // Captioning, compaction and the main reply consume the same frozen settings.
-    const boundSession = channelInput.target.conversationId !== channelInput.sessionId
+    const isBound = channelInput.target.conversationId !== channelInput.sessionId;
+    const boundSession = isBound
       ? await getSessionRecord(channelInput.target.conversationId)
       : null;
+    let companionFeedback: AgentRunFinishedContext["companionFeedback"];
+    let useLearnedCompanionStyle = false;
+    if ((msg.chatType ?? "private") === "private" && policy.executionMode === "chat" && msg.text?.trim()
+      && (!isBound || (boundSession?.mode === "chat" && !boundSession.purpose))) {
+      try {
+        const conversationId = channelInput.target.conversationId;
+        const wasShared = isGroupBoundConversation(conversationId) || (boundSession
+          ? ("messages" in boundSession ? boundSession.messages : (await conversationJournal.readProjection(conversationId)).messages)
+            .some(message => message.channelSource?.chatType === "group")
+          : false);
+        if (!wasShared) {
+          useLearnedCompanionStyle = true;
+          const revision = getRelationshipStore().getControls().learningRevision;
+          if (typeof revision === "number") {
+            companionFeedback = { text: msg.text, userTurnId: channelInput.userTurnId, revision };
+          }
+        }
+      } catch {
+        // 读取关系设置失败时仍照常回复。
+      }
+    }
     const channelModelSettings = boundSession
       ? resolveSessionModelSettings(loadModelSettings(), boundSession)
       : resolveModelSettingsProfile(loadModelSettings());
@@ -179,6 +202,7 @@ export function createChannelsSubsystem(
       // 渠道绑定只共享文字上下文，不继承桌面对话的工作区权限。
       workspaceBindingSessionId: null,
       privateRelationshipContext: msg.chatType !== "group",
+      skipLearnedCompanionStyle: !useLearnedCompanionStyle,
       attachments: attachmentInputs.attachments,
       imageAttachments: attachmentInputs.imageAttachments,
       channel: msg.channel,
@@ -298,6 +322,7 @@ export function createChannelsSubsystem(
           channel: msg.channel,
           userTurnId: channelInput.userTurnId,
           assistantEntryId: options.transcriptSink?.getLastAssistantEntryId?.(),
+          ...(mode === "chat" && !channelInput.signal?.aborted && companionFeedback ? { companionFeedback } : {}),
         });
         channelResult.sticker = finished.sticker;
       }

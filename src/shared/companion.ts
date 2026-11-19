@@ -50,6 +50,8 @@ export interface RelationshipState {
   version: number;
   paused: boolean;
   recordHistory: boolean;
+  learnConversationStyle?: boolean;
+  learnTaskMethods?: boolean;
   style: CompanionStyle;
   affection: boolean;
   innerLifeEnabled: boolean;
@@ -120,6 +122,28 @@ export interface CompanionCommitment {
   dueAt?: number;
   evidence?: string;
 }
+export const COMPANION_LEARNING_TOPICS = ["length", "questions", "nicknames", "flourishes", "support"] as const;
+export type CompanionLearningTopic = typeof COMPANION_LEARNING_TOPICS[number];
+
+export interface CompanionLearnedPreference {
+  conversationId: string;
+  topic: CompanionLearningTopic;
+  updatedAt: number;
+}
+
+export const COMPANION_TASK_KINDS = ["find-content", "survey-directory", "read-document"] as const;
+export type CompanionTaskKind = typeof COMPANION_TASK_KINDS[number];
+export const COMPANION_TASK_METHODS = ["search-then-read", "list-then-read", "read-direct", "list-directory"] as const;
+export type CompanionTaskMethod = typeof COMPANION_TASK_METHODS[number];
+
+export interface CompanionTaskLesson {
+  workspaceKey: string;
+  task: CompanionTaskKind;
+  method: CompanionTaskMethod;
+  confirmations: number;
+  updatedAt: number;
+}
+
 export interface CompanionSnapshot {
   revision: number;
   relationship: RelationshipState;
@@ -131,15 +155,19 @@ export interface CompanionSnapshot {
   followups?: CompanionFollowup[];
   repairCases?: RepairCase[];
   commitments?: CompanionCommitment[];
+  learnedPreferences?: CompanionLearnedPreference[];
+  taskLessons?: CompanionTaskLesson[];
 }
 export type RelationshipPreferences = Pick<RelationshipState,
-  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled" | "relationshipMode">;
+  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "learnConversationStyle" | "learnTaskMethods" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled" | "relationshipMode">;
 export type CompanionCommand = { expectedRevision: number } & (
   | { type: "preferences"; patch: Partial<RelationshipPreferences> }
   | { type: "permissions"; patch: Partial<CompanionPermissions> }
   | { type: "repair"; note: string; conversationId?: string; followUpAt?: number }
   | { type: "repair_status"; id: string; status: RepairCaseStatus; resolutionNote?: string; followUpAt?: number }
   | { type: "delete_record"; id: string }
+  | { type: "forget_learned_preference"; conversationId: string; topic: CompanionLearningTopic }
+  | { type: "forget_task_method"; workspaceKey: string; task: CompanionTaskKind; method: CompanionTaskMethod }
   | { type: "clear_history" }
   | { type: "reset_relationship" }
   | { type: "reset_bond_progress" }

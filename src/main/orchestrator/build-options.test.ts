@@ -84,6 +84,34 @@ async function buildAgentRunOptions(
 }
 
 describe("build-options", () => {
+  it("把工作区做事经验交给当前请求，群聊不读取经验", async () => {
+    const deps = createBuildDeps();
+    const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-method-prompt-"));
+    try {
+      deps.getWorkspaceBinding = () => ({ workspaceRoot: workspace, displayName: "资料", boundAt: 1 });
+      deps.toolRegistry.getEnabled = () => [{ id: "Read", enabled: true, name: "Read", description: "读文件" }];
+      const prepareTaskMethodRun = vi.fn(() => ({
+        prompt: "按实际文件核对",
+        observe: vi.fn(), discard: vi.fn(), observations: () => [],
+        task: "read-document" as const, workspaceKey: "test",
+      }));
+      const input = {
+        sessionId: "workspace", mode: "work", executionMode: "work",
+        messages: [{ role: "user", content: "读一下 notes.md" }], prepareTaskMethodRun,
+      };
+      const foreground = await buildAgentRunOptions(input, deps);
+      expect(prepareTaskMethodRun).toHaveBeenCalledExactlyOnceWith(workspace, new Set(["Read"]));
+      expect(foreground.options.soulRuntimeContext).toContain("按实际文件核对");
+      expect(foreground.options.toolSystemContent).not.toContain("按实际文件核对");
+      expect(JSON.stringify(foreground.options.messages)).not.toContain("按实际文件核对");
+      const shared = await buildAgentRunOptions({ ...input, privateRelationshipContext: false }, deps);
+      expect(shared.options.soulRuntimeContext).not.toContain("按实际文件核对");
+      expect(prepareTaskMethodRun).toHaveBeenCalledTimes(1);
+    } finally {
+      fs.rmSync(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("当轮纠正以独立请求上下文交给模型，不混入用户消息或历史", async () => {
     const currentUser = { turnId: "u1", text: "先听我说", visibleContent: "先听我说" };
     const input = {
@@ -150,15 +178,15 @@ describe("build-options", () => {
       await buildAgentRunOptions({ ...input, ...suppressed }, deps);
     }
     expect(vi.mocked(deps.buildRelationshipContext).mock.calls).toEqual([
-      ["mood", true, "我的杯子到了"],
-      ["mood", true, "我的杯子到了"],
-      ["mood", true, "我的杯子到了"],
-      ["mood", false, undefined],
-      ["mood", false, undefined],
-      ["mood", true, undefined],
-      ["mood", true, undefined],
-      ["mood", true, undefined],
-      ["mood", true, undefined],
+      ["mood", true, "我的杯子到了", true],
+      ["mood", true, "我的杯子到了", true],
+      ["mood", true, "我的杯子到了", true],
+      ["mood", false, undefined, false],
+      ["mood", false, undefined, false],
+      ["mood", true, undefined, false],
+      ["mood", true, undefined, false],
+      ["mood", true, undefined, false],
+      ["mood", true, undefined, false],
     ]);
   });
 

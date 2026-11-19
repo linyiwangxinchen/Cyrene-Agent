@@ -1114,6 +1114,37 @@ describe("CyreneHarness completion", () => {
     expect(events).toContainEqual({ type: "candidate_text_discard", roundId: "round-0" });
   });
 
+  it("passes only verified file tool results to the task method observer", async () => {
+    const read: ToolCall = { id: "read-1", name: "Read", arguments: "{}" };
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [read] }),
+      assistantResponse({ toolCalls: [mutationToolCall("edit-1")] }),
+      assistantResponse({ text: "完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const readResult = { toolId: "Read", args: {}, output: "    1 | 内容", status: "succeeded" as const };
+    const simulatedWrite = successDispatchResult("edit-1");
+    mockedDispatch.mockImplementation(async (call, context) => {
+      const sideEffect = resolveToolDispatchSideEffect(call.name, parseToolCallArgs(call), context.tools);
+      await context.onToolStarted?.({
+        toolCallId: call.id, toolName: call.name, sideEffect,
+        fingerprint: toolCallFingerprint(call.name, parseToolCallArgs(call)),
+      });
+      return call.name === "Read"
+        ? { ...simulatedWrite, tool: "Read", message: readResult.output, output: readResult.output, rawResult: readResult }
+        : simulatedWrite;
+    });
+    const observeTaskTool = vi.fn();
+    const discardTaskMethod = vi.fn();
+    await runCyreneHarness({
+      systemPrompt: "test", messages: [{ role: "user", content: "读取文件" }],
+      tools: [{ ...safeReadTool("Read"), risk: "fs-read" }, { ...mutationTool(), risk: "fs-write" }],
+      vendorConfig, observeTaskTool, discardTaskMethod,
+    });
+    expect(observeTaskTool).toHaveBeenCalledExactlyOnceWith(readResult, expect.any(Number));
+    expect(discardTaskMethod).toHaveBeenCalledTimes(1);
+  });
+
   it("accepts honest final after an unknown non-idempotent side effect; uncertainEffects retained", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({

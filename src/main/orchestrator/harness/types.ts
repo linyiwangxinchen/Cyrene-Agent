@@ -286,6 +286,8 @@ export interface HarnessInput {
   onToolLifecycle?: (event: HarnessToolLifecycleEvent) => void;
   /** 工具结果确定后的只读观察回调；只读稳定元数据，不参与执行决策。 */
   onToolFinished?: (event: HarnessToolFinishedEvent) => void;
+  observeTaskTool?: import("../task-method-learning").TaskMethodRun["observe"];
+  discardTaskMethod?: () => void;
   /** 压缩前后持久化事务边界。 */
   onCompactionLifecycle?: (event: HarnessCompactionLifecycleEvent) => void;
   /** 保存会话压缩检查点并返回权威模型历史；临时运行信息只参与占用计量。 */

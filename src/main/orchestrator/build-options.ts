@@ -35,7 +35,7 @@ import type { ToolDefinition, ToolModeOverrides } from "./tools/registry/tool-re
 import type { SkillModeOverrides } from "../skills/types";
 import type { ChatMessage, OpenAIContentBlock } from "./vendors/types";
 import type { AguiRunInput } from "../agui-bridge";
-import type { RelationshipChannel, RelationshipTurnInput } from "../relationship/relationship-log";
+import type { CompanionFeedbackInput, RelationshipChannel, RelationshipTurnInput } from "../relationship/relationship-log";
 import { buildCompanionReplyContext } from "./companion-reply-context";
 import type { ChannelId } from "../channels/types";
 import { validateCaptionImagePath } from "../chat/image-caption";
@@ -68,6 +68,7 @@ import type { StickerTextEntry } from "../sticker-text-matcher";
 import { isPlanReadOnly, getPlanState } from "./plan-mode";
 import { policyFor, type ToolRiskLevel } from "../permission-policy";
 import { resolveTranscriptRetainTokens, type MaterializedTranscript } from "./conversation-transcript-context";
+import type { TaskMethodRun } from "./task-method-learning";
 import type { UncertainEffect } from "./harness/types";
 import { DEFAULT_HARNESS_CONFIG } from "./harness/types";
 import { resolveCompactionTriggerTokens } from "./harness/compaction";
@@ -116,7 +117,7 @@ export interface BuildOptionsDeps {
   buildXilianLifeContext?: (userText: string) => string;
   /** 用户明确请求自拍时，构建与当前生活事件绑定的图片上下文。 */
   buildXilianSelfieContext?: (userText: string) => string;
-  buildRelationshipContext: (conversationId?: string, privateContext?: boolean, currentUserText?: string) => Promise<string>;
+  buildRelationshipContext: (conversationId?: string, privateContext?: boolean, currentUserText?: string, useLearnedStyle?: boolean) => Promise<string>;
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
   buildModePrompt?: (mode: ConversationMode) => string;
   /** 工具规则与目录 system prompt（进入 harness stablePrefix）。仅含自动生成的工具目录。 */
@@ -207,6 +208,8 @@ export interface BuildOptionsDeps {
 export type BuildOptionsInput = AguiRunInput & {
   signal?: AbortSignal;
   skipCurrentUserMood?: boolean;
+  skipLearnedCompanionStyle?: boolean;
+  prepareTaskMethodRun?: (workspaceRoot: string, toolIds: ReadonlySet<string>) => TaskMethodRun | undefined;
 };
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -751,7 +754,8 @@ export async function buildAgentRunOptions(
     ? stripTurnModelContextForSideEffects(input.currentUser.visibleContent) || undefined
     : undefined;
   try {
-    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, privateContext, currentUserMoodText));
+    const useLearnedStyle = Boolean(currentUserMoodText) && !input.skipLearnedCompanionStyle;
+    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, privateContext, currentUserMoodText, useLearnedStyle));
   } catch (err) {
     console.warn("[Cyrene] relationship context build failed:", err);
   }
@@ -1009,6 +1013,9 @@ export async function buildAgentRunOptions(
       : {}),
   })).filter((s) => s.id);
   const runTools = capabilities.tools;
+  const taskMethodRun = privateContext && !input.channel && !input.transcriptRewind && resolvedWorkspaceRoot
+    ? input.prepareTaskMethodRun?.(resolvedWorkspaceRoot, capabilities.toolIds)
+    : undefined;
   const searchToolIds = filteredBySearch
     .filter((t) => t.id === "web_search" || t.id.startsWith("minimax-web-search-"))
     .map((t) => t.id);
@@ -1088,6 +1095,7 @@ export async function buildAgentRunOptions(
     toneInjection,
     alwaysOnContext,
     relationshipContext,
+    taskMethodRun?.prompt,
     privateContext ? deps.buildXilianLifeContext?.(latestUserText) : "",
     imageGenerationPersonaContext,
     attachmentContext,
@@ -1232,6 +1240,7 @@ export async function buildAgentRunOptions(
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
       resolvedWorkspaceRoot,
       resolvedWorkspaceBinding: workspaceBinding ?? null,
+      ...(taskMethodRun ? { taskMethodRun } : {}),
     },
     latestUserText,
   };
@@ -1260,6 +1269,7 @@ export async function onAgentRunFinished(
     mode?: string;
     assistantEntryId?: string;
     userTurnId?: string;
+    companionFeedback?: CompanionFeedbackInput;
     /** Vector-memory provenance only; does not change Summary/Wiki dispatch. */
     vectorMemorySource?: { userTurnId: string; assistantEntryId: string };
   },
@@ -1333,6 +1343,10 @@ export async function onAgentRunFinished(
       runId: finishedContext?.runId,
       sourceEventId: finishedContext?.assistantEntryId ?? finishedContext?.vectorMemorySource?.assistantEntryId,
       privateContext: finishedContext?.privateRelationshipContext !== false,
+      ...(finishedContext?.companionFeedback ? { companionFeedback: {
+        ...finishedContext.companionFeedback,
+        text: stripTurnModelContextForSideEffects(finishedContext.companionFeedback.text),
+      } } : {}),
     });
   });
 
