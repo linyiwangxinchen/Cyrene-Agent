@@ -32,7 +32,7 @@ import type {
   ProactiveCommitResult,
 } from "./proactive-service";
 import { routeProactiveDelivery } from "./proactive-delivery-routing";
-import { buildProactiveMessages, repeatsRecentProactiveMessage, restatesRecentReply, type ProactiveHistoryTurn } from "./proactive-prompt";
+import { buildProactiveComposeMessages, buildProactiveMessages, repeatsRecentProactiveMessage, restatesRecentReply, type ProactiveHistoryTurn } from "./proactive-prompt";
 import { canCommitProactiveMessage, canStartProactiveGeneration } from "./proactive-policy";
 import { loadProactiveState, saveProactiveState } from "./proactive-state-store";
 import { createProactiveTrigger, formatLocalDate, getZonedDateParts, type ProactiveOpportunity, type ProactiveTriggerController } from "./proactive-trigger";
@@ -45,10 +45,17 @@ import { getSharedXilianWorldStore, type XilianWorldStore } from "../xilian-worl
 import type { ChatMessage } from "../../shared/chat-types";
 import type { XilianTimelineEvent, XilianWorldState, XilianWorldView } from "../../shared/xilian-world";
 import { createAmphoreusRuntime } from "../amphoreus-world/runtime";
+import { buildChannelSystem, buildRecentPhrasingHint, PRIVATE_CHAT_EXPRESSION } from "../orchestrator/expression-context-core";
+import { buildPersonMemoryContext } from "../social-context/context";
+import type { SocialAtom } from "../social-context/types";
+import type { RelationshipChannel } from "../relationship/relationship-log-core";
+import { isMemoryFollowupAtomOpen, MEMORY_FOLLOWUP_SOURCE, memoryFollowupOpportunities } from "./memory-initiative";
 
 export interface ProactiveLifecycleOptions {
   loadGeneralSettings: () => GeneralSettings;
   conversationJournal: ConversationJournalService;
+  /** What she remembers about the person in a conversation (chat social atoms). */
+  listPersonMemory?: (conversationId: string, now: number) => SocialAtom[];
 }
 
 export interface ProactiveLifecycle {
@@ -88,7 +95,11 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   let generationRelationshipRevision: number | undefined;
   let generationRecipient: RecentProactiveChannelRecipient | undefined;
   let generationDeliveryContext: ProactiveDeliveryContext | undefined;
-  let generationShares: { history: ProactiveHistoryTurn[]; ordinary: ProactiveHistoryTurn[]; worldShare: boolean; careStale?: boolean } = { history: [], ordinary: [], worldShare: false };
+  let generationShares: {
+    history: ProactiveHistoryTurn[]; ordinary: ProactiveHistoryTurn[]; worldShare: boolean; careStale?: boolean;
+    /** Material for the compose step, frozen with the decision prompt. */
+    compose?: { persona: string; personMemory: string; history: ProactiveHistoryTurn[]; timezone: string; replyBurden?: ProactiveCandidate["replyBurden"] };
+  } = { history: [], ordinary: [], worldShare: false };
   let lastOutcome: ProactiveEvaluationStatus["lastOutcome"];
   let proactiveStatus: ProactiveEvaluationStatus = {
     candidateScore: null,
@@ -141,6 +152,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       if (!personal?.changes.some(change => change.eventId === opportunity.sourceEventId && String(change.version) === String(opportunity.evidenceVersion))) return "world_source_changed";
     }
     if (["inner_life", "shared_interest"].includes(opportunity.source) && worldStore.worldView().amphoreus?.personal?.currentActivity?.eventId !== opportunity.sourceEventId) return "life_activity_changed";
+    // 对方已经说了结果（提取器关闭了这条），就不再问。
+    if (opportunity.source === MEMORY_FOLLOWUP_SOURCE && opportunity.conversationId
+      && !isMemoryFollowupAtomOpen(options.listPersonMemory?.(opportunity.conversationId, Date.now()).find(atom => atom.id === opportunity.sourceEventId), Date.now())) return "memory_resolved";
     const controls = getRelationshipStore().getControls();
     if (controls.paused) return "relationship_paused";
     return undefined;
@@ -278,6 +292,21 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const snapshot = getProactiveRuntimeSnapshot();
     generationDeliveryContext.composedAt = snapshot.now;
     generationDeliveryContext.timezone = snapshot.timezone;
+    const memoryConversationId = histories.conversationId ?? historyTarget?.conversationId;
+    const personAtoms = memoryConversationId && histories.careAllowed ? options.listPersonMemory?.(memoryConversationId, snapshot.now) ?? [] : [];
+    const personMemory = buildPersonMemoryContext(personAtoms, retrievalQuery, { now: snapshot.now, timezone: snapshot.timezone }).contextBlock;
+    const rememberedAtom = initiative?.source === MEMORY_FOLLOWUP_SOURCE ? personAtoms.find(atom => atom.id === initiative.sourceEventId) : undefined;
+    if (initiative?.source === MEMORY_FOLLOWUP_SOURCE && !isMemoryFollowupAtomOpen(rememberedAtom, snapshot.now)) generationShares.careStale = true;
+    const channelSystem = target === "local" ? "" : buildChannelSystem(target as RelationshipChannel);
+    generationShares.compose = {
+      persona: [buildProactivePersonaPrompt(), channelSystem, PRIVATE_CHAT_EXPRESSION, relationshipContext,
+        buildRecentPhrasingHint([...histories.ordinary, ...histories.proactive].sort((a, b) => a.at - b.at).map(turn => ({ role: turn.role, content: turn.content })), companion.relationship.userLabel)]
+        .filter(part => part?.trim()).join("\n\n---\n\n"),
+      personMemory,
+      history: [...histories.ordinary, ...histories.proactive],
+      timezone: snapshot.timezone,
+      replyBurden: candidate.replyBurden,
+    };
     const lastUser = histories.ordinary.filter(turn => turn.role === "user").at(-1);
     if (standaloneCare) {
       generationShares.careStale = !companion.relationship.proactiveLifeEnabled || !histories.careAllowed
@@ -289,12 +318,13 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     }
     const careContext = followup ? { kind: "requested_followup" as const, at: followup.nextEligibleAt, topic: followup.topic }
       : initiative?.source === "user_care" ? { kind: "user_message" as const, at: initiative.occurredAt }
+      : rememberedAtom ? { kind: "remembered" as const, at: rememberedAtom.createdAt, topic: rememberedAtom.content }
       : standaloneCare ? { kind: "standalone_care" as const }
       : undefined;
     return buildProactiveMessages({
       basePersona: buildProactivePersonaPrompt() + "\n\n" + relationshipContext,
       userProfile: profileContext,
-      relevantMemory: careContext ? undefined : memoryContext,
+      relevantMemory: [careContext ? "" : memoryContext, personMemory].filter(part => part?.trim()).join("\n\n"),
       ordinaryHistory: standaloneCare ? [] : histories.ordinary,
       proactiveHistory: histories.proactive,
       sceneId: candidate.sceneId,
@@ -554,19 +584,29 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         // profile chain without creating a session just to generate a candidate.
         const settings = resolveSessionModelSettings(loadModelSettings(), session ?? {});
         if (!settings.apiKey) return { kind: "error", reason: "missing_api_key" };
+        const vendorSettings = {
+          provider: settings.provider,
+          baseUrl: settings.baseUrl,
+          model: settings.model,
+          apiKey: settings.apiKey,
+          explicitTransport: settings.explicitTransport,
+          reasoning: settings.reasoning,
+          manualReasoning: settings.manualReasoning,
+        };
+        const decision = await runProactiveModel({ settings: vendorSettings, messages, timeoutMs: 45_000 });
+        const compose = generationShares.compose;
+        if (decision.kind !== "send" || !compose) return decision;
+        // Step two: write the message as an ordinary turn of this private chat.
         const result = await runProactiveModel({
-          settings: {
-            provider: settings.provider,
-            baseUrl: settings.baseUrl,
-            model: settings.model,
-            apiKey: settings.apiKey,
-            explicitTransport: settings.explicitTransport,
-            reasoning: settings.reasoning,
-            manualReasoning: settings.manualReasoning,
-          },
-          messages,
+          settings: vendorSettings,
+          messages: buildProactiveComposeMessages({
+            persona: compose.persona, personMemory: compose.personMemory, history: compose.history,
+            plan: decision.text, localNow: new Date(), timezone: compose.timezone, replyBurden: compose.replyBurden,
+          }),
           timeoutMs: 45_000,
+          parse: "message",
         });
+        if (result.kind === "invalid") return { kind: "error", reason: `compose_${result.reason}` };
         if (result.kind === "send" && (repeatsRecentProactiveMessage(result.text, generationShares.history, Date.now(), generationShares.worldShare)
           || restatesRecentReply(result.text, generationShares.ordinary, Date.now()))) {
           return { kind: "drop" };
@@ -687,6 +727,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
                   now: ctx.now, localDate: ctx.localDate, localHour: ctx.localHour, lastActivity: histories.ordinary.at(-1)?.at,
                 });
                 if (greeting) opportunities.push(greeting);
+              }
+              if (histories.conversationId && options.listPersonMemory) {
+                opportunities.push(...memoryFollowupOpportunities(options.listPersonMemory(histories.conversationId, ctx.now), ctx.now, histories.conversationId));
               }
             }
             if (companion.relationship.innerLifeEnabled && histories.conversationId) {

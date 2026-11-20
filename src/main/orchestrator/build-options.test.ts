@@ -630,10 +630,11 @@ describe("build-options", () => {
       assistantTurnId: "assistant-14",
     }, deps)
 
-    expect(deps.buildChatSocialContext).toHaveBeenCalledWith({
+    expect(deps.buildChatSocialContext).toHaveBeenCalledWith(expect.objectContaining({
       conversationId: "chat-a",
-      query: "message-13",
-    })
+      query: expect.stringMatching(/^message-13\n/),
+      timezone: expect.any(String),
+    }))
     // CTA Phase 1：社交开关只影响检索块，不再截断模型历史
     expect(result.options.messages).toHaveLength(14)
     expect(result.options.soulRuntimeContext).toContain("用户喜欢海边")
@@ -644,6 +645,38 @@ describe("build-options", () => {
       assistantTurnId: "assistant-14",
       retrievedAtoms: [retrievedAtom],
     })
+  })
+
+  it("treats a WeChat private chat with tools as companion chat, but not a group or desktop Work", async () => {
+    const deps = createBuildDeps()
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: true,
+    })
+    deps.buildChatSocialContext = vi.fn(async () => ({ contextBlock: "【你记得的关于对方的事】\n- 对方喜欢游泳", retrievedAtoms: [] }))
+    deps.buildRelationshipContext = vi.fn(async () => "")
+    const base = {
+      sessionId: "bound-chat",
+      executionMode: "work",
+      currentUser: { turnId: "u1", text: "戳～", visibleContent: "戳～" },
+      memoryTurnIds: { userTurnId: "u1", assistantTurnId: "a1" },
+      modelContext: { messages: [{ role: "user", content: "戳～" }], uncertainEffects: [], throughSeq: 1 },
+    }
+    const wechat = await buildAgentRunOptions({ ...base, channel: "wechat" }, deps)
+    expect(wechat.options.soulSystemBaseContent).toContain("【私聊怎么说】")
+    expect(wechat.options.soulRuntimeContext).toContain("对方喜欢游泳")
+    expect(wechat.options.socialContext).toMatchObject({ enabled: true, userTurnId: "u1", assistantTurnId: "a1" })
+    // The tool run keeps its own transcript identity.
+    expect(wechat.options.assistantTurnId).toBeUndefined()
+    expect(vi.mocked(deps.buildRelationshipContext).mock.calls[0]).toEqual(["bound-chat", true, "戳～", true, false])
+
+    const group = await buildAgentRunOptions({ ...base, channel: "wechat", privateRelationshipContext: false }, deps)
+    expect(group.options.soulSystemBaseContent).not.toContain("【私聊怎么说】")
+    expect(group.options.socialContext).toBeUndefined()
+    const desktopWork = await buildAgentRunOptions({ ...base, mode: "work" }, deps)
+    expect(desktopWork.options.soulSystemBaseContent).not.toContain("【私聊怎么说】")
+    expect(desktopWork.options.socialContext).toBeUndefined()
   })
 
   it("omits empty social background and never calls it for Work or disabled Chat", async () => {

@@ -198,7 +198,7 @@ export interface CyreneRunOptions {
     card: import("../../shared/ask-clarification").AskClarificationCard,
     signal?: AbortSignal,
   ) => Promise<import("../../shared/ask-clarification").AskUserAnswer>;
-  /** 仅 Chat：异步社交原子抽取所需的已校验证据元数据。 */
+  /** 私聊陪伴（Chat，或开放工具的微信/QQ 私聊）：异步社交原子抽取所需的已校验证据元数据。 */
   socialContext?: {
     enabled: true;
     conversationId: string;
@@ -206,6 +206,7 @@ export interface CyreneRunOptions {
     assistantTurnId: string;
     retrievedAtoms: SocialAtom[];
     now: number;
+    timezone?: string;
   };
   /** 可用 Skill 列表（feature flag 开启时使用）。Skill 路由层不依赖该字段是否存在。 */
   availableSkills?: SkillRouteInfo[];

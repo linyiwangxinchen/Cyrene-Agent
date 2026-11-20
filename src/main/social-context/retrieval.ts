@@ -62,7 +62,8 @@ export function rankSocialAtoms(
   return active
     .map((atom, index) => {
       const ageDays = Math.max(0, now - atom.createdAt) / DAY_MS;
-      const timeDecay = Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
+      // 生日、工作、身边的人这类长期事实不会因为过了一个月就变得不重要。
+      const timeDecay = atom.type === "long_term" ? 1 : Math.pow(0.5, ageDays / HALF_LIFE_DAYS);
       const openLoopFloor = atom.type === "open_loop" ? 0.05 : 0;
       return { atom, score: Math.max(lexicalScores[index], openLoopFloor) * timeDecay };
     })

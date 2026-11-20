@@ -157,7 +157,8 @@ export function createChannelsSubsystem(
       : null;
     let companionFeedback: AgentRunFinishedContext["companionFeedback"];
     let useLearnedCompanionStyle = false;
-    if ((msg.chatType ?? "private") === "private" && policy.executionMode === "chat" && msg.text?.trim()
+    // 开放工具的私聊仍是私聊：纠正和表达习惯照常学习。
+    if ((msg.chatType ?? "private") === "private" && msg.text?.trim()
       && (!isBound || (boundSession?.mode === "chat" && !boundSession.purpose))) {
       try {
         const conversationId = channelInput.target.conversationId;
@@ -210,6 +211,8 @@ export function createChannelsSubsystem(
       ...(policy.executionMode === "chat" ? {
         userTurnId: channelInput.userTurnId,
         assistantTurnId: channelInput.assistantTurnId,
+      } : (msg.chatType ?? "private") === "private" ? {
+        memoryTurnIds: { userTurnId: channelInput.userTurnId, assistantTurnId: channelInput.assistantTurnId },
       } : {}),
     });
     if (channelInput.transcriptSink) options.transcriptSink = channelInput.transcriptSink;

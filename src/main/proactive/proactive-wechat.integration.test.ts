@@ -74,6 +74,7 @@ function createBoundWechatJournal(lastAt: number): ConversationJournalService {
 async function startWechat(journal: ConversationJournalService, reply: (requestIndex: number) => string) {
   const sent: Array<{ msg: unknown }> = [];
   const modelRequests: Array<Record<string, unknown>> = [];
+  const composeRequests: Array<Record<string, unknown>> = [];
   let polls = 0;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
     if (String(url).endsWith("/getupdates")) {
@@ -86,10 +87,15 @@ async function startWechat(journal: ConversationJournalService, reply: (requestI
     }
     if (String(url).includes("fixture-model.invalid")) {
       expect(new Headers(init.headers).get("authorization")).toBe("Bearer fixture-model-key");
-      const requestIndex = modelRequests.push(JSON.parse(String(init.body))) - 1;
+      const body = String(init.body);
+      // Two-step generation: a JSON decision, then the message written as a chat turn.
+      const compose = body.includes("这条不是对方发来的");
+      const requestIndex = compose ? modelRequests.length - 1 : modelRequests.push(JSON.parse(body)) - 1;
+      if (compose) composeRequests.push(JSON.parse(body));
+      const text = compose ? reply(requestIndex) : JSON.stringify({ decision: "send", plan: `plan-${requestIndex}` });
       return new Response(JSON.stringify({
         id: "fixture-response", status: "completed",
-        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: JSON.stringify({ decision: "send", text: reply(requestIndex) }) }] }],
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text }] }],
         usage: { input_tokens: 100, output_tokens: 30 },
       }));
     }
@@ -105,7 +111,7 @@ async function startWechat(journal: ConversationJournalService, reply: (requestI
   const lifecycle = createProactiveLifecycle({ loadGeneralSettings: () => settings, conversationJournal: journal });
   lifecycle.initializeProactiveChatService();
   expect(lifecycle.getProactiveStatus().delivery?.ready).toBe(true);
-  return { sent, modelRequests, lifecycle, service: lifecycle.getProactiveChatService()! };
+  return { sent, modelRequests, composeRequests, lifecycle, service: lifecycle.getProactiveChatService()! };
 }
 
 describe("assembled proactive WeChat delivery", () => {
@@ -133,7 +139,7 @@ describe("assembled proactive WeChat delivery", () => {
     await appendDeliveredProactive("unrelated", "proactive-intent-91", freshText);
     vi.setSystemTime(now);
 
-    const { sent, modelRequests, lifecycle, service } = await startWechat(journal, index => index === 0 ? repeatedText : freshText);
+    const { sent, modelRequests, composeRequests, lifecycle, service } = await startWechat(journal, index => index === 0 ? repeatedText : freshText);
     const worldCandidate = { score: 80, sceneCooldownMs: 0 };
     await service.evaluateCandidate({
       sceneId: "world:walk", ...worldCandidate, sourceEventId: "world-walk", evidenceVersion: "1", replyBurden: "none",
@@ -162,6 +168,12 @@ describe("assembled proactive WeChat delivery", () => {
     await service.evaluateCandidate(candidate);
     expect(modelRequests).toHaveLength(2);
     expect(JSON.stringify(modelRequests[1])).toContain(candidate.momentSummary);
+    // The compose step continues the bound chat as real turns and carries the decided plan.
+    expect(composeRequests).toHaveLength(2);
+    const composePrompt = JSON.stringify(composeRequests[1]);
+    expect(composePrompt).toContain("plan-1");
+    expect(composePrompt).toContain(`] ${userText}`);
+    expect(composePrompt).toContain("【私聊怎么说】");
     expect(sent).toHaveLength(1);
     expect(sent[0].msg).toMatchObject({ to_user_id: "wx-owner", context_token: "restored-context", item_list: [{ text_item: { text: freshText } }] });
     const projection = await journal.readProjection("bound-local-chat");

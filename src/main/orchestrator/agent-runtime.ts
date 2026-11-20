@@ -22,11 +22,10 @@ import { scheduleWikiTurn } from "../memory/wiki-memory-scheduler";
 import { matchSticker } from "../sticker-text-matcher";
 import type { StickerTextEntry } from "../sticker-text-matcher";
 import { buildRelationshipContext, recordRelationshipTurn, getRelationshipStore, type CompanionFeedbackInput } from "../relationship/relationship-log";
-import { compileSocialContextBlock } from "../social-context/context";
+import { buildPersonMemoryContext } from "../social-context/context";
 import * as momentsStore from "../moments/moments-store";
 import { momentsService } from "../moments/moments-service";
 import { buildMomentsContextBlock } from "../moments/moments-context";
-import { rankSocialAtoms } from "../social-context/retrieval";
 import {
   buildSkillCatalog,
   buildAutoInjectedSkillContext,
@@ -304,14 +303,10 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         return captionImageSafe(filePath, IMAGE_CAPTION_PROMPT, vision.config);
       },
       prepareCitaTurn: (input) => rawDeps.citaService.prepareTurn(input),
-      buildChatSocialContext: async ({ conversationId, query }) => {
+      buildChatSocialContext: async ({ conversationId, query, timezone }) => {
         const now = Date.now();
         const active = rawDeps.socialAtomStore.listActive(conversationId, now);
-        const retrievedAtoms = rankSocialAtoms(query, active, { now, limit: 5 });
-        return {
-          contextBlock: compileSocialContextBlock(retrievedAtoms),
-          retrievedAtoms,
-        };
+        return buildPersonMemoryContext(active, query, { now, timezone: timezone ?? "Asia/Shanghai" });
       },
       buildMomentsContext: (query, conversationId) => {
         // 只读本地 moments 数据（内存缓存），同步返回。

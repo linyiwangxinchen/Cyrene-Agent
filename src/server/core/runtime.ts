@@ -119,9 +119,12 @@ export async function startHeadlessCore() {
   runtimeStateService.onChange(() => broadcast(IPC.RUNTIME_STATE_CHANGED, runtimeStateService.getState()));
   const llmClient = createLlmClient();
   const journal = new ConversationJournalService({ store: getConversationTranscriptStore(root), runReader: getHarnessRunStore(root) });
-  const proactive = createProactiveLifecycle({ loadGeneralSettings, conversationJournal: journal });
-  proactive.initializeProactiveChatService();
   const social = createSocialContextService({ llmClient, enqueueLLMTask });
+  const proactive = createProactiveLifecycle({
+    loadGeneralSettings, conversationJournal: journal,
+    listPersonMemory: (conversationId, now) => social.store.listActive(conversationId, now),
+  });
+  proactive.initializeProactiveChatService();
   const cita = createCitaService({ llmClient });
   bootstrapConfigGetters({ loadGeneralSettings });
   updateLocaleContext({ uiLocale: loadGeneralSettings().language });

@@ -158,19 +158,23 @@ describe("social extraction validation", () => {
     });
   });
 
-  it("anchors open loops only to an assistant question", () => {
+  it("accepts an open loop from the user's own words and bounds its expiry", () => {
+    const now = input().now;
     const result = parseAndValidateSocialExtraction(JSON.stringify({
       operations: [{
         operation: "add",
         type: "open_loop",
-        content: "用户还没有继续这个话题",
+        content: "对方周末有空，可以问问周末怎么过的",
         evidenceTurnId: "user-2",
         evidenceQuote: "周末有空",
+        expiresAt: now + 365 * 86_400_000,
       }],
     }), input());
 
-    expect(result.operations).toEqual([]);
-    expect(result.rejectedCount).toBe(1);
+    expect(result.rejectedCount).toBe(0);
+    expect(result.operations).toHaveLength(1);
+    const added = result.operations[0];
+    expect(added.operation === "add" && added.atom.expiresAt).toBe(now + 21 * 86_400_000);
   });
 
   it("requires a future expiry for short-term atoms", () => {

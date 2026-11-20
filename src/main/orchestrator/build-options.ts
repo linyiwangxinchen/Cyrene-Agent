@@ -178,6 +178,8 @@ export interface BuildOptionsDeps {
   buildChatSocialContext?: (input: {
     conversationId: string;
     query: string;
+    /** 用户时区，用来给“对方最近的事”标日期。 */
+    timezone?: string;
   }) => Promise<{
     contextBlock: string;
     retrievedAtoms: SocialAtom[];
@@ -209,6 +211,12 @@ export type BuildOptionsInput = AguiRunInput & {
   signal?: AbortSignal;
   skipCurrentUserMood?: boolean;
   skipLearnedCompanionStyle?: boolean;
+  /**
+   * Turn identities for memory extraction when the run is not a pure Chat run
+   * (a WeChat private chat with tools runs as Work). They do not name the
+   * assistant entry, so harness transcript identities stay unchanged.
+   */
+  memoryTurnIds?: { userTurnId: string; assistantTurnId: string };
   prepareTaskMethodRun?: (workspaceRoot: string, toolIds: ReadonlySet<string>) => TaskMethodRun | undefined;
 };
 
@@ -705,6 +713,11 @@ export async function buildAgentRunOptions(
   );
   const isChatMode = executionMode === "chat";
   const conversationId = input.sessionId || "default";
+  // 微信/QQ 私聊开放工具后以 Work 执行，但这仍是私聊：人设、表达、记忆按聊天处理。
+  const companionChannelChat = !isChatMode && Boolean(input.currentUser)
+    && (input.channel === "wechat" || input.channel === "qq")
+    && input.privateRelationshipContext !== false && input.promptSource !== "plugin-agent";
+  const companionChat = isChatMode || companionChannelChat;
 
   // 读取可信工作区绑定（来自 Conversation Workspace Binding）。
   // 某些主进程入口（例如外部渠道共享上下文）只应复用文字历史，
@@ -725,7 +738,7 @@ export async function buildAgentRunOptions(
   }
 
   const privateContext = input.privateRelationshipContext !== false && input.promptSource !== "plugin-agent";
-  const socialContextEnabled = isChatMode && privateContext
+  const socialContextEnabled = companionChat && privateContext
     && styleSettings.chatSocialContextEnabled === true
     && Boolean(deps.buildChatSocialContext);
   // 朋友圈 Chat 背景：总开关与子开关都开启才注入（momentsEnabled && chatMomentsContextEnabled）
@@ -749,14 +762,14 @@ export async function buildAgentRunOptions(
   }
 
   let relationshipContext = "";
-  const currentUserMoodText = privateContext && isChatMode && (!input.mode || input.mode === "chat")
+  const currentUserMoodText = privateContext && (companionChannelChat || (isChatMode && (!input.mode || input.mode === "chat")))
     && !input.skipCurrentUserMood && input.transcriptRewind?.disposition !== "keep_user" && input.currentUser
-    ? stripTurnModelContextForSideEffects(input.currentUser.visibleContent) || undefined
+    ? stripTurnModelContextForSideEffects(input.currentUser.visibleContent ?? input.currentUser.text ?? "") || undefined
     : undefined;
   try {
     const useLearnedStyle = Boolean(currentUserMoodText) && !input.skipLearnedCompanionStyle;
     // Chat 是聊天，不是待办：助手承诺账本只给 Work/Code/Learn。
-    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, privateContext, currentUserMoodText, useLearnedStyle, !isChatMode));
+    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, privateContext, currentUserMoodText, useLearnedStyle, !companionChat));
   } catch (err) {
     console.warn("[Cyrene] relationship context build failed:", err);
   }
@@ -799,14 +812,17 @@ export async function buildAgentRunOptions(
   let retrievedSocialAtoms: SocialAtom[] = [];
   if (socialContextEnabled) {
     try {
+      const recentText = slimMessages.slice(-4).map((message) => typeof message.content === "string" ? message.content : "").join("\n");
       const built = await perf.track("build_chat_social_context", () => (
         deps.buildChatSocialContext!({
           conversationId,
-          query: latestUserText,
+          query: `${latestUserText}\n${recentText}`.trim(),
+          timezone: resolveChatContextTimezone(profile.timezone),
         })
       ));
       chatSocialContextBlock = built.contextBlock;
-      retrievedSocialAtoms = built.retrievedAtoms.slice(0, 5);
+      // 提取时可以纠正或关闭本轮看到的任何一条，而不只是前五条。
+      retrievedSocialAtoms = built.retrievedAtoms.slice(0, 20);
     } catch (err) {
       console.warn("[Cyrene] chat social context build failed:", err);
     }
@@ -888,7 +904,7 @@ export async function buildAgentRunOptions(
   // work/code 完全不受 style 影响：不注入风格 prompt，采样走厂商默认。
   // chat/learn 下 native/default 也走厂商默认采样（不自己设 0.65）；
   // 只有显式选了带预设采样的具体 style 才用预设采样。
-  const stylePromptBlock = isTaskMode
+  const stylePromptBlock = isTaskMode && !companionChannelChat
     ? ""
     : buildStylePromptBlock(deps.readStylePrompt(styleId));
   const soulSampling = (!isTaskMode && !usesModelDefaultSampling(styleId))
@@ -1021,9 +1037,9 @@ export async function buildAgentRunOptions(
     .filter((t) => t.id === "web_search" || t.id.startsWith("minimax-web-search-"))
     .map((t) => t.id);
   console.log(`[Cyrene] 搜索后端=${activeSearchBackend} 暴露搜索工具=[${searchToolIds.join(", ") || "无"}]`);
-  const baseSoulSystemPrompt = deps.buildModePrompt?.(resolvedMode)
-    ?? deps.buildSoulSystemBasePrompt(basePromptMode);
-  const chatExpression = resolvedMode === "chat"
+  const baseSoulSystemPrompt = deps.buildModePrompt?.(companionChannelChat ? "chat" : resolvedMode)
+    ?? deps.buildSoulSystemBasePrompt(companionChannelChat ? "chat" : basePromptMode);
+  const chatExpression = resolvedMode === "chat" || companionChannelChat
     ? privateContext && input.currentUser ? PRIVATE_CHAT_EXPRESSION : input.privateRelationshipContext === false ? SHARED_CHAT_EXPRESSION : ""
     : "";
   // 变化部分放在 runtime 尾部，不影响稳定前缀缓存。
@@ -1229,14 +1245,15 @@ export async function buildAgentRunOptions(
       ...(companionReplyContext ? { companionReplyContext } : {}),
       ...(planSkillContext ? { planSkillContext } : {}),
       soulSampling,
-      ...(socialContextEnabled && input.userTurnId && input.assistantTurnId ? {
+      ...(socialContextEnabled && (input.userTurnId ?? input.memoryTurnIds?.userTurnId) && (input.assistantTurnId ?? input.memoryTurnIds?.assistantTurnId) ? {
         socialContext: {
           enabled: true as const,
           conversationId,
-          userTurnId: input.userTurnId,
-          assistantTurnId: input.assistantTurnId,
+          userTurnId: (input.userTurnId ?? input.memoryTurnIds?.userTurnId)!,
+          assistantTurnId: (input.assistantTurnId ?? input.memoryTurnIds?.assistantTurnId)!,
           retrievedAtoms: retrievedSocialAtoms,
           now: Date.now(),
+          timezone: resolveChatContextTimezone(profile.timezone),
         },
       } : {}),
       ...(transcriptRecoveryContext ? { recoveryContext: transcriptRecoveryContext } : {}),
@@ -1284,7 +1301,8 @@ export async function onAgentRunFinished(
   const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
   const settings = deps.loadModelSettings();
   const memoryMode = normalizeMemoryMode(settings.memoryMode);
-  const socialContext = result.executionMode === "chat" && result.socialContext?.enabled === true
+  // socialContext 只在私聊陪伴（Chat，或开放工具的微信/QQ 私聊）时由 buildOptions 设置。
+  const socialContext = result.socialContext?.enabled === true
     ? result.socialContext
     : undefined;
   const usesSocialExtractor = Boolean(socialContext);
@@ -1303,6 +1321,7 @@ export async function onAgentRunFinished(
       },
       retrievedAtoms: socialContext.retrievedAtoms,
       now: socialContext.now,
+      ...(socialContext.timezone ? { timezone: socialContext.timezone } : {}),
     });
   }
   if (memoryMode === "wiki" && conversationId) {

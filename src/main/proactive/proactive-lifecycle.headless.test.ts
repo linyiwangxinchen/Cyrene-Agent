@@ -62,7 +62,9 @@ describe("proactive lifecycle on a headless host", () => {
     vi.setSystemTime(Date.UTC(2026, 9, 9, 1)); // Shanghai 09:00, UTC 01:00
     const ctx = setup();
     await ctx.lifecycle.getProactiveChatService()!.evaluateCandidate(ctx.candidate);
-    expect(mocks.runModel).toHaveBeenCalledOnce();
+    // Decision, then compose: one call each.
+    expect(mocks.runModel).toHaveBeenCalledTimes(2);
+    expect(mocks.runModel.mock.calls[1][0]).toMatchObject({ parse: "message" });
     expect(ctx.appendAssistant).toHaveBeenCalledWith(expect.objectContaining({ message: { role: "assistant", content: "早上好呀♪" } }));
     expect(ctx.appendPresentationNext).toHaveBeenCalledOnce();
     expect(mocks.broadcast).toHaveBeenCalledOnce();

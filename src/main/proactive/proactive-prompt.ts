@@ -28,10 +28,16 @@ export interface BuildProactiveMessagesInput {
   momentContext?: string;
   careContext?:
     | { kind: "standalone_care" }
-    | { kind: "user_message" | "requested_followup"; at: number; topic?: string };
+    | { kind: "user_message" | "requested_followup" | "remembered"; at: number; topic?: string };
   replyBurden?: "none" | "light" | "question";
 }
 
+/**
+ * Decision step: `send.text` is her plan (what she wants to say, one line),
+ * not the message. The compose step writes the message as an ordinary private
+ * chat turn, so the wording comes from the conversation instead of from a
+ * rule-reading JSON task.
+ */
 export type ProactiveModelDecision =
   | { kind: "send"; text: string }
   | { kind: "hold"; resumeOn: "user_message" | "evidence_change" }
@@ -43,13 +49,13 @@ const MAX_HISTORY_MESSAGES = 16;
 const MAX_PROACTIVE_TEXT_LENGTH = 500;
 
 const PROACTIVE_SYSTEM = `[proactive_system]
-你正在判断是否要主动向用户发起一次对话，而不是回答用户的新消息。
+你正在判断是否要主动向用户发起一次对话，而不是回答用户的新消息。这一步只决定发不发、发什么事；消息原文由下一步像平时私聊一样写。
 不要把历史聊天中的最后一句当作用户刚刚发来的消息；历史只用于理解用户最近的状态和话题。
 如果内容值得留着但现在不适合，请返回 hold；重复、过时或没有值得说的内容请返回 drop。不要为了完成任务而强行寒暄。
 这次只围绕给定的具体动机开口；不要从历史里另找一个借口填补频率。她也可以安静地继续自己的生活。
-最近的主动消息用于避免重复。换时间、地点或换一种说法，仍在说同一件没变化的事，就返回 drop。
+最近的主动消息用于避免重复。换时间、地点或换一种说法，仍在说同一件没变化的事，就返回 drop。刚聊完的事（对方已经回了“好～”“抱～”）也不要再拿出来说一遍。
 不要提及系统检测、触发规则、评分、上下文、用户画像或内部状态。
-消息应当简短自然，可以关心、分享、跟进或轻轻询问，但不要连续提出多个问题。
+一次只说一件事，最多问一个问题。
 不要声称自己调用了工具、读取了屏幕或执行了任何外部动作。`;
 
 const CARE_SYSTEM = `[care_system]
@@ -128,7 +134,7 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   const timezone = resolveChatContextTimezone(input.timezone);
   const now = input.localNow.getTime();
   const standaloneCare = input.careContext?.kind === "standalone_care";
-  const systemParts = [input.basePersona.trim(), PROACTIVE_SYSTEM, standaloneCare ? "" : CARE_SYSTEM, TIME_SYSTEM, COMPANION_LANGUAGE_SYSTEM];
+  const systemParts = [input.basePersona.trim(), PROACTIVE_SYSTEM, standaloneCare ? "" : CARE_SYSTEM, TIME_SYSTEM];
   if (!standaloneCare) {
     if (input.userProfile?.trim()) systemParts.push(`[用户画像]\n${input.userProfile.trim()}`);
     if (input.relevantMemory?.trim()) systemParts.push(`[相关长期记忆]\n${input.relevantMemory.trim()}`);
@@ -144,7 +150,9 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
     const timing = formatLocalTime(new Date(at), timezone);
     systemParts.push(kind === "user_message"
       ? `[本轮关心依据]\n对方在 ${timing} 的私聊里表达了当时的感受。只围绕这条用户消息关心近况，尊重对方有没有想聊的意思。`
-      : `[本轮约定跟进]\n对方约好要跟进的事：${JSON.stringify(topic)}。最早可问候时间：${timing}（用户当地时间）。按约问候一次，不把这个时间当作事件结果。`);
+      : kind === "remembered"
+        ? `[本轮记得的事]\n对方在 ${timing} 说起：${JSON.stringify(topic)}。可以问一句后来怎么样了，或说一句惦记的话。聊天记录里对方已经说过结果、或事情显然还没到时候，就返回 drop。`
+        : `[本轮约定跟进]\n对方约好要跟进的事：${JSON.stringify(topic)}。最早可问候时间：${timing}（用户当地时间）。按约问候一次，不把这个时间当作事件结果。`);
   } else if (input.momentContext?.trim()) {
     systemParts.push(MOMENT_SYSTEM, `[陪伴心事]\n${input.momentContext.trim()}`);
   }
@@ -157,7 +165,7 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
 连续未回复次数：${input.unansweredCount}
 
 请只返回以下一种 JSON，不要使用 Markdown 代码块，也不要添加解释：
-{"decision":"send","text":"要发送的一条自然消息"}
+{"decision":"send","plan":"想说的那件事和想怎么说，一句话描述，不是消息原文"}
 或
 {"decision":"hold","resumeOn":"user_message"}
 或
@@ -170,6 +178,88 @@ silent 作为旧协议兼容，也表示本次保持安静。`;
     { role: "system", content: systemParts.filter(Boolean).join("\n\n---\n\n") },
     { role: "user", content: trigger },
   ];
+}
+
+export interface BuildProactiveComposeInput {
+  /** Persona, private-chat expression, channel rules and relationship context. */
+  persona: string;
+  /** What she remembers about the person; optional. */
+  personMemory?: string;
+  /** Recent ordinary and proactive turns of the delivery conversation. */
+  history: ProactiveHistoryTurn[];
+  plan: string;
+  localNow: Date;
+  timezone: string;
+  replyBurden?: "none" | "light" | "question";
+}
+
+const COMPOSE_HISTORY_MESSAGES = 14;
+
+function formatShortTime(at: number, timezone: string): string {
+  const p = getZonedDateParts(new Date(at), timezone);
+  return `${p.month}月${p.day}日 ${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+}
+
+function describeGap(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000));
+  if (minutes < 60) return `${minutes} 分钟`;
+  const hours = Math.round(minutes / 60);
+  return hours < 48 ? `${hours} 小时` : `${Math.round(hours / 24)} 天`;
+}
+
+/**
+ * Compose step: the history is passed as real turns so the model continues
+ * the conversation in her own voice. Only user turns carry a time stamp; the
+ * model's own turns stay verbatim so it does not learn to print time labels.
+ */
+export function buildProactiveComposeMessages(input: BuildProactiveComposeInput): ChatMessage[] {
+  const timezone = resolveChatContextTimezone(input.timezone);
+  const now = input.localNow.getTime();
+  const turns = [...input.history]
+    .filter((turn) => turn.content.trim() && turn.at <= now)
+    .sort((left, right) => left.at - right.at)
+    .filter((turn, index, all) => index === 0 || !(all[index - 1].at === turn.at && all[index - 1].content === turn.content))
+    .slice(-COMPOSE_HISTORY_MESSAGES);
+  while (turns.length && turns[0].role !== "user") turns.shift();
+  const messages: ChatMessage[] = [];
+  for (const turn of turns) {
+    const role = turn.role === "model" ? "assistant" : "user";
+    const content = role === "user" ? `[${formatShortTime(turn.at, timezone)}] ${turn.content.trim()}` : turn.content.trim();
+    const previous = messages.at(-1);
+    if (previous && previous.role === role) previous.content = `${String(previous.content)}\n${content}`;
+    else messages.push({ role, content });
+  }
+  const lastUser = [...turns].reverse().find((turn) => turn.role === "user");
+  const lastAny = turns.at(-1);
+  const situation = [
+    `现在是 ${formatShortTime(now, timezone)}。`,
+    lastUser ? `对方上一条消息是 ${describeGap(now - lastUser.at)} 前。` : "",
+    lastAny?.role === "model" ? "你最后一条消息对方还没回。" : "",
+  ].join("");
+  const instruction = [
+    "（这条不是对方发来的，是只给你看的提示。）",
+    situation,
+    `你想主动给对方发一条消息，想说的是：${input.plan}`,
+    "直接写出要发的那条消息本身，像你平时在这段私聊里说话一样，一两句就够。不加引号、不加时间标记、不解释。",
+    "不要把上面聊过的话再说一遍，也不要替对方总结今天。",
+    input.replyBurden === "none" ? "说一句对方不用回也成立的话，别用问句收尾。" : "",
+  ].filter(Boolean).join("\n");
+  messages.push({ role: "user", content: instruction });
+  const system = [input.persona.trim(), COMPANION_LANGUAGE_SYSTEM, input.personMemory?.trim() ?? ""].filter(Boolean).join("\n\n---\n\n");
+  return [{ role: "system", content: system }, ...messages];
+}
+
+/** The compose step returns plain text; strip wrappers models add anyway. */
+export function parseComposedMessage(text: string): ProactiveModelDecision {
+  let cleaned = unwrapJsonFence(text)
+    .replace(/^\[[^\]\n]{1,24}\]\s*/u, "")
+    .trim();
+  const quoted = /^(?:「([\s\S]+)」|“([\s\S]+)”|"([\s\S]+)")$/u.exec(cleaned);
+  if (quoted) cleaned = (quoted[1] ?? quoted[2] ?? quoted[3]).trim();
+  if (!cleaned) return { kind: "invalid", reason: "empty_text" };
+  if (/^[{[]/u.test(cleaned)) return { kind: "invalid", reason: "structured_text" };
+  if (cleaned.length > MAX_PROACTIVE_TEXT_LENGTH) return { kind: "invalid", reason: "text_too_long" };
+  return { kind: "send", text: cleaned };
 }
 
 const RECENT_SHARE_WINDOW_MS = 24 * 3_600_000;
@@ -254,9 +344,11 @@ export function parseProactiveDecision(text: string): ProactiveModelDecision {
     return { kind: "hold", resumeOn: value.resumeOn };
   }
   if (value.decision !== "send") return { kind: "invalid", reason: "invalid_decision" };
-  if (!only("decision", "text")) return { kind: "invalid", reason: "invalid_shape" };
-  if (typeof value.text !== "string" || !value.text.trim()) return { kind: "invalid", reason: "empty_text" };
-  const cleaned = value.text.trim();
+  // `plan` is the current protocol; `text` is accepted from older prompts/tests.
+  const plan = (value as { plan?: unknown }).plan ?? value.text;
+  if (!only("decision", "text", "plan")) return { kind: "invalid", reason: "invalid_shape" };
+  if (typeof plan !== "string" || !plan.trim()) return { kind: "invalid", reason: "empty_text" };
+  const cleaned = plan.trim();
   if (cleaned.length > MAX_PROACTIVE_TEXT_LENGTH) return { kind: "invalid", reason: "text_too_long" };
   return { kind: "send", text: cleaned };
 }

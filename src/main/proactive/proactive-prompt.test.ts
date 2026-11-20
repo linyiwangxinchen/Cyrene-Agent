@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildProactiveMessages, parseProactiveDecision, repeatsRecentProactiveMessage } from "./proactive-prompt";
+import { buildProactiveComposeMessages, buildProactiveMessages, parseProactiveDecision, repeatsRecentProactiveMessage } from "./proactive-prompt";
 
 // 所有测试显式传 timezone，不依赖 runner 机器的系统时区。
 // 选 Asia/Shanghai 作为默认测试 tz（与默认 DEFAULT_CHAT_CONTEXT_TIMEZONE 一致）。
@@ -96,7 +96,7 @@ describe("proactive prompt", () => {
       timezone: TIMEZONE,
     });
     const combined = messages.map((message) => String(message.content)).join("\n");
-    expect(combined).toContain('{"decision":"send","text":"要发送的一条自然消息"}');
+    expect(combined).toContain('{"decision":"send","plan":');
     expect(combined).toContain('{"decision":"hold","resumeOn":"user_message"}');
     expect(combined).toContain('{"decision":"hold","resumeOn":"evidence_change"}');
     expect(combined).toContain('{"decision":"drop"}');
@@ -105,7 +105,7 @@ describe("proactive prompt", () => {
   });
 
   it("keeps proactive companionship language human instead of task-like", () => {
-    const messages = buildProactiveMessages({
+    const decision = buildProactiveMessages({
       basePersona: "P",
       ordinaryHistory: [],
       proactiveHistory: [],
@@ -115,10 +115,14 @@ describe("proactive prompt", () => {
       unansweredCount: 0,
       timezone: TIMEZONE,
     });
-    const combined = messages.map((message) => String(message.content)).join("\n");
+    expect(decision.map((message) => String(message.content)).join("\n")).toContain("仍在说同一件没变化的事，就返回 drop");
+    // Wording rules belong to the compose step, which writes the message itself.
+    const compose = buildProactiveComposeMessages({
+      persona: "P", history: [], plan: "问问晚饭吃了什么", localNow: new Date(Date.UTC(2026, 6, 13, 15, 0)), timezone: TIMEZONE,
+    });
+    const combined = compose.map((message) => String(message.content)).join("\n");
     expect(combined).toContain("开口就说这次想说的事，一两句够了就停");
     expect(combined).toContain("不必每条都有");
-    expect(combined).toContain("仍在说同一件没变化的事，就返回 drop");
   });
 
   it("does not ask the model to invent a reason from history for an old ambient scene", () => {

@@ -9,7 +9,20 @@ import type {
 } from "./types";
 
 const OPEN_LOOP_TTL_MS = 72 * 60 * 60 * 1_000;
+const MAX_OPEN_LOOP_TTL_MS = 21 * 24 * 60 * 60 * 1_000;
 const MAX_OPERATIONS = 3;
+
+function localDateLine(now: number, timezone: string | undefined): string {
+  const zone = timezone || "Asia/Shanghai";
+  try {
+    const text = new Intl.DateTimeFormat("zh-CN", {
+      timeZone: zone, year: "numeric", month: "numeric", day: "numeric", weekday: "long", hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(new Date(now));
+    return `用户当地时间：${text}（${zone}）`;
+  } catch {
+    return `用户当地时间：${new Date(now).toISOString()}`;
+  }
+}
 
 export const SOCIAL_EXTRACTION_SCHEMA = {
   type: "object",
@@ -154,14 +167,13 @@ export function parseAndValidateSocialExtraction(
       rejectedCount += 1;
       continue;
     }
-    if (type === "open_loop" && turn.role !== "assistant") {
-      rejectedCount += 1;
-      continue;
-    }
-
     let expiresAt: number | undefined;
     if (type === "open_loop") {
-      expiresAt = input.now + OPEN_LOOP_TTL_MS;
+      // 对方说“下周三答辩”时，可以留到答辩之后；没有给出时间就按三天。
+      const requested = typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt) ? record.expiresAt : undefined;
+      expiresAt = requested && requested > input.now
+        ? Math.min(requested, input.now + MAX_OPEN_LOOP_TTL_MS)
+        : input.now + OPEN_LOOP_TTL_MS;
     } else if (type === "short_term") {
       expiresAt = typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt)
         ? record.expiresAt
@@ -229,10 +241,18 @@ export function buildSocialExtractionPrompt(
     "resolve 示例：{\"operation\":\"resolve\",\"type\":null,\"content\":null,\"evidenceTurnId\":\"user-id\",\"evidenceQuote\":\"严格原文子串\",\"supersedesAtomId\":\"open_loop原子ID\",\"expiresAt\":null}",
     "operation 只能是 add、supersede 或 resolve。",
     "type 只能是 long_term、short_term、open_loop。short_term 的 expiresAt 使用毫秒时间戳。",
-    "long_term/short_term 的 evidenceTurnId 必须来自用户；open_loop 可来自助手。",
+    "long_term/short_term 的 evidenceTurnId 必须来自用户；open_loop 可来自用户或助手。",
     "evidenceQuote 必须是对应消息的严格原文子串。纠正和关闭只能引用下面给出的 supersedesAtomId。",
     "resolve 只用于用户已经回答一个 open_loop，不带 type/content。",
     "",
+    "记什么：这是昔涟记住“这个人”的长期记忆。",
+    "- long_term：对方稳定的事实——称呼、生日、学业或工作、身边的人（名字和关系）、喜欢和讨厌的东西、习惯、长期的打算。",
+    "- short_term：对方生活里最近发生或正在发生的事（今天开了一天会、这周在赶论文、在减肥）。expiresAt 设为这件事不再“最近”的时间，通常 2 到 14 天后。",
+    "- open_loop：之后自然可以问起的事——对方将要做、还没有结果的事（下周三答辩、明天面试），或助手问了对方还没答的具体问题。expiresAt 可设为那件事结束后一两天，不填则三天。",
+    "不记：撒娇和亲昵互动（戳、抱、亲）、角色扮演的动作、对昔涟或虚构世界的设定、对回复方式的意见、工具任务本身（做 PDF、改文件）。",
+    "content 写成一句完整、独立的话，用“对方”指代用户。涉及时间时写成具体日期（例如“11月21日上午面试”），不要写“明天”“这周”。",
+    "",
+    localDateLine(input.now, input.timezone),
     `当前时间戳：${input.now}`,
     `用户消息 id=${input.userTurn.id}：${input.userTurn.text}`,
     `助手消息 id=${input.assistantTurn.id}：${input.assistantTurn.text}`,

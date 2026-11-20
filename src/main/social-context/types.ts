@@ -13,6 +13,8 @@ export interface SocialExtractionInput {
   assistantTurn: SocialTurnEvidence & { role: "assistant" };
   retrievedAtoms: SocialAtom[];
   now: number;
+  /** 用户时区；提取时把“明天”“周五”换成具体日期。 */
+  timezone?: string;
 }
 
 export interface SocialAtom {

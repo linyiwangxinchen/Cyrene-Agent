@@ -410,6 +410,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         const socialContextService = createSocialContextService({ llmClient, enqueueLLMTask });
         const proactiveLifecycle = createProactiveLifecycle({
           loadGeneralSettings,
+          listPersonMemory: (conversationId, now) => socialContextService.store.listActive(conversationId, now),
           // runReader 接入 harness 运行存储：孤儿工具按运行状态归类，避免误判 not_executed
           conversationJournal: new ConversationJournalService({
             store: getConversationTranscriptStore(app.getPath("userData")),

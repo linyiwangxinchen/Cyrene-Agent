@@ -45,7 +45,7 @@ describe("Web persona parity and continuity", () => {
   it("给普通私聊加入口语回复约束，用户这句话仍是最后一条消息", async () => {
     const f = await fixture();
     const built = await f.build();
-    expect(built.metadata.stablePrefix).toContain("先接住用户最后一句的具体意思");
+    expect(built.metadata.stablePrefix).toContain("先接对方最后一句的具体意思");
     expect(built.metadata.stablePrefix).not.toContain("三千万篇相似而不相同的故事");
     expect(built.messages.at(-1)).toMatchObject({ role: "user", content: expect.stringContaining("你好") });
     await f.features.patchProfile({ callPreference: "私下称呼" });

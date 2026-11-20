@@ -4,7 +4,7 @@ import {
   type ChatMessage,
   type VendorConfig,
 } from "../orchestrator/vendors";
-import { parseProactiveDecision, type ProactiveModelDecision } from "./proactive-prompt";
+import { parseComposedMessage, parseProactiveDecision, type ProactiveModelDecision } from "./proactive-prompt";
 import { resolveConfiguredReasoningCapability } from "../../shared/manual-reasoning";
 
 export type ProactiveModelResult =
@@ -16,6 +16,8 @@ export interface RunProactiveModelInput {
   messages: ChatMessage[];
   timeoutMs: number;
   fetchFn?: typeof fetch;
+  /** decision: the JSON send/hold/drop step; message: the plain-text compose step. */
+  parse?: "decision" | "message";
 }
 
 function containsToolContent(messages: ChatMessage[]): boolean {
@@ -65,7 +67,9 @@ export async function runProactiveModel(input: RunProactiveModelInput): Promise<
       recordUsage(parsedResponse.usage.input, parsedResponse.usage.output, 1, parsedResponse.usage.cachedInput, input.settings.model, parsedResponse.usage.cacheCreation);
     }
     if (parsedResponse.finishReason === "length") return { kind: "invalid", reason: "output_token_limit" };
-    return parseProactiveDecision(parsedResponse.text ?? "");
+    return input.parse === "message"
+      ? parseComposedMessage(parsedResponse.text ?? "")
+      : parseProactiveDecision(parsedResponse.text ?? "");
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
     return { kind: "error", reason: name === "AbortError" ? "timeout" : "network_error" };
