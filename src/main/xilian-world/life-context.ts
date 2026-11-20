@@ -8,6 +8,7 @@ import {
 import { getXilianDateKey, getZonedDateParts, xilianStableHash } from "./schedule";
 import { formatAmphoreusContext } from "../amphoreus-world/engine";
 import { isLegacyPersonalOutcome } from "../amphoreus-world/personal-life";
+import { XILIAN_APPEARANCE_ANCHORS, XILIAN_DEFAULT_OUTFIT } from "../persona/xilian-image-prompt";
 
 export interface XilianLifeContextInput {
   state: XilianWorldState;
@@ -20,7 +21,7 @@ export interface XilianLifeContextInput {
 }
 
 export function isXilianSelfieRequest(text: string): boolean {
-  return /自拍|昔涟.{0,20}(照片|图片)|拍一张.{0,20}(昔涟|照片|图片)/u.test(text);
+  return /自拍|合影|合照|昔涟.{0,20}(照片|图片)|拍一张.{0,20}(昔涟|照片|图片)/u.test(text);
 }
 
 function localTime(now: number, timezone: string): string {
@@ -39,7 +40,7 @@ function chooseOutfit(input: XilianLifeContextInput, event: XilianTimelineEvent 
   if (event?.activityKind === "game") return "袖口稍微卷起的轻便日常装";
   if (seed === 1) return "带一点柔和蓝色的小外套";
   if (seed === 2) return "适合在风里走动的轻薄长裙";
-  return "熟悉的粉色系日常服饰";
+  return XILIAN_DEFAULT_OUTFIT;
 }
 
 function selfieReason(event: XilianTimelineEvent | undefined): string {
@@ -96,11 +97,7 @@ export function buildXilianLifeSnapshot(input: XilianLifeContextInput): XilianLi
     energy: Math.max(0, Math.min(100, Math.floor((personal?.energy ?? (input.world ? input.world.residentStates.find((r) => r.id === "cyrene")?.energy : input.energy)) ?? current?.energyAfter ?? 70))),
     outfit: chooseOutfit(input, current),
     selfieReason: selfieReason(current),
-    visualAnchors: [
-      "昔涟本人，粉色系长发与稳定的角色面部特征",
-      "单人物、自然表情、清晰脸部和柔和光线",
-      "保留现有昔涟视觉形象，不改变人物身份",
-    ],
+    visualAnchors: [...XILIAN_APPEARANCE_ANCHORS],
     avoid: [
       "不要出现第二个人物、文字水印、相机 UI 或未授权品牌",
       "不要把虚构世界地点画成现实城市，也不要添加与当前活动冲突的道具",

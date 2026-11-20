@@ -251,8 +251,9 @@ describe("build-options", () => {
       messages: [{ role: "user", content: "给我一张自拍" }],
     }, deps);
     expect(result.options.soulRuntimeContext).toContain("[昔涟图片生成约束]");
-    expect(result.options.soulRuntimeContext).toContain("粉白色长发");
-    expect(result.options.soulRuntimeContext).toContain("只保留昔涟一人");
+    expect(result.options.soulRuntimeContext).toContain("发尾渐变成浅青色");
+    expect(result.options.soulRuntimeContext).toContain("两侧尖尖的精灵耳");
+    expect(result.options.soulRuntimeContext).toContain("提示里必须逐条写出下面的外貌特征");
     expect(result.options.soulRuntimeContext).toContain("拍摄原因：想留下完成感");
   });
 
