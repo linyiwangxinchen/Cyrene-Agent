@@ -266,6 +266,8 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       listXilianReferenceImages: () => listXilianReferenceImages([
         app.getPath("userData"),
         typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
+        // 源码运行与 Linux 服务：仓库根目录下的 resources/
+        path.join(process.cwd(), "resources"),
       ]),
       buildXilianSelfieContext: (userText) => {
         try {

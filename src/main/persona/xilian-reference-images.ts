@@ -2,9 +2,9 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
- * 昔涟外貌参考图。官方原画不提交到仓库：服务器放在
- * `<数据目录>/character-references/xilian/`，Windows 安装包随包放在
- * `resources/character-references/xilian/`。先找到的目录生效，最多两张。
+ * 昔涟外貌参考图（官方立绘与光锥图）。仓库放在 `resources/character-references/xilian/`，
+ * Windows 安装包随包放在 `resources/character-references/xilian/`；服务器也可以放在
+ * `<数据目录>/character-references/xilian/` 覆盖。先找到的目录生效，最多两张。
  */
 export const XILIAN_REFERENCE_DIR = path.join("character-references", "xilian");
 const MAX_REFERENCES = 2;

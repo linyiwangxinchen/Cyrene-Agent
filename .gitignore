@@ -270,5 +270,3 @@ key.txt
 *.sqlite
 *.sqlite-*
 
-# 昔涟外貌参考图为官方原画，只随安装包和服务器数据目录分发，不提交仓库
-resources/character-references/
