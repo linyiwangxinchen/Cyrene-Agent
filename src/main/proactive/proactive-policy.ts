@@ -7,7 +7,9 @@ import type {
 import { STANDALONE_CARE_MIN_IDLE_MS, STANDALONE_CARE_SCENE } from "./relationship-opportunities";
 
 // These are anti-flood bounds only. Passing them must never create an opportunity.
-export const NORMAL_QUIET_MS = 3 * 60 * 1000;
+// After a chat winds down ("好～", "抱～") a message half an hour later reads
+// like a wrap-up of what was just said, so ordinary shares wait longer.
+export const NORMAL_QUIET_MS = 45 * 60 * 1000;
 export const GLOBAL_PROACTIVE_INTERVAL_MS = 3 * 60 * 1000;
 export const FOLLOWUP_INTERVAL_MS = 15 * 60 * 1000;
 export const HOURLY_PROACTIVE_LIMIT = 4;

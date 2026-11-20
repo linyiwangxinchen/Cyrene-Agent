@@ -117,7 +117,7 @@ describe("proactive prompt", () => {
     });
     const combined = messages.map((message) => String(message.content)).join("\n");
     expect(combined).toContain("开口就说这次想说的事，一两句够了就停");
-    expect(combined).toContain("都随语气自然出现或省略");
+    expect(combined).toContain("不必每条都有");
     expect(combined).toContain("仍在说同一件没变化的事，就返回 drop");
   });
 

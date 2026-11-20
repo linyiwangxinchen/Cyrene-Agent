@@ -279,11 +279,22 @@ function matchingCommitments(
   return matches.slice(0, 5);
 }
 
+const PROMISE_ACTION = /(?:我(?:会|来|将|去)|稍后我|待会(?:儿)?我|接下来我).{0,8}?(?:帮你|给你|替你|去|把|整理|查|发|改|做|提醒|找|写|弄|准备|看看|核对)/u;
+
+/** Task promises only. Quoted story lines and vows about how she will talk are not ledger items. */
 function extractAssistantPromises(text: string): string[] {
-  return text.split(/[。！？!?]+/)
+  const withoutQuotes = text.replace(/「[^」]*」|“[^”]*”|"[^"]*"/gu, " ");
+  return withoutQuotes.split(/[。！？!?\n]+/)
     .map((part) => compact(part, 180))
-    .filter((part) => part.length >= 4 && (part.includes("我会") || part.includes("我将") || part.includes("我来") || part.includes("稍后我") || part.includes("接下来我")) && !part.includes("不会") && !part.includes("不再"))
+    .filter((part) => part.length >= 4 && part.length <= 80 && PROMISE_ACTION.test(part) && !part.includes("不会") && !part.includes("不再"))
     .slice(0, 3);
+}
+
+const CORRECTION_CUE = /^(?:纠正|更正|订正)\s*[:：]|不像人(?:说|话)|没有.{0,10}这种(?:词|说法)|(?:别|不要)再(?:说|用|提)|没头没脑|说的话.{0,4}(?:奇怪|别扭)|好(?:奇怪|别扭)的(?:话|说法)/u;
+
+/** The user explicitly corrected how she talks. Kept as a standing note for the conversation. */
+export function isCompanionCorrection(text: string): boolean {
+  return CORRECTION_CUE.test(text.trim());
 }
 
 function refreshCommitmentStatuses(data: RelationshipLogData, now: number): boolean {
@@ -806,6 +817,17 @@ export class RelationshipLogStore {
         data.revision++;
       }
     }
+    if (input.conversationId && companionFeedback?.userTurnId && data.relationshipState.learnConversationStyle !== false
+      && companionFeedback.revision === data.learningRevision && isCompanionCorrection(companionFeedback.text)) {
+      const note = compact(companionFeedback.text, 200);
+      if (!data.repairCases.some(item => item.conversationId === input.conversationId && item.note === note)) {
+        data.repairCases = [...data.repairCases, {
+          id: randomUUID(), note, status: "acknowledged", createdAt: now, updatedAt: now, conversationId: input.conversationId,
+        } satisfies RepairCase].slice(-100);
+        data.records.push({ id: randomUUID(), kind: "repair", at: now, conversationId: input.conversationId, text: `对方纠正：${note}` });
+        data.revision++;
+      }
+    }
     data.relationshipState = advanceRelationshipState(data.relationshipState, userMood, now)
     data.affectState = advanceAffectState(data.affectState, userMood, now)
     data.affectState.lastEventIds = [entry.sourceEventId ?? entry.id]
@@ -851,7 +873,7 @@ export class RelationshipLogStore {
     return entry
   }
 
-  async buildContext(conversationId?: string, privateContext = true, currentUserText?: string, useLearnedStyle = false): Promise<string> {
+  async buildContext(conversationId?: string, privateContext = true, currentUserText?: string, useLearnedStyle = false, includeTaskLedger = true): Promise<string> {
     if (!privateContext) return "";
     const data = this.repository.read();
     if (refreshCommitmentStatuses(data, Date.now())) { data.revision++; this.repository.write(data); }
@@ -901,9 +923,9 @@ export class RelationshipLogStore {
     const repairs = data.repairCases.filter(item =>
       (item.conversationId === undefined || item.conversationId === conversationId)
       && (item.status === "acknowledged" || item.status === "follow_up"),
-    ).slice(-3);
-    if (repairs.length) lines.push("【对方明确提出的调整】", `把偏好落实在回复里，无需再念一遍：${JSON.stringify(repairs.map(item => item.note))}`);
-    const commitments = data.commitments.filter(item => item.status === "open" || item.status === "overdue").filter(item => conversationId ? !item.conversationId || item.conversationId === conversationId : !item.conversationId).slice(-8);
+    ).slice(-6);
+    if (repairs.length) lines.push("【对方纠正过的地方】", "对方专门指出过这些说法或做法不对。以后照着改，别再犯，也不用再提起或道歉：", ...repairs.map(item => `- ${item.note}`));
+    const commitments = includeTaskLedger ? data.commitments.filter(item => item.status === "open" || item.status === "overdue").filter(item => conversationId ? !item.conversationId || item.conversationId === conversationId : !item.conversationId).slice(-8) : [];
     if (commitments.length) lines.push("【助手承诺账本】", "以下承诺必须保持可追踪，完成后更新状态，不要声称已完成而没有证据：", JSON.stringify(commitments.map(item => ({ id: item.id, promise: item.promise, status: item.status, dueAt: item.dueAt, evidence: item.evidence }))));
     if (rel.innerLifeEnabled) {
       // Existing fictional diaries stay in the settings history. World sharing

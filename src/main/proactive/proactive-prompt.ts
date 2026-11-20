@@ -68,13 +68,19 @@ const TIME_SYSTEM = `[time_system]
 晚了可以问候，但只知道当地时间时，不推测对方醒着或正在熬夜。不要复述时间标签或内部判断。`;
 
 const COMPANION_LANGUAGE_SYSTEM = `[companion_language_system]
-像平常发一条私聊。开口就说这次想说的事，一两句够了就停。关系和情绪用日常话说，少用项目进度词或抒情结语。
-昵称、自称「人家」、省略号和「♪」都随语气自然出现或省略，不设比例，也不用凑固定开头和结尾。日常消息按这里的语气写，角色台词只用于理解人物。`;
+像平常发一条私聊。开口就说这次想说的事，一两句够了就停。
+说具体的东西：一件事、一个画面、一个想法。不写抽象的感悟，不替对方总结今天，也不把刚聊完的话再说一遍。对话刚自然结束（对方回了“好～”“抱～”），就别再补一条收尾。
+她是会主动逗人、会卖关子、有点小得意的人，不是在旁边默默守着的人。少用“陪你”“轻轻”“安安静静”“慢慢来”“一小步”“留点空白”这类话。
+昵称、自称「人家」、省略号和「♪」随语气出现，不必每条都有，也别都放在同一个位置。日常消息按这里的语气写，角色台词只用于理解人物。
+像这样的语气是对的（只示范语气，内容以本轮依据为准，不照抄）：
+- “锵锵——今天在村口捡到一颗特别圆的石头，像不像一颗小月亮？”
+- “午饭吃了没？人家刚把桃子吃光了，有点后悔没给你留一个。”`;
 
 const MOMENT_SYSTEM = `[moment_system]
 这次候选来自一条有具体来源的陪伴心事。可以自然分享它；只有确实适合邀请对方时才提一个轻量问题。
 不要提及队列、插件、评分或内部来源；不要把虚构角色小记说成现实经历。
 分享自己的见闻时，说清楚发生了什么或哪一点有趣，只用来源里确实有的细节。如果只有行程、整理记录或还没想明白，缺少具体可分享的信息，就返回 drop，不补一个悬念或感悟。
+来源读起来像记录、计划或通知（核对、确认、安排取消、阶段进度）时，返回 drop。对方没有见过这些角色，也不关心他们的流程。
 自己的小事也可以分享，但不要把计划写成已经完成。若此刻打扰感太强，可留到用户回来或事情有进展时再说。`;
 
 const NIGHT_SYSTEM = `[night_system]
@@ -200,10 +206,38 @@ export function repeatsRecentProactiveMessage(text: string, history: ProactiveHi
   });
 }
 
+const RESTATE_WINDOW_MS = 3 * 3_600_000;
+const RESTATE_SHARED_PHRASES = 5;
+
+/**
+ * A proactive message must not say again what she just said in the ordinary
+ * chat ("会议排满了，先吃点热乎的" half an hour later). Ordinary replies are
+ * compared by the number of shared four-character phrases, since a restatement
+ * usually rewords the sentence but keeps its concrete nouns.
+ */
+export function restatesRecentReply(text: string, ordinaryHistory: ProactiveHistoryTurn[], now: number): boolean {
+  const phrases = fourCharacterPhrases(normalizeMessage(text));
+  if (phrases.size === 0) return false;
+  return ordinaryHistory.some(turn => {
+    if (turn.role !== "model" || turn.at <= now - RESTATE_WINDOW_MS || turn.at > now) return false;
+    const previous = fourCharacterPhrases(normalizeMessage(turn.content));
+    let shared = 0;
+    for (const phrase of phrases) if (previous.has(phrase) && ++shared >= RESTATE_SHARED_PHRASES) return true;
+    return false;
+  });
+}
+
+/** Models often wrap the requested JSON in a Markdown fence despite the instruction. */
+function unwrapJsonFence(text: string): string {
+  const trimmed = text.trim();
+  const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/iu.exec(trimmed);
+  return (fenced ? fenced[1] : trimmed).trim();
+}
+
 export function parseProactiveDecision(text: string): ProactiveModelDecision {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text.trim());
+    parsed = JSON.parse(unwrapJsonFence(text));
   } catch {
     return { kind: "invalid", reason: "invalid_json" };
   }

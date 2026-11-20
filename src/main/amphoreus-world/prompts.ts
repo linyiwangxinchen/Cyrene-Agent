@@ -5,6 +5,13 @@ import { routineProfile, terminalEvent, travelMinutes } from "./life";
 import { neglectedResidents } from "./narrative";
 export type WorldMessages = Array<{ role: "system" | "user"; content: string }>;
 
+/**
+ * Titles, summaries and outcomes are later retold by Cyrene in private chat.
+ * Written as planning records they become "核对巡护记录、往返通行、待核实"
+ * in her mouth, so the prose itself must read like everyday life.
+ */
+export const WORLD_PROSE_STYLE = "title、summary、intent、outcome要写成生活里的事，像朋友随口讲的见闻：谁做了什么、手里拿着什么、说了句什么、哪里好笑或可爱。不要写成工作记录或计划书：不用“核对”“核实”“确认”“记录”“待查”“来源”“证据”“边界”“流程”“事项”“安排”“推进”“往返通行”“阶段”这类词，也不写往返分钟数；这些只放在结构字段里。";
+
 export function narrativeMessages(state: AmphoreusState, now: number, timezone: string): WorldMessages {
   const clock = worldClock(now, timezone), rotation = Math.floor(Date.parse(clock.date) / 86_400_000) % AMPHOREUS_RESIDENTS.length;
   const neglected = neglectedResidents(state, now);
@@ -14,6 +21,7 @@ export function narrativeMessages(state: AmphoreusState, now: number, timezone: 
     "可以额外给昔涟0至3件personalPlans，这是她自己的小事，不占公共群像席位。围绕她已有的active目标、兴趣和未完成记录，提出具体但轻量的行动意图，允许她只是试一小段或改个做法。只提意图，绝不预写结果、作品或趣事已经发生。每件20至60分钟，在当前时间之后，避开她的食宿、公共约定及往返时间。若没有想做的事可为空。",
     "personalActions中已经完成或正在进行的时间属于已有生活事实，不能用补写的公共往事覆盖，也不能要求她在已经过去的同一时段往返另一地点。尚未开始的小事可以为新的公共约定让路。标为私人的安排只用于避开占用时段，不扩写其内容。",
     "每件事件都必须有具体的参与者纹理：从参与者的signatureDetails、dailyInterests或relationshipHooks中落到一个可见的物件、动作、选择或分歧，并让summary与intent体现谁在意什么。不要只把人物当名单。当天至少轮换三种activity；同一天不要重复相同的泛化标题。缇宝、缇安、缇宁共享门径席位但要保留不同声音；十二席黄金裔要有轮换焦点；NPC只需承担清楚的职业事务。",
+    WORLD_PROSE_STYLE,
     "时段必须适合每人的作息并包含从home往返的通行时间；travel中null表示当前不可通行。同一人一天的公共活动只在一个地点。优先安排同城居民，跨城留足时间。持续15–90分钟。",
     "可用时段：08:30到lunch；lunch+75到dinner；dinner+45到bed-45。包含往返路程后也须完整落在同一可用时段。",
     "conditions可以引用已有事件，或today:0这样的本日更早事件。未结公共事务继续推进；已完成事项不重复发起。existingAppointments是延期到今天的约定，新安排必须避开这些时段且不能让同一人跨多个活动地点。",
@@ -29,6 +37,7 @@ export function narrativeMessages(state: AmphoreusState, now: number, timezone: 
 export function resolutionMessages(state: AmphoreusState, events: AmphoreusEvent[], now: number): WorldMessages {
   return [{ role: "system", content: ["根据已经到期的事件与当前状态结算，只输出JSON。不能修改身份、火种、官方历史。只结算提供的事件；可能完成、部分完成或失败，不强行成功。", canonAuthority(),
     "结果要保留人物差异：outcome至少点出一名参与者做了什么选择、遇到什么具体阻力或留下什么小变化；优先使用该人物的voice、signatureDetails和relationshipHooks，不要把所有事件写成‘顺利完成了安排’。关系变化必须说明发生在谁与谁之间。",
+    WORLD_PROSE_STYLE,
     '结构：{"resolutions":[{"eventId":"事件ID","version":1,"status":"completed","outcome":"实际经过与结果","effects":[],"developments":[]}]}。status为completed/partial/failed。',
     'effects仅允许：{"kind":"place","placeId":"本事件地点","field":"condition或supplies","delta":5,"reason":"具体依据"}；{"kind":"access","placeId":"本事件地点","value":"open或limited或closed","reason":"依据"}；{"kind":"goal","residentId":"参与者","goalId":"已有目标ID","delta":5,"reason":"依据"}；{"kind":"relationship","residentId":"参与者","otherId":"另一参与者","delta":1,"reason":"依据"}。场所和目标delta最多20，关系最多2。',
     'developments最多3项：{"id":"已有事务或新的小写连字符ID","title":"标题","summary":"已验证的进展","nextStep":"下一步","participants":["事件参与者"],"status":"open或resolved"}。失败不能改善场所或完成事务。',

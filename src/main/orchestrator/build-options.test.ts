@@ -141,7 +141,7 @@ describe("build-options", () => {
       modelContext: { messages: [{ role: "user", content: currentUser.text }], uncertainEffects: [], throughSeq: 1 },
     }, deps);
     expect(result.options.soulSystemBaseContent).toContain("【渠道回复方式】");
-    expect(result.options.soulSystemBaseContent).toContain("先接住用户最后一句的具体意思");
+    expect(result.options.soulSystemBaseContent).toContain("先接对方最后一句的具体意思");
     expect(result.options.soulSystemBaseContent).toContain("某条记录确实能回应眼前这句话时，才挑有依据的细节说");
     expect(result.options.soulRuntimeContext).toContain("维护一盏小灯");
     expect(result.latestUserText).toBe(currentUser.text);
@@ -178,15 +178,15 @@ describe("build-options", () => {
       await buildAgentRunOptions({ ...input, ...suppressed }, deps);
     }
     expect(vi.mocked(deps.buildRelationshipContext).mock.calls).toEqual([
-      ["mood", true, "我的杯子到了", true],
-      ["mood", true, "我的杯子到了", true],
-      ["mood", true, "我的杯子到了", true],
-      ["mood", false, undefined, false],
-      ["mood", false, undefined, false],
-      ["mood", true, undefined, false],
-      ["mood", true, undefined, false],
-      ["mood", true, undefined, false],
-      ["mood", true, undefined, false],
+      ["mood", true, "我的杯子到了", true, false],
+      ["mood", true, "我的杯子到了", true, false],
+      ["mood", true, "我的杯子到了", true, false],
+      ["mood", false, undefined, false, false],
+      ["mood", false, undefined, false, false],
+      ["mood", true, undefined, false, false],
+      ["mood", true, undefined, false, false],
+      ["mood", true, undefined, false, false],
+      ["mood", true, undefined, false, false],
     ]);
   });
 

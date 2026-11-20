@@ -1,4 +1,4 @@
-import { buildChannelSystem, buildStylePromptBlock, PRIVATE_CHAT_EXPRESSION, SHARED_CHAT_EXPRESSION } from "./expression-context-core";
+import { buildChannelSystem, buildRecentPhrasingHint, buildStylePromptBlock, PRIVATE_CHAT_EXPRESSION, SHARED_CHAT_EXPRESSION } from "./expression-context-core";
 import { getAdapterForConfig } from "./vendors";
 import { modelMessageOrigin } from "./vendors/model-history";
 // buildAgentRunOptions —— 把 AG-UI 桥的 buildOptions 闭包抽成纯函数。
@@ -117,7 +117,7 @@ export interface BuildOptionsDeps {
   buildXilianLifeContext?: (userText: string) => string;
   /** 用户明确请求自拍时，构建与当前生活事件绑定的图片上下文。 */
   buildXilianSelfieContext?: (userText: string) => string;
-  buildRelationshipContext: (conversationId?: string, privateContext?: boolean, currentUserText?: string, useLearnedStyle?: boolean) => Promise<string>;
+  buildRelationshipContext: (conversationId?: string, privateContext?: boolean, currentUserText?: string, useLearnedStyle?: boolean, includeTaskLedger?: boolean) => Promise<string>;
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
   buildModePrompt?: (mode: ConversationMode) => string;
   /** 工具规则与目录 system prompt（进入 harness stablePrefix）。仅含自动生成的工具目录。 */
@@ -755,7 +755,8 @@ export async function buildAgentRunOptions(
     : undefined;
   try {
     const useLearnedStyle = Boolean(currentUserMoodText) && !input.skipLearnedCompanionStyle;
-    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, privateContext, currentUserMoodText, useLearnedStyle));
+    // Chat 是聊天，不是待办：助手承诺账本只给 Work/Code/Learn。
+    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, privateContext, currentUserMoodText, useLearnedStyle, !isChatMode));
   } catch (err) {
     console.warn("[Cyrene] relationship context build failed:", err);
   }
@@ -1025,6 +1026,10 @@ export async function buildAgentRunOptions(
   const chatExpression = resolvedMode === "chat"
     ? privateContext && input.currentUser ? PRIVATE_CHAT_EXPRESSION : input.privateRelationshipContext === false ? SHARED_CHAT_EXPRESSION : ""
     : "";
+  // 变化部分放在 runtime 尾部，不影响稳定前缀缓存。
+  const recentPhrasingHint = chatExpression === PRIVATE_CHAT_EXPRESSION
+    ? buildRecentPhrasingHint(slimMessages, profile.nickname || undefined)
+    : "";
   // Chat 工具增强开启且有勾选工具时，chat 也注入工具目录 prompt
   //（buildToolSystemPrompt 忽略 mode，只按工具列表生成目录，chat 复用安全）。
   const baseToolSystemPrompt = resolvedMode === "chat"
@@ -1095,6 +1100,7 @@ export async function buildAgentRunOptions(
     toneInjection,
     alwaysOnContext,
     relationshipContext,
+    recentPhrasingHint,
     taskMethodRun?.prompt,
     privateContext ? deps.buildXilianLifeContext?.(latestUserText) : "",
     imageGenerationPersonaContext,

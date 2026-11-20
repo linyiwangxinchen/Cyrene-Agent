@@ -3,7 +3,19 @@ import { isLegacyPersonalOutcome } from "../amphoreus-world/personal-life";
 import type { CompanionLifeState } from "./companion-life";
 import type { InitiativeOpportunityInput } from "./initiative-opportunities";
 
-/** Only committed facts that Cyrene has actually learned become possible shares. */
+/**
+ * World events are generated as planning records ("核对巡护记录", "往返通行",
+ * "待核实"). Retold in a private chat they read like a report, so such details
+ * are not shareable even when they are true in the world.
+ */
+const RECORD_KEEPING_WORDS = /核对|核实|待查|待核|待解|复查|复核|证据|边界|来源|记录方法|通行|往返|阶段|一小步|留白|空白|没想明白|没能继续|原来的安排|公共约定|安排|规则|议事|推演|传讯|补给|巡护|巡视|事项|流程|确认清楚/u;
+
+export function isShareableWorldDetail(text: string): boolean {
+  const trimmed = text.trim();
+  return trimmed.length >= 6 && !RECORD_KEEPING_WORDS.test(trimmed);
+}
+
+/** Only committed facts that Cyrene has actually lived through become possible shares. */
 export function worldInitiativeOpportunities(world: AmphoreusView | undefined, now: number, conversationId?: string): InitiativeOpportunityInput[] {
   const personal = world?.personal;
   if (!personal) return [];
@@ -11,6 +23,9 @@ export function worldInitiativeOpportunities(world: AmphoreusView | undefined, n
   return personal.changes.filter(change => change.residentId === personal.residentId && change.knownAt <= now
     && change.knownAt > now - 6 * 3_600_000 && !change.id.startsWith("routine:")
     && !change.eventId.startsWith("amphoreus:personal:user:")
+    // Other residents' public news is hearsay about strangers to the user.
+    && change.kind !== "heard"
+    && isShareableWorldDetail(change.text)
     && personal.experiences.some(memory => memory.eventId === change.eventId && memory.kind === change.kind))
     .filter(change => {
       const action = personalActions.get(change.eventId);

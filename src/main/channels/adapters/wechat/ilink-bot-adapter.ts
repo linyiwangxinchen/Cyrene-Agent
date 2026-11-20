@@ -26,6 +26,7 @@ import {
 import { uploadWechatMedia, uploadWechatMediaFile } from "./wechat-media-upload";
 import { downloadWechatMedia } from "./wechat-media-download";
 import { encodeWechatVoiceSilk } from "./wechat-voice-encoding";
+import { toWechatPlainText } from "./wechat-plain-text";
 import {
   SAVE_INTENT_TTL_MS,
   buildUnsupportedWechatFilePrompt,
@@ -197,7 +198,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
         signal?.throwIfAborted();
         if (this.client !== client || !this.status.enabled) return { ok: false, error: "channel_disabled" };
         if (part.kind === "text") {
-          const text = part.text.trim();
+          const text = toWechatPlainText(part.text);
           if (!text) continue;
           const textResult = await this.client.sendText(msg.targetId, text, this.replyContextByTarget.get(msg.targetId) || contextToken, transferOptions);
           if (textResult.ok) {

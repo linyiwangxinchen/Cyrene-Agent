@@ -48,13 +48,10 @@ describe("world facts become initiative opportunities", () => {
     expect(worldInitiativeOpportunities(undefined, NOW)).toEqual([]);
   });
 
-  it("uses the moment of hearing a story and retains its source instead of claiming it was just experienced", () => {
+  it("does not turn other residents' public news into a share", () => {
     const view = world();
     known(view, { kind: "heard", occurredAt: NOW - 24 * hour, source: "午饭时听居民转述" });
-    const share = worldInitiativeOpportunities(view, NOW)[0];
-    expect(share.occurredAt).toBe(NOW);
-    expect(share.summary).toMatch(/^听闻（午饭时听居民转述）/);
-    expect(share.summary).not.toContain("亲历");
+    expect(worldInitiativeOpportunities(view, NOW)).toEqual([]);
   });
 
   it("recognizes a completed personal action as progress and remains a read-only projection", () => {

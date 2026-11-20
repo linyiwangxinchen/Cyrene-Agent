@@ -32,7 +32,7 @@ import type {
   ProactiveCommitResult,
 } from "./proactive-service";
 import { routeProactiveDelivery } from "./proactive-delivery-routing";
-import { buildProactiveMessages, repeatsRecentProactiveMessage, type ProactiveHistoryTurn } from "./proactive-prompt";
+import { buildProactiveMessages, repeatsRecentProactiveMessage, restatesRecentReply, type ProactiveHistoryTurn } from "./proactive-prompt";
 import { canCommitProactiveMessage, canStartProactiveGeneration } from "./proactive-policy";
 import { loadProactiveState, saveProactiveState } from "./proactive-state-store";
 import { createProactiveTrigger, formatLocalDate, getZonedDateParts, type ProactiveOpportunity, type ProactiveTriggerController } from "./proactive-trigger";
@@ -88,7 +88,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   let generationRelationshipRevision: number | undefined;
   let generationRecipient: RecentProactiveChannelRecipient | undefined;
   let generationDeliveryContext: ProactiveDeliveryContext | undefined;
-  let generationShares: { history: ProactiveHistoryTurn[]; worldShare: boolean; careStale?: boolean } = { history: [], worldShare: false };
+  let generationShares: { history: ProactiveHistoryTurn[]; ordinary: ProactiveHistoryTurn[]; worldShare: boolean; careStale?: boolean } = { history: [], ordinary: [], worldShare: false };
   let lastOutcome: ProactiveEvaluationStatus["lastOutcome"];
   let proactiveStatus: ProactiveEvaluationStatus = {
     candidateScore: null,
@@ -266,14 +266,14 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       ...(generationRecipient ? { sessionId: generationRecipient.sessionId, targetId: generationRecipient.targetId, ...(generationRecipient.threadId ? { threadId: generationRecipient.threadId } : {}) } : {}),
       ...(followupId ? { followupId } : {}) };
     const histories = await getProactiveHistories(historyTarget);
-    generationShares = { history: histories.proactive, worldShare: initiative?.source === "amphoreus" || candidate.sceneId.startsWith("world:") };
+    generationShares = { history: histories.proactive, ordinary: histories.ordinary, worldShare: initiative?.source === "amphoreus" || candidate.sceneId.startsWith("world:") };
     const recentTopic = histories.ordinary.slice(-4).map((turn) => turn.content).join("\n");
     const retrievalQuery = `${candidate.sceneId}\n${recentTopic}`.trim();
     const [profileContext, memoryContext] = standaloneCare ? ["", ""] : await Promise.all([
       buildAlwaysOnContext(retrievalQuery, histories.ordinary.map((turn) => ({ role: turn.role, content: turn.content }))).catch(() => ""),
       buildMemoryInjection(retrievalQuery).catch(() => ""),
     ]);
-    const relationshipContext = await buildRelationshipContext(historyTarget?.conversationId ?? historyTarget?.sessionId ?? "proactive-local");
+    const relationshipContext = await buildRelationshipContext(historyTarget?.conversationId ?? historyTarget?.sessionId ?? "proactive-local", true, undefined, false, false);
     const state = loadProactiveState();
     const snapshot = getProactiveRuntimeSnapshot();
     generationDeliveryContext.composedAt = snapshot.now;
@@ -567,7 +567,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           messages,
           timeoutMs: 45_000,
         });
-        if (result.kind === "send" && repeatsRecentProactiveMessage(result.text, generationShares.history, Date.now(), generationShares.worldShare)) {
+        if (result.kind === "send" && (repeatsRecentProactiveMessage(result.text, generationShares.history, Date.now(), generationShares.worldShare)
+          || restatesRecentReply(result.text, generationShares.ordinary, Date.now()))) {
           return { kind: "drop" };
         }
         return result;
