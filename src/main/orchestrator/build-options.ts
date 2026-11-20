@@ -1,4 +1,5 @@
 import { buildChannelSystem, buildRecentPhrasingHint, buildStylePromptBlock, PRIVATE_CHAT_EXPRESSION, SHARED_CHAT_EXPRESSION } from "./expression-context-core";
+import { XILIAN_REFERENCE_NOTE } from "../persona/xilian-reference-images";
 import { getAdapterForConfig } from "./vendors";
 import { modelMessageOrigin } from "./vendors/model-history";
 // buildAgentRunOptions —— 把 AG-UI 桥的 buildOptions 闭包抽成纯函数。
@@ -115,6 +116,8 @@ export interface BuildOptionsDeps {
   ) => Promise<string>;
   /** 只读的昔涟虚拟生活上下文；失败时由调用方降级为空。 */
   buildXilianLifeContext?: (userText: string) => string;
+  /** 昔涟外貌参考图的本地路径（自拍/合影时随请求发送）；没有时返回空数组。 */
+  listXilianReferenceImages?: () => string[];
   /** 用户明确请求自拍时，构建与当前生活事件绑定的图片上下文。 */
   buildXilianSelfieContext?: (userText: string) => string;
   buildRelationshipContext: (conversationId?: string, privateContext?: boolean, currentUserText?: string, useLearnedStyle?: boolean, includeTaskLedger?: boolean) => Promise<string>;
@@ -423,6 +426,30 @@ async function withHistoricalImageAttachments(
         : withImageRejectNotice([message], historyInput, route.reason);
     next[index] = hydrated[0];
   }
+  return next;
+}
+
+/** 自拍/合影时把昔涟外貌参考图挂到本轮用户消息后面，只进本次请求，不写入会话记录。 */
+function withCharacterReferenceImages(messages: ChatMessage[], referencePaths: readonly string[]): ChatMessage[] {
+  if (referencePaths.length === 0) return messages;
+  const latestUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+  if (latestUserIndex < 0) return messages;
+  const references: OpenAIContentBlock[] = [];
+  for (const filePath of referencePaths) {
+    const validated = validateCaptionImagePath(filePath);
+    if (!validated.ok) {
+      console.warn(`[image-send] 昔涟参考图读取失败 ${filePath}: ${validated.error}`);
+      continue;
+    }
+    references.push({ type: "image_url", image_url: { url: `data:${validated.mime};base64,${validated.buffer.toString("base64")}` } });
+  }
+  if (references.length === 0) return messages;
+  const current = messages[latestUserIndex];
+  const existing: OpenAIContentBlock[] = Array.isArray(current.content)
+    ? current.content as OpenAIContentBlock[]
+    : [{ type: "text", text: contentToText(current.content) }];
+  const next = messages.slice();
+  next[latestUserIndex] = { ...current, content: [...existing, { type: "text", text: XILIAN_REFERENCE_NOTE }, ...references] };
   return next;
 }
 
@@ -1145,16 +1172,21 @@ export async function buildAgentRunOptions(
   }
   const historicalMessages = await withHistoricalImageAttachments(llmMessages as unknown as ChatMessage[], imageInput, deps, imageRoute);
   const historicalCleanMessages = await withHistoricalImageAttachments(cleanLlm as unknown as ChatMessage[], imageInput, deps, imageRoute);
-  const fcMessages: ChatMessage[] = directVisionOk
+  const directFcMessages: ChatMessage[] = directVisionOk
     ? withDirectImageAttachments(historicalMessages, imageInput)
     : imageRoute.mode === "caption"
       ? await withCaptionedImageAttachments(historicalMessages, imageInput, deps)
       : withImageRejectNotice(historicalMessages, imageInput, imageRoute.reason);
-  const cleanFcMessages: ChatMessage[] = directVisionOk
+  // 参考图只在能直接发图、开启了生图、且本轮是自拍/合影请求时挂上。
+  const xilianReferences = directVisionOk && settings.imageGeneration?.enabled && privateContext && selfieRequested
+    ? deps.listXilianReferenceImages?.() ?? []
+    : [];
+  const fcMessages = withCharacterReferenceImages(directFcMessages, xilianReferences);
+  const cleanFcMessages: ChatMessage[] = withCharacterReferenceImages(directVisionOk
     ? withDirectImageAttachments(historicalCleanMessages, imageInput)
     : imageRoute.mode === "caption"
       ? await withCaptionedImageAttachments(historicalCleanMessages, imageInput, deps)
-      : withImageRejectNotice(historicalCleanMessages, imageInput, imageRoute.reason);
+      : withImageRejectNotice(historicalCleanMessages, imageInput, imageRoute.reason), xilianReferences);
   const imageCaptionFallback = directVisionOk
     ? buildImageCaptionFallbackMessages(
         isChatMode

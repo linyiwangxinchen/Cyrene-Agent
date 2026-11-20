@@ -21,7 +21,7 @@ export interface XilianLifeContextInput {
 }
 
 export function isXilianSelfieRequest(text: string): boolean {
-  return /自拍|合影|合照|昔涟.{0,20}(照片|图片)|拍一张.{0,20}(昔涟|照片|图片)/u.test(text);
+  return /自拍|合(?:个|张)?影|合(?:个|张)?照|昔涟.{0,20}(照片|图片)|拍一张.{0,20}(昔涟|照片|图片)/u.test(text);
 }
 
 function localTime(now: number, timezone: string): string {

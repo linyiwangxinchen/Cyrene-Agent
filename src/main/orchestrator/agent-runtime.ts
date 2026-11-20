@@ -23,6 +23,7 @@ import { matchSticker } from "../sticker-text-matcher";
 import type { StickerTextEntry } from "../sticker-text-matcher";
 import { buildRelationshipContext, recordRelationshipTurn, getRelationshipStore, type CompanionFeedbackInput } from "../relationship/relationship-log";
 import { buildPersonMemoryContext } from "../social-context/context";
+import { listXilianReferenceImages } from "../persona/xilian-reference-images";
 import * as momentsStore from "../moments/moments-store";
 import { momentsService } from "../moments/moments-service";
 import { buildMomentsContextBlock } from "../moments/moments-context";
@@ -262,6 +263,10 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           return "";
         }
       },
+      listXilianReferenceImages: () => listXilianReferenceImages([
+        app.getPath("userData"),
+        typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
+      ]),
       buildXilianSelfieContext: (userText) => {
         try {
           const now = Date.now();

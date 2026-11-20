@@ -257,6 +257,34 @@ describe("build-options", () => {
     expect(result.options.soulRuntimeContext).toContain("拍摄原因：想留下完成感");
   });
 
+  it("自拍时只在本次请求里附上昔涟外貌参考图", async () => {
+    const reference = path.join(os.tmpdir(), `cyrene-ref-${process.pid}.png`);
+    fs.writeFileSync(reference, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
+    try {
+      const deps = createBuildDeps();
+      deps.listXilianReferenceImages = vi.fn(() => [reference]);
+      deps.loadModelSettings = () => ({
+        provider: "ChatGPT", baseUrl: "https://proxy.test/v1", model: "gpt-6-astra", apiKey: "k",
+        explicitTransport: "responses", imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" },
+      });
+      const run = (text: string) => buildAgentRunOptions({
+        sessionId: "xilian-reference", mode: "chat", executionMode: "chat", messages: [{ role: "user", content: text }],
+      }, deps);
+      const selfie = await run("来合个影～");
+      const last = selfie.options.messages.at(-1)!;
+      expect(Array.isArray(last.content)).toBe(true);
+      const blocks = last.content as Array<{ type: string; text?: string }>;
+      expect(blocks[0]).toMatchObject({ type: "text", text: "来合个影～" });
+      expect(blocks.some(block => block.type === "text" && block.text?.includes("官方外貌参考图"))).toBe(true);
+      expect(blocks.filter(block => block.type === "image_url")).toHaveLength(1);
+
+      const ordinary = await run("今天吃什么");
+      expect(ordinary.options.messages.at(-1)!.content).toBe("今天吃什么");
+    } finally {
+      fs.rmSync(reference, { force: true });
+    }
+  });
+
   it("把只读的虚拟生活快照放入当前轮上下文", async () => {
     const deps = createBuildDeps();
     deps.buildXilianLifeContext = () => "【昔涟虚拟生活快照】\n地点：星炉台\n正在做：维护一盏小灯";
