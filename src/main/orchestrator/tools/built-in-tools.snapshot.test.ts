@@ -12,7 +12,7 @@ import {
   setUserTimezoneConfig,
 } from "./built-in-tools";
 
-/** built-in-tools 注册的 9 个工具 id，严格按 built-in-tools.ts 的注册先后排序。
+/** built-in-tools 注册的工具 id，严格按 built-in-tools.ts 的注册先后排序。
  *  registry 插入顺序 = 工具目录 prompt 顺序，拆分时 facade 的 import 顺序必须保持它。 */
 const BUILT_IN_TOOL_IDS = [
   "fetch_url",
@@ -24,6 +24,7 @@ const BUILT_IN_TOOL_IDS = [
   "install_mcp_server",
   "weather",
   "web_search",
+  "glob",
 ] as const;
 
 describe("built-in-tools 注册快照", () => {
