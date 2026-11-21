@@ -63,6 +63,7 @@ export function enforceChannelAgentPolicy(
   options.requestUserClarification = undefined;
   if (policy.exposeTools) return;
   options.tools = [];
+  options.deferredToolIds = undefined;
   options.toolSystemContent = "";
   options.skillLayerContent = "";
   if (options.capabilities) {

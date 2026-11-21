@@ -40,6 +40,7 @@ describe("mobile channel agent policy", () => {
       tools: [{ id: "shell" }],
       toolSystemContent: "TOOL CATALOG",
       skillLayerContent: "SKILL CATALOG",
+      deferredToolIds: ["shell"],
       capabilities: {
         mode: "chat",
         tools: [{ id: "shell" }],
@@ -51,6 +52,7 @@ describe("mobile channel agent policy", () => {
     enforceChannelAgentPolicy(options, policy);
     expect(options.tools).toEqual([]);
     expect(options.toolSystemContent).toBe("");
+    expect(options.deferredToolIds).toBeUndefined();
     expect(options.skillLayerContent).toBe("");
     expect(options.capabilities?.tools).toEqual([]);
     expect(options.capabilities?.toolIds.size).toBe(0);

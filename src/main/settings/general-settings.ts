@@ -198,6 +198,8 @@ export interface GeneralSettings {
   /** Chat 模式工具增强总开关：false=纯聊天（现状零影响）；true=勾选的工具
    *  经 toolModeOverrides.chat 放行，chat 会话走 CyreneHarness native function calling。 */
   chatToolsEnabled: boolean;
+  /** 按需加载工具（Work/Code 等工具模式）：总开关、启用阈值、额外常驻工具。缺省 = 默认规则。 */
+  toolDeferral?: import("../orchestrator/tools/registry/tool-deferral").ToolDeferralSettings;
   /** Skill-模式覆盖层：用户自定义每个 skill 在 work/code/learn 模式下的可见性。
    *  key = skillId，value = { mode: enabled }。覆盖优先于 skill 声明的 modes 字段。
    *  空对象 = 全部按默认（modes 字段或全可见），由设置面板 UI 写入。 */

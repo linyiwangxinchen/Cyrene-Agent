@@ -24,6 +24,7 @@ import { DEFAULT_TASK_MAX_PARALLEL_TOOL_CALLS, MAX_PARALLEL_TOOL_CALLS } from ".
 import { READ_TOOL_RESULT_TOOL_ID, readToolResultToolSpec } from "./tool-output/read-tool-result";
 import { describeTaskWorktreeOutcome, isTaskIsolationError } from "../task-worktree";
 import { ENTER_PLAN_MODE_TOOL_ID, WRITE_PLAN_TOOL_ID, SUBMIT_PLAN_TOOL_ID, enterPlanModeToolSpec, writePlanToolSpec, submitPlanToolSpec } from "./plan-tools";
+import { TOOL_SEARCH_TOOL_ID } from "./tool-search";
 
 // ── update_todo ──────────────────────────────────────────
 
@@ -750,6 +751,8 @@ export const HARNESS_BUILTIN_TOOL_IDS = new Set([
   ENTER_PLAN_MODE_TOOL_ID,
   WRITE_PLAN_TOOL_ID,
   SUBMIT_PLAN_TOOL_ID,
+  // 只在本次运行存在按需加载工具时才公布规格（见 cyrene-harness buildRunToolSpecs）。
+  TOOL_SEARCH_TOOL_ID,
 ]);
 
 export function isHarnessBuiltin(toolName: string): boolean {

@@ -454,6 +454,68 @@ describe("build-options", () => {
     // 有工具时 chat 也注入工具目录 prompt（进 harness stablePrefix）。
     expect(result.options.toolSystemContent).toContain("TOOL_SYSTEM");
   });
+
+  it("Work 模式工具数超过阈值时把按需加载划分同时交给工具目录和运行选项", async () => {
+    const deps = createBuildDeps();
+    const promptCalls: Array<ReadonlyArray<string> | undefined> = [];
+    deps.buildToolSystemPrompt = (_mode, _tools, deferredToolIds) => {
+      promptCalls.push(deferredToolIds);
+      return "TOOL_SYSTEM";
+    };
+    const manyTools = [
+      { id: "Read", name: "Read", description: "读文件", enabled: true },
+      { id: "run_shell", name: "命令", description: "执行命令", enabled: true },
+      ...Array.from({ length: 31 }, (_, index) => ({ id: `extra_${index}`, name: `extra ${index}`, description: "扩展", enabled: true })),
+    ];
+    deps.toolRegistry.getEnabled = () => manyTools as never;
+    const input = { sessionId: "work-many", mode: "work", executionMode: "work", messages: [{ role: "user", content: "做事" }] };
+
+    const work = await buildAgentRunOptions(input, deps);
+    const expected = manyTools.slice(2).map((tool) => tool.id);
+    expect(work.options.deferredToolIds).toEqual(expected);
+    expect(promptCalls.at(-1)).toEqual(expected);
+
+    deps.toolRegistry.getEnabled = () => manyTools.slice(0, 30) as never;
+    const few = await buildAgentRunOptions(input, deps);
+    expect(few.options.deferredToolIds).toBeUndefined();
+    expect(promptCalls.at(-1)).toBeUndefined();
+
+    deps.toolRegistry.getEnabled = () => manyTools as never;
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: false,
+      toolDeferral: { alwaysLoadToolIds: ["extra_0"], threshold: 10 },
+    } as never);
+    const configured = await buildAgentRunOptions(input, deps);
+    expect(configured.options.deferredToolIds).toEqual(expected.filter((id) => id !== "extra_0"));
+
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: false,
+      toolDeferral: { enabled: false },
+    } as never);
+    expect((await buildAgentRunOptions(input, deps)).options.deferredToolIds).toBeUndefined();
+  });
+
+  it("Chat 模式即使开放大量工具也不启用按需加载", async () => {
+    const deps = createBuildDeps();
+    const ids = Array.from({ length: 40 }, (_, index) => `chat_tool_${index}`);
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: false,
+      chatToolsEnabled: true,
+      toolModeOverrides: Object.fromEntries(ids.map((id) => [id, { chat: true }])),
+    });
+    deps.toolRegistry.getEnabled = () => ids.map((id) => ({ id, name: id, description: "d", enabled: true })) as never;
+    const result = await buildAgentRunOptions({
+      sessionId: "chat-many", mode: "chat", executionMode: "chat", messages: [{ role: "user", content: "你好" }],
+    }, deps);
+    expect(result.options.tools).toHaveLength(40);
+    expect(result.options.deferredToolIds).toBeUndefined();
+  });
   it("does not include legacy Ask Soul prompt fields", async () => {
     const deps = createBuildDeps()
     deps.loadUserProfile = () => ({

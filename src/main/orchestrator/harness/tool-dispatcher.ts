@@ -39,6 +39,7 @@ import {
   executeSubmitPlan,
 } from "./plan-tools";
 import { executeReadToolResult, READ_TOOL_RESULT_TOOL_ID } from "./tool-output/read-tool-result";
+import { executeToolSearch, TOOL_SEARCH_TOOL_ID, type DeferredToolState } from "./tool-search";
 import { resolveSideEffect } from "./side-effect-resolver";
 import { extractFileChangesFromOutput } from "../tools/registry/tool-evidence";
 import { isBlockedByUncertainEffect } from "./uncertain-effect-guard";
@@ -55,6 +56,7 @@ const READ_ONLY_BUILTINS = new Set([
   CONFIRM_UNCERTAIN_EFFECT_TOOL_ID,
   READ_TOOL_RESULT_TOOL_ID,
   SUBMIT_PLAN_TOOL_ID,
+  TOOL_SEARCH_TOOL_ID,
 ]);
 const IDEMPOTENT_BUILTINS = new Set([
   UPDATE_TODO_TOOL_ID,
@@ -177,6 +179,8 @@ export interface ToolDispatchContext {
   onTaskState?: (input: { toolCallId: string; items: TodoItem[]; continuity?: AgentState["continuity"] }) => Promise<void>;
   /** 用户 Hooks；未传时使用组合根初始化的进程级运行器，null 表示显式关闭。 */
   hooks?: HookRunner | null;
+  /** 按需加载工具的运行期状态；缺省 = 本次运行没有延迟工具。 */
+  deferredTools?: DeferredToolState;
 }
 
 export interface ToolDispatchResult extends ToolObservation {
@@ -250,6 +254,19 @@ export async function dispatchToolCall(
   const tool = ctx.tools.find((t) => t.id === call.name);
   if (ctx.includeInteractiveTools === false && requiresUserInteraction(tool ?? { id: call.name })) {
     return { outcome: "failure", category: "not_found", tool: call.name, message: "当前渠道不支持交互式工具" };
+  }
+
+  // 按需加载工具：未在本次请求前加载完整规格时拒绝执行，不进入权限与派发。
+  // 工具本身在 ctx.tools（本次运行允许的集合）内，tool_search 加载后仍走下方权限检查。
+  if (tool && ctx.deferredTools && !ctx.deferredTools.isCallable(tool.id)) {
+    return {
+      outcome: "not_executed",
+      category: "runtime_safety",
+      tool: call.name,
+      message: ctx.deferredTools.isLoaded(tool.id)
+        ? `工具 "${tool.id}" 刚刚加载，本轮请求还没有它的参数定义。请在下一次回复中按已加载的参数定义重新调用。`
+        : `工具 "${tool.id}" 是按需加载的工具，尚未加载完整参数，不能直接调用。请先用 tool_search 加载（query: "select:${tool.id}"），加载后在下一次回复中再调用。`,
+    };
   }
 
   // 工具不存在
@@ -569,6 +586,8 @@ async function executeHarnessBuiltin(
       return executeCloseTask(call, ctx.closeTaskExecutor);
     case READ_TOOL_RESULT_TOOL_ID:
       return executeReadToolResult(call, ctx.toolOutputStore, ctx.toolContext);
+    case TOOL_SEARCH_TOOL_ID:
+      return executeToolSearch(call, ctx.deferredTools, ctx.tools);
 
     default:
       return {

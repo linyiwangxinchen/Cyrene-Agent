@@ -35,3 +35,14 @@ export function buildToolCatalog(tools: ReadonlyArray<ToolDefinition>): string {
     })
     .join("\n");
 }
+
+/**
+ * 生成按需加载工具的精简目录：每个工具一行"名称：一句话用途"，不含风险与参数。
+ * 完整规格由模型调用 tool_search 后才随请求发送。
+ */
+export function buildDeferredToolCatalog(tools: ReadonlyArray<ToolDefinition>): string {
+  return [...tools]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((tool) => `- ${tool.id}：${extractHint(tool)}`)
+    .join("\n");
+}

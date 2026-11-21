@@ -83,6 +83,7 @@ import { normalizeMemoryMode } from "../memory/memory-mode";
 import { getTranscriptCompactionDiagnostics, getTranscriptCompactionDisplayMessage } from "../../shared/transcript-compaction-error";
 import { XILIAN_IMAGE_GENERATION_PROMPT } from "../persona/xilian-image-prompt";
 import { isXilianSelfieRequest } from "../xilian-world/life-context";
+import { normalizeToolDeferralSettings, resolveDeferredToolIds } from "./tools/registry/tool-deferral";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -133,7 +134,7 @@ export interface BuildOptionsDeps {
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
   buildModePrompt?: (mode: ConversationMode) => string;
   /** 工具规则与目录 system prompt（进入 harness stablePrefix）。仅含自动生成的工具目录。 */
-  buildToolSystemPrompt: (mode: ConversationMode, enabledTools: ReadonlyArray<unknown>) => string;
+  buildToolSystemPrompt: (mode: ConversationMode, enabledTools: ReadonlyArray<unknown>, deferredToolIds?: ReadonlyArray<string>) => string;
   /** 人设基础 system prompt；动态内容走 soulRuntimeContext，随请求尾部注入。 */
   buildSoulSystemBasePrompt: (styleFile: string) => string;
   resolveRunCapabilities?: (input: {
@@ -1096,9 +1097,16 @@ export async function buildAgentRunOptions(
     : "";
   // Chat 工具增强开启且有勾选工具时，chat 也注入工具目录 prompt
   //（buildToolSystemPrompt 忽略 mode，只按工具列表生成目录，chat 复用安全）。
+  // 按需加载工具：划分只取决于本次运行的工具集合与配置，不随运行中加载变化，
+  // 目录文本因此可以安全进入 stablePrefix。Chat 模式不启用延迟。
+  const deferredToolIds = resolvedMode === "chat"
+    ? []
+    : resolveDeferredToolIds(runTools, normalizeToolDeferralSettings((generalSettings as Record<string, unknown>).toolDeferral));
   const baseToolSystemPrompt = resolvedMode === "chat"
     ? (runTools.length > 0 ? deps.buildToolSystemPrompt(resolvedMode, runTools) : "")
-    : deps.buildToolSystemPrompt(resolvedMode, runTools);
+    : deferredToolIds.length > 0
+      ? deps.buildToolSystemPrompt(resolvedMode, runTools, deferredToolIds)
+      : deps.buildToolSystemPrompt(resolvedMode, runTools);
 
   // ⚠️ 缓存契约：本函数产出的 system prompt 分层（stablePrefix vs 尾部 runtime）
   // 的内容与拼接顺序直接影响厂商提示词缓存，且多数漂移现有测试不会变红。
@@ -1313,6 +1321,7 @@ export async function buildAgentRunOptions(
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       tools: [...runTools],
       capabilities,
+      ...(deferredToolIds.length > 0 ? { deferredToolIds } : {}),
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
       resolvedWorkspaceRoot,
       resolvedWorkspaceBinding: workspaceBinding ?? null,
