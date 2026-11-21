@@ -22,6 +22,7 @@ import type { TaskCloseRequest, TaskCloseResult, TaskExecuteRequest, TaskExecute
 import { buildGoldenDescendantsPrompt, getGoldenDescendantNames } from "../../tasks/task-character-pool";
 import { DEFAULT_TASK_MAX_PARALLEL_TOOL_CALLS, MAX_PARALLEL_TOOL_CALLS } from "../../../shared/task-session";
 import { READ_TOOL_RESULT_TOOL_ID, readToolResultToolSpec } from "./tool-output/read-tool-result";
+import { describeTaskWorktreeOutcome, isTaskIsolationError } from "../task-worktree";
 import { ENTER_PLAN_MODE_TOOL_ID, WRITE_PLAN_TOOL_ID, SUBMIT_PLAN_TOOL_ID, enterPlanModeToolSpec, writePlanToolSpec, submitPlanToolSpec } from "./plan-tools";
 
 // ── update_todo ──────────────────────────────────────────
@@ -41,6 +42,9 @@ export const taskToolSpec: ToolSpec = {
     "何时不用：一句话能回答的；只需一次工具调用的。",
     "子任务只开放命令、文件查找/搜索/读写/编辑和技能加载；search 类型额外开放当前联网搜索后端与网页读取。专用业务工具由主代理执行。文件范围跟随主代理当前权限，工作区是默认操作目录。",
     "访问模式：access_mode=read_only 仅用于完全不修改文件、仓库或外部状态的任务；运行时会移除所有非只读工具。需要任何写入或不确定时必须用 write；只读子任务可并行，write 子任务会排队串行执行。",
+    "隔离执行：isolation=worktree 让子任务在 <仓库>/.cyrene/worktrees/<taskId> 的独立 git worktree（基于当前 HEAD 的新分支）里读写和运行命令，不会改动主工作区，并且 write 子任务也能与其他子任务并行。仅当主工作区是 git 仓库时可用。"
+      + "适合：多个互不重叠的改动方案想并行实现、试验性或可能失败的修改、需要先审阅再决定是否采纳的改动。不适合：需要立即在主工作区生效的小改动、依赖未提交改动的任务（worktree 从 HEAD 检出，看不到未提交内容）、需要 git push 的任务（隔离子任务禁止 push）。"
+      + "结束时无改动自动删除 worktree 和分支；有改动则保留，结果返回分支名、worktree 路径和 diff 摘要，不会自动合并，由你审阅后决定合并或删除。",
     `子任务工具并发：可选 max_parallel_tool_calls，范围 1–${MAX_PARALLEL_TOOL_CALLS}，默认 ${DEFAULT_TASK_MAX_PARALLEL_TOOL_CALLS}；只影响此子任务内部，不影响主 Agent 或其他子任务。仅在有足够多互不依赖的安全操作时提高。`,
     buildGoldenDescendantsPrompt(),
     "若选择的角色已有开启上下文，task 会自动在该上下文继续，不会新建第二份；继续时必须使用原 subagent_type。只有角色上下文关闭后，才能为该角色创建新上下文或更换类型。description 只用于显示，prompt 是完整指令。子任务不能询问用户或再次委托。",
@@ -55,6 +59,7 @@ export const taskToolSpec: ToolSpec = {
       companion_id: { type: "string", enum: [...goldenDescendantNames], description: "本次委托的黄金裔名字；必须明确选择一位" },
     } : {}),
     task_id: { type: "string", description: "可选：恢复此前同一子任务" },
+    isolation: { type: "string", enum: ["worktree"], description: "可选：worktree 表示在独立 git worktree 中执行（需 git 仓库工作区），可与其他子任务并行；省略时在主工作区执行" },
   }, required: ["description", "prompt", "subagent_type", ...(hasGoldenDescendants ? ["companion_id"] : [])] },
 };
 
@@ -106,6 +111,10 @@ export async function executeTask(
   const companionId = typeof args.companion_id === "string" ? args.companion_id.trim() : "";
   const taskId = typeof args.task_id === "string" ? args.task_id.trim() || undefined : undefined;
   const accessMode = args.access_mode === undefined ? "write" : args.access_mode;
+  const isolation = args.isolation === undefined || args.isolation === null || args.isolation === "" ? undefined : args.isolation;
+  if (isolation !== undefined && isolation !== "worktree") {
+    return { outcome: "failure", category: "invalid_arguments", tool: TASK_TOOL_ID, message: "task 的 isolation 只支持 \"worktree\"，或省略以在主工作区执行" };
+  }
   const maxParallelToolCalls = args.max_parallel_tool_calls === undefined
     ? DEFAULT_TASK_MAX_PARALLEL_TOOL_CALLS
     : args.max_parallel_tool_calls;
@@ -119,10 +128,22 @@ export async function executeTask(
     || (subagentType !== "general" && subagentType !== "document" && subagentType !== "search")) {
     return { outcome: "failure", category: "invalid_arguments", tool: TASK_TOOL_ID, message: `task 需要 3-40 字 description、非空 prompt、合法 subagent_type、明确 companion_id、有效访问模式及 1–${MAX_PARALLEL_TOOL_CALLS} 的子任务并发数` };
   }
-  const result = await executor({ description, prompt, subagentType, companionId, taskId, accessMode, maxParallelToolCalls });
+  let result: TaskExecuteResult;
+  try {
+    result = await executor({ description, prompt, subagentType, companionId, taskId, accessMode, maxParallelToolCalls,
+      ...(isolation ? { isolation } : {}) });
+  } catch (error) {
+    if (!isTaskIsolationError(error)) throw error;
+    return { outcome: "failure", category: error.code === "TASK_WORKTREE_FAILED" ? "runtime_safety" : "invalid_arguments",
+      tool: TASK_TOOL_ID, message: error.message };
+  }
+  const worktreeNote = result.worktree ? `
+${describeTaskWorktreeOutcome(result.worktree)}` : "";
   return { outcome: result.status === "completed" ? "success" : "failure", tool: TASK_TOOL_ID,
-    message: `子任务"${description}"已${result.status === "completed" ? "完成" : result.status}。`,
-    output: JSON.stringify({ taskId: result.taskId, status: result.status, text: result.text }) };
+    message: `子任务"${description}"已${result.status === "completed" ? "完成" : result.status}。${worktreeNote}`,
+    output: JSON.stringify({ taskId: result.taskId, status: result.status, text: result.text,
+      ...(result.worktree ? { worktree: result.worktree } : {}),
+      ...(result.retainedWorktrees?.length ? { retainedWorktrees: result.retainedWorktrees } : {}) }) };
 }
 
 export const updateTodoToolSpec: ToolSpec = {

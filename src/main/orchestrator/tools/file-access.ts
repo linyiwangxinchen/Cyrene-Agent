@@ -58,6 +58,9 @@ export function resolveFileAccessPath(
   }
   try {
     const resolved = realTargetPath(target);
+    if (operation === "write" && context?.writeRoot && !isWithin(resolved, realTargetPath(context.writeRoot))) {
+      return { ok: false, message: `隔离子任务只能写入自己的 worktree（${context.writeRoot}），拒绝写入：${resolved}` };
+    }
     if (level === "project-read-only" || (level === "scoped" && operation === "write")) {
       if (!context?.resolvedWorkspaceRoot || !isWithin(resolved, realTargetPath(context.resolvedWorkspaceRoot))) {
         return { ok: false, message: `目标路径在当前工作区外，权限「${ACCESS_LEVEL_LABEL[level]}」不允许此次访问：${resolved}` };

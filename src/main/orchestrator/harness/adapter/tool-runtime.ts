@@ -1,3 +1,4 @@
+import path from "node:path";
 import { app } from "electron";
 import type { BaseEvent } from "@ag-ui/core";
 import type { ToolDefinition } from "../../tools/registry/tool-registry";
@@ -12,6 +13,20 @@ import { FileToolOutputStore } from "../tool-output/file-tool-output-store";
 import { sendTaskLifecycleAsAgui } from "./event-mapper";
 import type { PreparedHarnessRun } from "./run-preparation";
 import type { CyreneRunOptions } from "../../cyrene-agent";
+import { getTaskWorktreeManager, type GitInvocation } from "../../task-worktree";
+import { resolveGitExecutable } from "../../../code-git/git-executable";
+
+let resolvedTaskGit: GitInvocation | null = null;
+/** 与 Git 面板相同的探测顺序：系统 git 优先，打包版回退内置 MinGit；成功结果进程内缓存。 */
+async function resolveTaskGit(): Promise<GitInvocation | null> {
+  resolvedTaskGit ??= await resolveGitExecutable({
+    systemCommand: "git",
+    bundledPath: app.isPackaged
+      ? path.join(process.resourcesPath, "mingit", "cmd", "git.exe")
+      : path.join(app.getAppPath(), "resources", "mingit", "cmd", "git.exe"),
+  });
+  return resolvedTaskGit;
+}
 
 /**
  * 为一次 Harness run 构造工具运行时（tool runtime）。
@@ -114,6 +129,7 @@ export async function prepareToolRuntime(input: {
         transcriptRoot: app.getPath("userData"),
       },
       store: taskStore,
+      worktrees: getTaskWorktreeManager({ resolveGit: resolveTaskGit }),
       onLifecycle: (event) => sendTaskLifecycleAsAgui(event, threadId, runId, input.sendBaseEvent),
     })
     : undefined;

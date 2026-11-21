@@ -32,7 +32,7 @@ export interface ToolCallScheduleResult {
 
 /**
  * 并发默认拒绝：普通工具必须显式声明当前参数安全，且只能是读操作。
- * Harness 内置工具中 read_tool_result 与显式只读 task 可并发；其余内置工具排他执行。
+ * Harness 内置工具中 read_tool_result、显式只读 task 与 worktree 隔离 task 可并发；其余内置工具排他执行。
  */
 export function classifyToolExecutionMode(
   call: ToolCall,
@@ -42,7 +42,9 @@ export function classifyToolExecutionMode(
     if (call.name === READ_TOOL_RESULT_TOOL_ID) return "parallel";
     if (call.name === TASK_TOOL_ID) {
       try {
-        return parseToolCallArgs(call).access_mode === "read_only" ? "parallel" : "exclusive";
+        const args = parseToolCallArgs(call);
+        // 只读子任务与 worktree 隔离子任务互不共享可写状态，可并行（仍受 maxParallel 约束）。
+        return args.access_mode === "read_only" || args.isolation === "worktree" ? "parallel" : "exclusive";
       } catch {
         return "exclusive";
       }
