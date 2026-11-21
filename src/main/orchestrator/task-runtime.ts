@@ -23,6 +23,17 @@ import type { SkillEntry } from "../skills/types";
 import { buildSkillCatalog } from "../skills/skill-catalog";
 import { ACCESS_LEVEL_LABEL } from "../permission";
 import { getFileAccessLevel } from "./tools/file-access";
+import {
+  describeTaskWorktreeOutcome,
+  getTaskWorktreeManager,
+  isolateTaskTools,
+  TaskIsolationError,
+  type TaskIsolation,
+  type TaskWorktreeHandle,
+  type TaskWorktreeManager,
+  type TaskWorktreeOutcome,
+  type TaskWorktreeSummary,
+} from "./task-worktree";
 
 const TASK_TRACE_CHECKPOINT_INTERVAL_MS = 500;
 const TASK_TRACE_LIMIT = 2_000;
@@ -52,12 +63,18 @@ export interface TaskExecuteRequest {
   accessMode?: TaskAccessMode;
   maxParallelToolCalls?: number;
   taskId?: string;
+  /** worktree：在独立 git worktree 中执行，可与其他子任务并行。 */
+  isolation?: TaskIsolation;
 }
 
 export interface TaskExecuteResult {
   taskId: string;
   status: TaskSessionStatus;
   text: string;
+  /** isolation=worktree 时的收尾结果；保留时含分支、路径与 diff 摘要。 */
+  worktree?: TaskWorktreeOutcome;
+  /** 同仓库中其他被保留的子任务 worktree（含上次运行遗留）。 */
+  retainedWorktrees?: TaskWorktreeSummary[];
 }
 
 export interface TaskCloseRequest {
@@ -105,16 +122,26 @@ export function buildChildPromptLayers(
   profilePrompt: string,
   accessMode: TaskAccessMode = "write",
   skills: readonly SkillEntry[] = [],
+  worktree?: Pick<TaskWorktreeHandle, "workspaceRoot" | "worktreePath" | "mainWorkspaceRoot" | "branch">,
 ): PromptLayers {
-  const workspace = parent.resolvedWorkspaceRoot
-    ? `可信工作目录：${parent.resolvedWorkspaceRoot}`
+  const workspaceRoot = worktree?.workspaceRoot ?? parent.resolvedWorkspaceRoot;
+  const workspace = workspaceRoot
+    ? `可信工作目录：${workspaceRoot}`
     : "当前没有绑定工作目录。";
+  const isolationNote = worktree
+    ? `本任务在独立 git worktree 中执行：${worktree.worktreePath}（分支 ${worktree.branch}，基于主工作区当前 HEAD）。`
+      + `所有读写和命令都在该 worktree 内进行，不能写入主工作区 ${worktree.mainWorkspaceRoot}；不要 git push，不要切换或删除分支。`
+      + "可以在 worktree 内提交改动；未提交的改动同样会保留。结束时在结果中说明改了什么，合并由主代理决定。"
+    : "";
   return {
     stablePrefix: [
       profilePrompt,
       accessMode === "read_only"
         ? "本任务处于只读模式：只检查和读取信息，不修改文件、仓库或外部状态。你可用的工具也已按只读能力限制。"
-        : "本任务可在主代理当前权限允许的范围内按指令写入；并行委派时，只读子任务可并行，写入子任务排队串行执行。",
+        : worktree
+          ? "本任务可在主代理当前权限允许的范围内按指令写入，写入范围限定在隔离 worktree 内。"
+          : "本任务可在主代理当前权限允许的范围内按指令写入；并行委派时，只读子任务可并行，写入子任务排队串行执行。",
+      isolationNote,
       "专用能力由主代理协调；若缺少完成任务所需的工具，请在结果中说明。技能只提供执行指令，实际操作以可用工具和权限为准。",
       buildSkillCatalog(skills.map((skill) => ({ ...skill, manifest: undefined,
         description: skill.description.split(/\r?\n/)[0].slice(0, 240) }))),
@@ -184,9 +211,11 @@ export function createTaskExecutor(input: {
   runHarness?: typeof runCyreneHarness;
   characterPool?: Pick<TaskCharacterLeasePool, "acquire">;
   onLifecycle?: (event: TaskDelegationPresentation) => void;
+  worktrees?: Pick<TaskWorktreeManager, "resolveRepository" | "acquire" | "finalize">;
 }): (request: TaskExecuteRequest) => Promise<TaskExecuteResult> {
   const runHarness = input.runHarness ?? runCyreneHarness;
   const characterPool = input.characterPool ?? taskCharacterLeasePool;
+  const worktrees = input.worktrees ?? getTaskWorktreeManager();
   // session 增量落库的 facade：transcript 管对话事实，runs 管 run 生命周期。
   // conversationId 用稳定的 session.id，runId 用每次 resume 换新的 childRunId——
   // 与主 agent 的 conversationId/runId 模型同构，复用同一套表与幂等约束。
@@ -196,11 +225,14 @@ export function createTaskExecutor(input: {
         runs: getHarnessRunStore(input.parent.transcriptRoot),
       }
     : undefined;
-  let transcriptHistory: ReturnType<typeof projectTaskTranscriptMessages> | undefined;
-  let transcriptTodoItems: ReturnType<typeof projectTaskTodoItems> | undefined;
-  let transcriptContinuity: ReturnType<typeof projectTaskContinuity>;
   return async (request) => {
+    // 每次调用独立：隔离子任务会并行，且创建 worktree 前有 await，闭包共享会串台。
+    let transcriptHistory: ReturnType<typeof projectTaskTranscriptMessages> | undefined;
+    let transcriptTodoItems: ReturnType<typeof projectTaskTodoItems> | undefined;
+    let transcriptContinuity: ReturnType<typeof projectTaskContinuity>;
     const profile = getTaskAgentProfile(request.subagentType);
+    // 隔离前置校验在建 session 之前：非 git 工作区直接报错，不留下空任务记录。
+    if (request.isolation === "worktree") await worktrees.resolveRepository(input.parent.resolvedWorkspaceRoot);
     const lease = characterPool.acquire(input.parent.parentConversationId, request.companionId);
     let session: TaskSession;
     try {
@@ -251,8 +283,41 @@ export function createTaskExecutor(input: {
       throw error;
     }
 
+    let worktree: TaskWorktreeHandle | undefined;
+    if (request.isolation === "worktree") {
+      try {
+        worktree = await worktrees.acquire({ workspaceRoot: input.parent.resolvedWorkspaceRoot, taskId: session.id });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        try {
+          await transcript?.runs.markTerminal(session.childRunId, "failed");
+          await input.store.checkpoint(session.id, { status: "failed", error: { code: "TASK_WORKTREE_FAILED", message }, completedAt: Date.now() });
+        } catch (checkpointError) {
+          console.error("[TaskRuntime] worktree 创建失败后的终态记录失败:", checkpointError);
+        } finally {
+          lease.release();
+        }
+        throw error instanceof TaskIsolationError ? error : new TaskIsolationError("TASK_WORKTREE_FAILED", message);
+      }
+    }
+    // 收尾只做一次；失败时绝不删除，一律按保留处理。
+    let worktreeOutcome: TaskWorktreeOutcome | undefined;
+    const finalizeWorktree = async (): Promise<TaskWorktreeOutcome | undefined> => {
+      if (!worktree || worktreeOutcome) return worktreeOutcome;
+      try {
+        worktreeOutcome = await worktrees.finalize(worktree);
+      } catch (finalizeError) {
+        console.error("[TaskRuntime] worktree 收尾失败，已保留:", finalizeError);
+        worktreeOutcome = { kind: "retained", branch: worktree.branch, worktreePath: worktree.worktreePath, baseCommit: worktree.baseCommit,
+          commitsAhead: 0, uncommitted: false, diffStat: "", changedFiles: [], untrackedFiles: [],
+          note: `收尾检查失败，worktree 已保留：${finalizeError instanceof Error ? finalizeError.message : String(finalizeError)}` };
+      }
+      return worktreeOutcome;
+    };
+
     const accessMode = request.accessMode ?? "write";
-    const taskTools = resolveTaskTools(profile, input.parent.tools, accessMode);
+    const resolvedTaskTools = resolveTaskTools(profile, input.parent.tools, accessMode);
+    const taskTools = worktree ? isolateTaskTools(resolvedTaskTools, worktree) : resolvedTaskTools;
     const taskToolIds = new Set(taskTools.map((tool) => tool.id));
     const taskSkills = taskToolIds.has("invoke_skill")
       ? (input.parent.capabilities?.skills ?? []).filter((skill) => skill.enabled
@@ -264,7 +329,8 @@ export function createTaskExecutor(input: {
       conversationId: session.id,
       runId: session.childRunId,
       signal: input.parent.signal,
-      resolvedWorkspaceRoot: input.parent.resolvedWorkspaceRoot,
+      resolvedWorkspaceRoot: worktree?.workspaceRoot ?? input.parent.resolvedWorkspaceRoot,
+      ...(worktree ? { writeRoot: worktree.worktreePath } : {}),
       mode: input.parent.mode,
       allowedSkillIds: new Set(taskSkills.map((skill) => skill.id)),
       permissionMode: input.parent.permissionMode,
@@ -309,7 +375,7 @@ export function createTaskExecutor(input: {
 
     try {
       const combinedTaskPrompt = buildCharacterTaskPrompt(request.companionId);
-      const promptLayers = buildChildPromptLayers(input.parent, combinedTaskPrompt, accessMode, taskSkills);
+      const promptLayers = buildChildPromptLayers(input.parent, combinedTaskPrompt, accessMode, taskSkills, worktree);
       const taskModel = resolveTaskModel(input.parent.vendorConfig);
       let activeRoundId: string | undefined;
       // entryId 由 (runId, 协议点) 确定性生成：resume 产生新 childRunId，重试不会写重复条目。
@@ -372,22 +438,35 @@ export function createTaskExecutor(input: {
       } catch (terminalError) {
         console.error("[TaskRuntime] run terminal 记录失败:", terminalError);
       }
+      const outcome = await finalizeWorktree();
+      const resultText = outcome ? `${result.finalAnswer}
+
+${describeTaskWorktreeOutcome(outcome)}` : result.finalAnswer;
       await input.store.checkpoint(session.id, {
         status: mapped.status,
-        resultText: result.finalAnswer,
+        resultText,
         todoItems: result.finalState.todoItems,
         ...(mapped.error ? { error: mapped.error } : {}),
         completedAt: Date.now(),
       });
       input.onLifecycle?.({ ...presentation, status: mapped.status });
-      return { taskId: session.id, status: mapped.status, text: result.finalAnswer };
+      return {
+        taskId: session.id,
+        status: mapped.status,
+        text: result.finalAnswer,
+        ...(outcome ? { worktree: outcome } : {}),
+        ...(worktree?.retainedWorktrees.length ? { retainedWorktrees: worktree.retainedWorktrees } : {}),
+      };
     } catch (error) {
       try {
         await flushTaskTrace();
       } catch (traceError) {
         console.error("[TaskRuntime] final trace checkpoint failed", traceError);
       }
-      const message = error instanceof Error ? error.message : String(error);
+      const outcome = await finalizeWorktree();
+      const baseMessage = error instanceof Error ? error.message : String(error);
+      const message = outcome?.kind === "retained" ? `${baseMessage}
+${describeTaskWorktreeOutcome(outcome)}` : baseMessage;
       try {
         // 终态必须落库：run 行滞留 running 会触发 one_active 唯一索引，阻塞该任务的下次 resume。
         await transcript?.runs.markTerminal(session.childRunId, input.parent.signal?.aborted ? "cancelled" : "failed");
@@ -400,6 +479,14 @@ export function createTaskExecutor(input: {
         completedAt: Date.now(),
       });
       input.onLifecycle?.({ ...presentation, status: input.parent.signal?.aborted ? "cancelled" : "failed" });
+      // 改动保留时让主代理在错误里看到分支与路径，避免“失败即丢弃”的误解。
+      if (outcome?.kind === "retained" && error instanceof Error) {
+        try {
+          error.message = message;
+        } catch {
+          // DOMException 等只读 message：worktree 清单仍会在下次隔离任务中列出。
+        }
+      }
       throw error;
     } finally {
       if (taskTraceFlushTimer !== undefined) clearTimeout(taskTraceFlushTimer);

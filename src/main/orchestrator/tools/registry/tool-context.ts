@@ -57,6 +57,8 @@ export interface ToolContext {
   allowUserInteraction?: boolean;
   /** 子任务的只读契约；独立于主代理当前权限档位。 */
   readOnly?: boolean;
+  /** 隔离子任务（git worktree）的写入边界：任何档位下文件写入都不得越出该目录。 */
+  writeRoot?: string;
   /** 仅供前台 run_shell 观察输出；异常不得影响命令执行。 */
   onShellOutput?: (update: ShellOutputUpdate) => void;
   /** 后台结束事件由主进程负责投递，不接受模型传入的回调。 */
