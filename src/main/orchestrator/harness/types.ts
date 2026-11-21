@@ -64,6 +64,8 @@ export interface ToolObservation {
   activityPreview?: string;
   /** 工具返回的原始输出（未截断前），可能被截断后只保留 preview */
   output?: string;
+  /** 本机 PostToolUse Hook 追加给模型的补充说明。 */
+  hookContext?: string;
 }
 
 // ── Uncertain Effect（结果不确定的副作用追踪）────────────

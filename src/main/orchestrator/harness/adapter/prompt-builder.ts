@@ -80,6 +80,7 @@ export function buildHarnessPromptLayers(
   if (options.citaContextBlock) runtimeParts.push(options.citaContextBlock);
   if (options.recoveryContext) runtimeParts.push(`[RECOVERY_CONTEXT]\n${options.recoveryContext}`);
   if (options.responseContext) runtimeParts.push(`[RESPONSE_CONTEXT]\n${options.responseContext}`);
+  if (options.hookContext) runtimeParts.push(`[HOOK_CONTEXT]\n${options.hookContext}`);
 
   const stablePrefix = [...personaParts, ...toolParts].join("\n\n---\n\n");
   // 调用方可能把同一段内容同时放进静态层和运行时层；这里去重，避免模型收到重复上下文。

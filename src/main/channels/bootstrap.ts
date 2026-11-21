@@ -228,6 +228,8 @@ export function createChannelsSubsystem(
     // 运行标识贯通：sink 写入、runStore 会话与生命周期事件使用同一 runId，
     // 崩溃孤儿工具才能按 assistant 条目上的 runId 查回运行状态。
     options.runId = channelInput.runId;
+    // 渠道用户消息同样经过 UserPromptSubmit Hook（payload.channel 为渠道名）
+    options.hookUserPrompt = msg.text ?? "";
     options.tools = policy.exposeTools
       ? [...(options.capabilities?.tools ?? exposedTools)]
       : [];

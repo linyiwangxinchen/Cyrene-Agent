@@ -45,7 +45,8 @@ import { isBlockedByUncertainEffect } from "./uncertain-effect-guard";
 import { ExecutionLedger } from "../execution-ledger";
 import type { ToolExecutionOutcome } from "../types";
 import { executeToolDefinition } from "../tools/registry/tool-executor";
-import { toolRegistry } from "../tools/registry/tool-registry";
+import { resolveEffectKind, toolRegistry } from "../tools/registry/tool-registry";
+import { getHookRunner, type HookRunner } from "../../hooks/hook-runner";
 import type { ToolOutputStore } from "./tool-output/tool-output-store";
 import { ToolOutputPersistenceError } from "./tool-output/file-tool-output-store";
 
@@ -174,6 +175,8 @@ export interface ToolDispatchContext {
     grantedAt: number;
   }) => Promise<void>;
   onTaskState?: (input: { toolCallId: string; items: TodoItem[]; continuity?: AgentState["continuity"] }) => Promise<void>;
+  /** 用户 Hooks；未传时使用组合根初始化的进程级运行器，null 表示显式关闭。 */
+  hooks?: HookRunner | null;
 }
 
 export interface ToolDispatchResult extends ToolObservation {
@@ -191,7 +194,7 @@ export async function dispatchToolCall(
   call: ToolCall,
   ctx: ToolDispatchContext,
 ): Promise<ToolDispatchResult> {
-  const args = parseToolCallArgs(call);
+  let args = parseToolCallArgs(call);
   const fingerprint = toolCallFingerprint(call.name, args);
   const failSafeFingerprint = `${call.name}(*)`;
   const blockingEffect = ctx.state.uncertainEffects.find((effect) =>
@@ -267,6 +270,53 @@ export async function dispatchToolCall(
       category: "not_found",
       tool: call.name,
       message: `工具 "${call.name}" 未注册`,
+    };
+  }
+
+  // 用户 PreToolUse Hook：先于权限检查执行，改写后的参数必须重新经过下方全部安全检查
+  const hooks = ctx.hooks === undefined ? getHookRunner() : ctx.hooks;
+  const hookContext = hooks ? {
+    sessionId: ctx.toolContext?.conversationId,
+    runId: ctx.toolContext?.runId,
+    channel: ctx.toolContext?.channelContext?.channel,
+    mode: ctx.toolContext?.mode,
+    signal: ctx.signal,
+  } : undefined;
+  if (hooks && hookContext && hooks.hasHooks("PreToolUse", tool.id)) {
+    const pre = await hooks.runPreToolUse({
+      ...hookContext,
+      toolName: tool.id,
+      toolInput: args,
+      ...(tool.sensitiveArgs ? { inputRedacted: true } : {}),
+    });
+    if (pre.decision === "deny") {
+      return {
+        outcome: "failure",
+        category: "permission_denied",
+        tool: call.name,
+        message: `工具 "${tool.id}" 被本机 Hook 拒绝：${pre.reason ?? "未说明原因"}`,
+      };
+    }
+    if (pre.updatedInput) {
+      args = pre.updatedInput;
+      if (isBlockedByUncertainEffect(ctx.state, toolCallFingerprint(call.name, args))) {
+        return {
+          outcome: "not_executed",
+          category: "runtime_safety",
+          tool: call.name,
+          message: "Hook 改写后的调用与一次未确认结果的副作用相同，在 reconcile 或 ask 用户前不能重复执行",
+        };
+      }
+    }
+  }
+  // Hooks 配置只能由用户在本机编辑：任何可能写入的工具调用都不得指向配置文件
+  if (hooks && resolveEffectKind(tool, args) !== "read"
+    && hooks.referencesConfigFile(args, ctx.toolContext?.resolvedWorkspaceRoot)) {
+    return {
+      outcome: "failure",
+      category: "permission_denied",
+      tool: call.name,
+      message: `工具 "${tool.id}" 不能修改本机 Hooks 配置文件`,
     };
   }
 
@@ -351,6 +401,20 @@ export async function dispatchToolCall(
     result = { toolId: tool.id, args, ...await run() };
   }
 
+  // 用户 PostToolUse Hook：只追加给模型的补充说明，不改变工具执行事实
+  let postToolHookContext: string | undefined;
+  if (hooks && hookContext && result.toolExecuted !== false && hooks.hasHooks("PostToolUse", tool.id)) {
+    postToolHookContext = await hooks.runPostToolUse({
+      ...hookContext,
+      toolName: tool.id,
+      toolInput: tool.sensitiveArgs ? null : args,
+      toolResult: {
+        outcome: result.status === "succeeded" ? "success" : "failure",
+        output: tool.sensitiveOutput ? null : result.output,
+      },
+    });
+  }
+
   // 截断输出（长输出按预算截断，只把可消费的 preview 交给模型）
   const truncationConfig = ctx.truncation ?? DEFAULT_TRUNCATION;
   const { preview, truncated } = truncateOutput(
@@ -398,6 +462,7 @@ export async function dispatchToolCall(
         : "邮件操作未成功",
     } : {}),
     ...(presentation ? { presentation } : {}),
+    ...(postToolHookContext ? { hookContext: postToolHookContext } : {}),
     rawResult: result,
   };
   const persisted = ctx.deferOutputPersistence
