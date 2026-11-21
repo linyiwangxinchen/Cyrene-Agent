@@ -46,6 +46,7 @@ import { toolRegistry } from "../../main/orchestrator/tools/registry/tool-regist
 import { registerAllTools, syncBuiltInToolToggles } from "../../main/orchestrator/tools/registry/tool-registration";
 import { bootstrapConfigGetters } from "../../main/startup/bootstrap-config";
 import { bootstrapPermission } from "../../main/permission/bootstrap";
+import { initHooks } from "../../main/hooks/hook-runner";
 import { initSandbox } from "../../main/orchestrator/sandbox/sandbox-exec";
 import { initializeKnowledgeBase } from "../../main/knowledge-base/knowledge-base-service";
 import { registerKnowledgeBaseIpc } from "../../main/knowledge-base/knowledge-base-ipc";
@@ -129,6 +130,8 @@ export async function startHeadlessCore() {
   bootstrapConfigGetters({ loadGeneralSettings });
   updateLocaleContext({ uiLocale: loadGeneralSettings().language });
   bootstrapPermission(ipc);
+  // 本机用户 Hooks：只读数据目录下的 hooks.json，必须先于任意工具调用
+  initHooks({ configPath: path.join(root, "hooks.json"), host: "web" });
   await initSandbox();
   const lsp = new LspManager({ getServerOverrides: () => loadGeneralSettings().lspServerOverrides });
   const git = createGitService({ getSession: chatsStore.getSessionRecord, resolveExecutable: () => resolveGitExecutable({ systemCommand: "git", bundledPath: "" }) });

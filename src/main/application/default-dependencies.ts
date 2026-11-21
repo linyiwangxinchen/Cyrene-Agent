@@ -149,6 +149,7 @@ import { resolveMusicPaths } from "../music/paths";
 import { initializeScreenshotService } from "../screenshot/screenshot-lifecycle";
 import { bootstrapConfigGetters } from "../startup/bootstrap-config";
 import { bootstrapPermission } from "../permission/bootstrap";
+import { initHooks } from "../hooks/hook-runner";
 import { registerPopQuizIpc, registerPopQuizTool } from "../orchestrator/pop-quiz";
 import { createExamPaperStore } from "../learn/exam-paper-store";
 import { createExamDraftStore } from "../learn/exam-draft";
@@ -818,6 +819,8 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
 
         // 权限模块：磁盘加载 + 权限/选择卡片 IPC（必须在 createWindow 之后、任意工具调用之前）
         bootstrapPermission(ipc);
+        // 本机用户 Hooks：只读 userData/hooks.json，必须先于任意工具调用
+        initHooks({ configPath: path.join(app.getPath("userData"), "hooks.json"), host: "desktop" });
         // pop_quiz 抽查工具：IPC（提交/跳过）与工具注册（learn 模式可见）
         registerPopQuizIpc(ipc);
         registerPopQuizTool();

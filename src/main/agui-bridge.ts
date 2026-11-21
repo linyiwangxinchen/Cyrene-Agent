@@ -946,6 +946,8 @@ export function registerAgUiIpc(
       .join("\n\n");
     if (mergedRecoveryContext) options.recoveryContext = mergedRecoveryContext;
     options.conversationMode = mode;
+    // 用户本轮输入进入运行前交给 UserPromptSubmit Hook；后台续跑不是用户提交
+    if (currentUser && !background) options.hookUserPrompt = currentUser.text;
     // 把 bridge 创建的 canonical runId 注入 CyreneRunOptions，
     // 一路传到 Agent / Harness adapter / ToolContext / 所有 AG-UI 事件。
     // ack.runId 与 RUN_STARTED.runId 必须一致。

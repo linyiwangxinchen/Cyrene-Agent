@@ -25,6 +25,7 @@ import { runChatLoop } from "./chat-loop";
 import type { RunCapabilities } from "./run-capabilities";
 import { runHarnessWithAdapter } from "./harness-adapter";
 import type { CacheDiagnostic } from "../../shared/cache-diagnostic";
+import { getHookRunner } from "../hooks/hook-runner";
 
 /** Skill 路由条目（类型本地定义，不再依赖 task-router 模块） */
 export interface SkillRouteInfo {
@@ -191,6 +192,13 @@ export interface CyreneRunOptions {
   runtimeEnvironmentContext?: string;
   /** 上一次异常中断 Run 的只读 Todo/执行检查点；只用于帮助模型恢复方向。 */
   recoveryContext?: string;
+  /**
+   * 本轮真实用户输入（桌面/Web/渠道）；设置后触发 UserPromptSubmit Hook。
+   * 后台续跑、定时任务等非用户发起的运行不设置。
+   */
+  hookUserPrompt?: string;
+  /** SessionStart / UserPromptSubmit Hook 追加的上下文；由 runWithEvents 填充。 */
+  hookContext?: string;
   /** 会话轨迹投影出的待办与未决副作用，作为新 Harness 的执行状态恢复。 */
   initialHarnessState?: Pick<import("./harness/types").AgentState, "todoItems" | "uncertainEffects">;
   /** 由 AG-UI bridge 注入，确保 Ask 卡片回到实际发起本轮的渲染窗口。 */
@@ -467,6 +475,23 @@ export class CyreneAgent extends AbstractAgent {
     };
     const conversationId = runOptions.conversationId ?? "default";
     const abortController = new AbortController();
+    // 本机用户 Hooks：未初始化或无配置时整段跳过
+    const hooks = getHookRunner();
+    const hookRunContext = {
+      sessionId: conversationId,
+      runId,
+      ...(options.channelContext?.channel ? { channel: options.channelContext.channel } : {}),
+      ...(options.conversationMode ? { mode: options.conversationMode } : {}),
+    };
+    let stopNotified = false;
+    // Stop Hook 只是通知：fire-and-forget，结果和失败都不影响本轮终态
+    const notifyStop = (status: string, reason?: string) => {
+      if (!hooks || stopNotified) return;
+      stopNotified = true;
+      if (!hooks.hasHooks("Stop")) return;
+      void hooks.runStop({ ...hookRunContext, status, ...(reason ? { reason } : {}) })
+        .catch((error) => console.warn(LOG_PREFIX, "Stop Hook 执行异常:", error));
+    };
     // first-source-wins：谁先触发 abort，谁就是最终分类
     let abortSource: AbortSource | undefined;
     const markAbort = (source: AbortSource) => {
@@ -503,6 +528,50 @@ export class CyreneAgent extends AbstractAgent {
             subscriber.next(toAguiEvent(event));
           };
           const executionMode = resolveExecutionMode(options.executionMode);
+
+          // ── 本机 Hooks：SessionStart → UserPromptSubmit，均在模型请求之前 ──
+          let loopOptions = options;
+          let harnessOptions = runOptions;
+          if (hooks) {
+            const hookSignalContext = { ...hookRunContext, signal: abortController.signal };
+            const hookContexts: string[] = [];
+            if (hooks.hasHooks("SessionStart")) {
+              const sessionContext = await hooks.runSessionStart(hookSignalContext);
+              if (sessionContext) hookContexts.push(sessionContext);
+            }
+            if (options.hookUserPrompt !== undefined && hooks.hasHooks("UserPromptSubmit")) {
+              const submitted = await hooks.runUserPromptSubmit({ ...hookSignalContext, prompt: options.hookUserPrompt });
+              if (submitted.decision === "deny" && !abortController.signal.aborted) {
+                // 本轮不进入模型：以 runtime_error 终态结束，桌面显示原因，渠道把原因作为回复发送；
+                // 不触发记忆、表情等成功收尾副作用。
+                const notice = `本轮消息已被本机 Hook 拒绝：${submitted.reason ?? "未说明原因"}`;
+                const terminal: CyreneRunTerminalResult = {
+                  status: "runtime_error",
+                  reason: notice,
+                  externalEffectsMayContinue: false,
+                };
+                this.lastResult = { reply: notice, toolResults: [], executionMode, socialContext: options.socialContext, terminal };
+                try {
+                  await options.transcriptSink?.closeInterruption({ reason: "runtime_error", runSession: null });
+                } catch (closureError) {
+                  console.error(LOG_PREFIX, "transcript hook-block closure failed:", closureError);
+                }
+                notifyStop("runtime_error", "user_prompt_blocked");
+                if (cancelled) return;
+                subscriber.next({ type: EventType.RUN_FINISHED, threadId, runId, result: terminal });
+                finished = true;
+                detachExternalAbort();
+                subscriber.complete();
+                return;
+              }
+              if (submitted.additionalContext) hookContexts.push(submitted.additionalContext);
+            }
+            if (hookContexts.length > 0) {
+              const hookContext = [options.hookContext, ...hookContexts].filter(Boolean).join("\n\n");
+              loopOptions = { ...options, hookContext };
+              harnessOptions = { ...runOptions, hookContext };
+            }
+          }
           // Chat 工具增强：chat 会话在设置里勾选了工具（options.tools 非空）时
           // 改走 CyreneHarness（native function calling）；否则维持无工具 ChatLoop。
           const chatToolCount = (options.tools ?? []).length;
@@ -525,7 +594,8 @@ export class CyreneAgent extends AbstractAgent {
               adapter,
               messages: options.messages,
               soulSystemBaseContent: options.soulSystemBaseContent,
-              runtimeContext: [options.soulRuntimeContext, options.citaContextBlock, options.responseContext, options.companionReplyContext].filter(Boolean).join("\n\n---\n\n"),
+              runtimeContext: [options.soulRuntimeContext, options.citaContextBlock, options.responseContext, options.companionReplyContext,
+                loopOptions.hookContext ? `[HOOK_CONTEXT]\n${loopOptions.hookContext}` : undefined].filter(Boolean).join("\n\n---\n\n"),
               soulSampling: options.soulSampling,
               timeoutMs: options.timeoutMs,
               imageCaptionFallback: options.imageCaptionFallback,
@@ -554,7 +624,7 @@ export class CyreneAgent extends AbstractAgent {
             // Work / Learn / Code 统一通过 CyreneHarness。
             // 传 runOptions（含 canonical runId），不传原始 options。
             result = await perf.track("harness_loop", () => runHarnessWithAdapter(
-              runOptions,
+              harnessOptions,
               abortController.signal,
               (baseEvent: BaseEvent) => {
                 if (!cancelled) subscriber.next(baseEvent);
@@ -574,6 +644,7 @@ export class CyreneAgent extends AbstractAgent {
             terminal: result.terminal ?? terminalFromCompletionReason(result.completionReason),
           };
           flowLog("── 本轮完成 ────────────────────────");
+          notifyStop(this.lastResult.terminal?.status ?? "success", this.lastResult.terminal?.reason);
 
           if (cancelled) return;
           // timeout 属系统侧未完成（非用户取消）：写 runtime_error interruption 边界。
@@ -606,6 +677,7 @@ export class CyreneAgent extends AbstractAgent {
           const classification = classifyRunError(
             err, abortSource, runId, conversationId, phase, hasToolResults,
           );
+          notifyStop(classification.source === "user_cancelled" ? "cancelled" : "runtime_error", classification.source);
           console.error(LOG_PREFIX, `run 失败 [${classification.source}]:`, classification.diagnostics);
           if (classification.source === "user_cancelled") {
             // 权威轨迹：取消边界先于终态事件落盘。
@@ -671,6 +743,7 @@ export class CyreneAgent extends AbstractAgent {
         if (!finished && !abortController.signal.aborted) {
           markAbort("upstream_cleanup");
         }
+        if (!finished) notifyStop("cancelled", "upstream_cleanup");
       };
     });
   }
