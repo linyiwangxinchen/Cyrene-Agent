@@ -12,7 +12,9 @@ import { addMcpServer, reconnectMcpServer, removeMcpServer, listMcpServers, list
 import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import { loadGeneralSettings, saveGeneralSettings } from "../settings/settings-facade";
-import { listSkillsForUi, setSkillEnabled, skillRegistry, rescanSkills } from "../skills";
+import { listSkillsForUi, setSkillEnabled, skillRegistry, rescanSkills, getUserCommandsDirectory, installSkillForUser } from "../skills";
+import { listFileCommands } from "../skills/file-commands";
+import { SkillAuthoringError } from "../skills/skill-authoring";
 import type { SkillMode } from "../skills/types";
 import type { WindowManager } from "../windows/window-manager";
 import {
@@ -464,21 +466,62 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
 
   // 输入框 slash 菜单：每次打开都重扫技能目录，确保用户刚安装/删除的 skill 即时可见。
   // 模式过滤和启用状态统一复用注册表规则，渲染端只拿到菜单所需的可序列化字段。
-  ipc.handle(IPC.SKILL_GET_SUGGESTIONS, (_event, payload: unknown) => {
-    const mode = (payload as { mode?: unknown } | null)?.mode;
+  // 文件定义的命令（工作区 > 用户）排在前面；与命令同名的 Skill 不再出现（斜杠时命令优先）。
+  ipc.handle(IPC.SKILL_GET_SUGGESTIONS, async (_event, payload: unknown) => {
+    const p = payload as { mode?: unknown; sessionId?: unknown } | null;
+    const mode = p?.mode;
     if (mode !== "work" && mode !== "code" && mode !== "learn") return [];
 
     rescanSkills();
-    return skillRegistry
+    const sessionId = typeof p?.sessionId === "string" && p.sessionId ? p.sessionId : undefined;
+    let workspaceRoot: string | undefined;
+    if (sessionId) {
+      try {
+        workspaceRoot = (await chatsStore.getWorkspaceBinding(sessionId))?.workspaceRoot;
+      } catch {
+        workspaceRoot = undefined;
+      }
+    }
+    const commands = listFileCommands({ userDir: getUserCommandsDirectory(), workspaceRoot }, mode)
+      .map((command) => ({
+        id: command.name,
+        name: command.name,
+        description: command.description,
+        source: command.source,
+        kind: "command" as const,
+        ...(command.argumentHint ? { argumentHint: command.argumentHint } : {}),
+      }));
+    const commandNames = new Set(commands.map((command) => command.id));
+    const skills = skillRegistry
       .getEnabledForMode(mode as SkillSuggestionMode, loadGeneralSettings().skillModeOverrides)
-      .filter((skill) => !skill.hiddenFromUi)
-      .map(({ id, name, description, source }) => ({ id, name, description, source }));
+      .filter((skill) => !skill.hiddenFromUi && !commandNames.has(skill.id))
+      .map(({ id, name, description, source }) => ({ id, name, description, source, kind: "skill" as const }));
+    return [...commands, ...skills];
   });
 
   // 重新扫描 user skills 目录，安装/删除 skill 后无需重启即可刷新 UI。
   ipc.handle(IPC.SKILL_RESCAN, () => {
     const count = rescanSkills();
     return { ok: true, count };
+  });
+
+  // 从 GitHub 安装 Skill：用户在界面发起即视为授权；校验失败返回错误码，不落半个 Skill。
+  ipc.handle(IPC.SKILL_INSTALL, async (_event, payload: unknown) => {
+    const p = (payload ?? {}) as { source?: unknown; ref?: unknown; id?: unknown; overwrite?: unknown };
+    if (typeof p.source !== "string" || !p.source.trim()) return { ok: false, code: "E_SKILL_SOURCE_INVALID", error: "缺少安装来源" };
+    try {
+      const result = await installSkillForUser({
+        source: p.source,
+        ref: typeof p.ref === "string" ? p.ref : undefined,
+        id: typeof p.id === "string" ? p.id : undefined,
+        overwrite: p.overwrite === true,
+      });
+      console.log(`[Skill] installed ${result.id} from ${result.repository}@${result.commit.slice(0, 12)}`);
+      return { ok: true, result };
+    } catch (error) {
+      const code = error instanceof SkillAuthoringError ? error.code : "E_SKILL_INSTALL_FAILED";
+      return { ok: false, code, error: error instanceof Error ? error.message : String(error) };
+    }
   });
 
   // 三模适配层：skill-模式覆盖层读写。

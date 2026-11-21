@@ -69,6 +69,8 @@
     "skillSuggestionEmpty": "No matching skills",
     "skillSuggestionSourceUser": "Personal",
     "skillSuggestionSourceBuiltin": "Built-in",
+    "slashCommandSourceUser": "My command",
+    "slashCommandSourceWorkspace": "Workspace command",
     "stickerSelected": "Sticker selected",
     "removeSticker": "Remove sticker",
     "removeAttachment": "Remove {{name}}",

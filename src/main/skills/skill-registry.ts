@@ -13,6 +13,8 @@ export class SkillRegistry {
 
   register(skill: SkillEntry): void {
     this.skills.set(skill.id, skill);
+    // 重新扫描后 SKILL.md 可能已被 skill_write/skill_install 更新，旧正文缓存作废。
+    this.bodyCache.delete(skill.id);
   }
 
   getEnabled(): SkillEntry[] {

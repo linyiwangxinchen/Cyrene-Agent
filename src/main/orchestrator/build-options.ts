@@ -109,6 +109,15 @@ export interface BuildOptionsDeps {
     mode?: import("../skills/types").SkillMode,
     overrides?: SkillModeOverrides,
   ) => string;
+  /**
+   * 文件定义的斜杠命令展开（`<userData>/commands`、`<workspace>/.cyrene/commands`）。
+   * 就地改写最后一条 user 消息（本轮副本）；未命中返回 null。可选：旧测试/入口不提供时不展开。
+   */
+  expandFileCommand?: (
+    messages: Array<{ role: string; content?: unknown }>,
+    mode: ConversationMode,
+    workspaceRoot?: string,
+  ) => { name: string; source: "workspace" | "user" } | null;
   buildToneInjection: () => string;
   buildAlwaysOnContext: (
     userText: string,
@@ -762,6 +771,18 @@ export async function buildAgentRunOptions(
       "conversationId=" + conversationId.slice(0, 8) + "...",
       "workspaceRoot=" + resolvedWorkspaceRoot,
     );
+  }
+
+  // 文件定义的斜杠命令：`/命令名 参数` 展开为命令提示，只改本轮发给模型的副本。
+  // 必须早于时间上下文/Skill 斜杠激活：命中后消息不再以 /命令名 开头，同名 Skill 不会再被激活
+  // （优先级：工作区命令 > 用户命令 > Skill）。
+  const commandExpansion = deps.expandFileCommand?.(
+    messages as unknown as Array<{ role: string; content?: unknown }>,
+    input.mode ?? (isChatMode ? "chat" : "work"),
+    resolvedWorkspaceRoot,
+  );
+  if (commandExpansion) {
+    console.log("[BuildOptions] slash command expanded:", "/" + commandExpansion.name, "source=" + commandExpansion.source);
   }
 
   const privateContext = input.privateRelationshipContext !== false && input.promptSource !== "plugin-agent";

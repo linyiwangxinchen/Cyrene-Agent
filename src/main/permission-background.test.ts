@@ -79,3 +79,25 @@ it("rejects an approved call if its authorization was revoked while the card was
   handlers.get(IPC.PERMISSION_APPROVAL_RESOLVE)!({}, { id: request.id, allowed: true });
   expect(await pending).toMatchObject({ allowed: false, reason: "等待审批期间能力授权已撤回。" });
 });
+
+it("requireApproval asks even at full level and under allow_all channel bypass", async () => {
+  setCurrentLevel("full");
+  const input = { toolId: "skill_write", toolName: "写入 Skill", toolDescription: "fixture", args: {}, risk: "fs-write" as const, effect: "mutation" as const, requireApproval: true };
+  // 渠道后台：allow_all + bypassCompanionApproval + 无交互界面 → 拒绝，不发审批卡
+  const headless = await checkPermission({ ...input, allowPrompt: false, bypassBasePolicy: true, bypassCompanionApproval: true });
+  expect(headless.allowed).toBe(false);
+  expect(state.send).not.toHaveBeenCalled();
+  // 前台：即使是完全访问档位，也要弹审批卡
+  const pending = checkPermission({ ...input, runId: "foreground" });
+  const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  expect(state.send.mock.calls.some(([name]) => name === IPC.PERMISSION_APPROVAL_REQUEST)).toBe(true);
+  cancelPendingApprovalsForRun("foreground");
+  await rejected;
+});
+
+it("requireApproval does not lift a read-only denial", async () => {
+  setCurrentLevel("read-only");
+  const result = await checkPermission({ toolId: "skill_install", toolName: "安装 Skill", toolDescription: "fixture", args: {}, risk: "fs-write", effect: "mutation", requireApproval: true });
+  expect(result.allowed).toBe(false);
+  expect(state.send).not.toHaveBeenCalled();
+});

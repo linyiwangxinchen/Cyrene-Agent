@@ -243,6 +243,8 @@ export async function checkPermission(input: {
   bypassCompanionApproval?: boolean;
   effect?: ToolEffectKind;
   bypassBasePolicy?: boolean;
+  /** 工具声明必须逐次审批：任何档位、allow_all 渠道都不能跳过；无交互界面时直接拒绝。 */
+  requireApproval?: boolean;
 }): Promise<{ allowed: boolean; reason?: string }> {
   if (input.signal?.aborted) throw createAbortError();
   const level = currentLevel;
@@ -251,12 +253,14 @@ export async function checkPermission(input: {
   // 渠道设置中的“允许可用工具”是一个明确的无头执行边界：
   // 不把昔涟 preset/full 或 confirmTools 变成 Web 审批等待。
   // companionToolPolicy 仍先检查 paused/deniedTools，因此撤销能力即时生效。
-  const extra = input.bypassCompanionApproval && companionPolicy === "ask"
+  const extra = input.bypassCompanionApproval && companionPolicy === "ask" && !input.requireApproval
     ? "inherit"
     : companionPolicy;
   if (extra === "deny") return { allowed: false, reason: "昔涟能力限制已暂停或禁止此工具，请在昔涟设置中查看。" };
   const basePolicy = input.bypassBasePolicy ? "allow" : policyFor(level, input.risk);
-  const policy = basePolicy === "deny" ? "deny" : extra === "ask" ? "ask" : basePolicy;
+  const policy = basePolicy === "deny"
+    ? "deny"
+    : extra === "ask" || input.requireApproval ? "ask" : basePolicy;
   console.log(LOG_PREFIX, "checkPermission:", input.toolId, "risk=" + input.risk, "level=" + level, "→", policy);
 
   if (policy === "allow") return { allowed: true };

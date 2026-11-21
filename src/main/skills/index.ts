@@ -11,6 +11,9 @@ import type { SkillEntry } from "./types";
 import { logger, LogTag } from "../logger";
 import { getExternalContentPaths, resolveSkillScanSources, resolveSkillsSnapshotArchivePath } from "../external-content-paths";
 import { installSkillsSnapshot } from "./snapshot-install";
+import { registerSkillManagementTools } from "./skill-management-tools";
+import { installSkillFromGitHub, type InstallSkillResult } from "./skill-installer";
+import type { SkillDirectories } from "./skill-authoring";
 
 const LOG_PREFIX = "[Skills]";
 
@@ -59,6 +62,7 @@ export async function initSkills(): Promise<void> {
   }
 
   registerSkillTools();
+  registerSkillManagementTools({ getDirectories: getSkillDirectories, rescan: rescanSkills });
   logger.info(LogTag.Skills, "scan roots:", sources.map((source) => `${source.source}:${source.directory}`).join(" | "));
   logger.info(LogTag.Skills, `loaded ${map.size} skills:`, Array.from(map.keys()).join(", ") || "(none)");
 }
@@ -123,3 +127,26 @@ export function rescanSkills(): number {
 export { skillRegistry } from "./skill-registry";
 export { buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog } from "./skill-catalog";
 export { parseSlashCommand } from "./skill-commands";
+
+/** 用户 Skill 目录（写入/安装目标）与内置 Skill 目录（只读，禁止同名覆盖）。 */
+export function getSkillDirectories(): SkillDirectories {
+  const paths = getExternalContentPaths();
+  return { userSkillsDir: paths.userSkillDirectories[0], builtinSkillDir: paths.builtinSkillDirectory };
+}
+
+/** 用户级斜杠命令目录 `<userData>/commands`。 */
+export function getUserCommandsDirectory(): string {
+  return path.join(app.getPath("userData"), "commands");
+}
+
+/** 设置页/IPC 发起的安装：用户点击即授权，装完重新扫描。 */
+export async function installSkillForUser(input: {
+  source: string;
+  ref?: string;
+  id?: string;
+  overwrite?: boolean;
+}): Promise<InstallSkillResult> {
+  const result = await installSkillFromGitHub({ ...getSkillDirectories(), ...input });
+  rescanSkills();
+  return result;
+}

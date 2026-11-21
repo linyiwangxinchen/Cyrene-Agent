@@ -427,6 +427,7 @@ async function executeToolCall(
     args,
     risk,
     effect: resolveEffectKind(tool, args),
+    requireApproval: tool.requiresApproval === true,
     runId: ctx?.runId,
   });
   if (!perm.allowed) {

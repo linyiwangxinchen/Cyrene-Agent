@@ -32,9 +32,11 @@ import {
   buildAutoInjectedSkillContext,
   buildAutoInjectedSoulContext,
   skillRegistry,
+  getUserCommandsDirectory,
 } from "../skills";
 import { feelingToExpression } from "../runtime-state";
 import { resolveSlashActivation } from "../skills/slash-activation";
+import { expandLatestUserCommand } from "../skills/file-commands";
 import type { CitaService } from "../cita";
 import type { SocialAtom, SocialExtractionInput } from "../social-context/types";
 import type { ToolDefinition, ToolModeOverrides } from "./tools/registry/tool-registry";
@@ -237,6 +239,10 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       },
       resolveSlashActivation: ((messages, mode, overrides) =>
         resolveSlashActivation(messages as any, mode, overrides)) as BuildOptionsDeps["resolveSlashActivation"],
+      expandFileCommand: (messages, mode, workspaceRoot) => {
+        const expansion = expandLatestUserCommand(messages, { userDir: getUserCommandsDirectory(), workspaceRoot }, mode);
+        return expansion ? { name: expansion.name, source: expansion.source } : null;
+      },
       buildToneInjection: (() => buildToneInjection()) as BuildOptionsDeps["buildToneInjection"],
       buildAlwaysOnContext: ((userText, messages) =>
         buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
