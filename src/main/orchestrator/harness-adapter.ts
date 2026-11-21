@@ -80,6 +80,7 @@ export async function runHarnessWithAdapter(
     assistantTurnId: options.assistantTurnId,
     generatedImageStore: options.generatedImageStore,
     tools,
+    ...(options.deferredToolIds?.length ? { deferredToolIds: options.deferredToolIds } : {}),
     ...(options.initialHarnessState ? { initialState: options.initialHarnessState } : {}),
     vendorConfig,
     config: {

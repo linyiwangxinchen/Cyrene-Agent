@@ -42,6 +42,7 @@ import type {
 import type { ToolOutputRef } from "./tool-output/tool-output-store";
 import { INITIAL_HARNESS_CACHE_STATE, DEFAULT_HARNESS_CONFIG } from "./types";
 import { getHarnessBuiltinToolSpecs } from "./builtin-tools";
+import { collectLoadedToolIdsFromHistory, DeferredToolState, TOOL_SEARCH_TOOL_ID, toolSearchToolSpec } from "./tool-search";
 import type { ToolDispatchContext } from "./tool-dispatcher";
 import { computeTokenBudget, compressForAgentLoop, resolveCompactionRetainTokens, type TokenBudget } from "./compaction";
 import { estimateMessageTokens } from "../context-manager";
@@ -77,10 +78,13 @@ export interface HarnessRun {
   clock: TimeoutClock;
   streamController: StreamController;
   /** 模型可见的完整工具清单（registry + harness built-in）。
-   *  不变量：run 期间固定不变（对前缀缓存友好）；工具集合变化 = 运行边界变化，应开启新 run。 */
+   *  不变量：工具集合不变时 run 期间保持不变（对前缀缓存友好）；浏览器控制阶段切换或
+   *  tool_search 加载按需工具时才变化，并推进缓存周期（tool_catalog_changed）。 */
   allToolSpecs: ToolSpec[];
-  /** 本轮模型与执行器共同允许的 registry 工具集合。 */
+  /** 本轮模型与执行器共同允许的 registry 工具集合（含尚未加载完整规格的按需加载工具）。 */
   currentTools: HarnessInput["tools"];
+  /** 按需加载工具的已加载集合；挂在 run 上，压缩只替换 messages，不影响它。 */
+  deferredTools: DeferredToolState;
   messages: ChatMessage[];
   toolOutputs: ToolOutputRef[];
   cache: HarnessCacheState;
@@ -328,28 +332,10 @@ function createRun(input: HarnessInput): HarnessRun {
     ? deepClone(input.initialState)
     : { todoItems: [], uncertainEffects: [] };
 
-  // 构建 tools 清单：registry 注册的工具 + harness 内置工具
+  // 构建 tools 清单：registry 注册的工具 + harness 内置工具（按需加载工具只含已加载的）
   const currentTools = selectRunTools(input);
-  const registryToolSpecs: ToolSpec[] = currentTools.map((t) => ({
-    name: t.id,
-    description: t.description,
-    parameters: {
-      type: "object" as const,
-      properties: t.inputSchema.properties,
-      required: t.inputSchema.required,
-    },
-  }));
-  const allToolSpecs: ToolSpec[] = [
-    ...registryToolSpecs,
-    ...getHarnessBuiltinToolSpecs({
-      includeInteractive: input.includeInteractiveTools,
-      allowedToolIds: input.allowedBuiltinToolIds,
-      includeTask: Boolean(input.taskExecutor),
-      includeCloseTask: Boolean(input.closeTaskExecutor),
-      openTaskCompanions: input.openTaskCompanions,
-      planState: input.planState,
-    }),
-  ];
+  const deferredTools = createDeferredToolState(input);
+  const allToolSpecs = buildRunToolSpecs(input, currentTools, deferredTools);
 
   // 排他轮（ask_user / submit_plan）分发上下文：submit_plan 交卷需要会话身份
   // （conversationId / runId）驱动状态机与注意力提醒，因此 toolContext 必须在此就位
@@ -420,6 +406,7 @@ function createRun(input: HarnessInput): HarnessRun {
     onToolStarted: recordToolStarted,
     onEffectResolution: recordEffectResolution,
     onTaskState: recordTaskState,
+    deferredTools,
   };
 
   run = {
@@ -430,6 +417,7 @@ function createRun(input: HarnessInput): HarnessRun {
     streamController: new StreamController(),
     allToolSpecs,
     currentTools,
+    deferredTools,
     messages: [...input.messages],
     toolOutputs: [],
     cache: input.initialCache ? { ...input.initialCache } : { ...INITIAL_HARNESS_CACHE_STATE },
@@ -487,27 +475,73 @@ function selectRunTools(input: HarnessInput): HarnessInput["tools"] {
   });
 }
 
+/**
+ * 按需加载工具状态：延迟集合只取 deferredToolIds 与本次运行允许工具的交集（不能扩大权限），
+ * 浏览器控制工具按阶段逐轮切换，不参与延迟。已加载集合从历史重建，中断恢复后不丢失。
+ */
+function createDeferredToolState(input: HarnessInput): DeferredToolState {
+  if (!input.deferredToolIds?.length) return new DeferredToolState([]);
+  const allowed = new Map(input.tools.map((tool) => [tool.id, tool]));
+  const deferredIds = input.deferredToolIds.filter((id) => {
+    const tool = allowed.get(id);
+    return Boolean(tool && !tool.browserControlPhase);
+  });
+  const state = new DeferredToolState(deferredIds);
+  state.load(collectLoadedToolIdsFromHistory(input.messages, new Set(deferredIds)));
+  return state;
+}
+
+function toRegistryToolSpec(tool: HarnessInput["tools"][number]): ToolSpec {
+  return {
+    name: tool.id,
+    description: tool.description,
+    parameters: {
+      type: "object" as const,
+      properties: tool.inputSchema.properties,
+      required: tool.inputSchema.required,
+    },
+  };
+}
+
+/**
+ * 本轮模型可见的工具规格。
+ * 无延迟工具时与原清单一致；有延迟工具时只含常驻 registry 工具、内置工具、tool_search
+ * 与已加载的延迟工具（请求层按名称排序，顺序不影响缓存键）。
+ */
+function buildRunToolSpecs(
+  input: HarnessInput,
+  tools: HarnessInput["tools"],
+  deferred: DeferredToolState,
+): ToolSpec[] {
+  const builtins = getHarnessBuiltinToolSpecs({
+    includeInteractive: input.includeInteractiveTools,
+    allowedToolIds: input.allowedBuiltinToolIds,
+    includeTask: Boolean(input.taskExecutor),
+    includeCloseTask: Boolean(input.closeTaskExecutor),
+    openTaskCompanions: input.openTaskCompanions,
+    planState: input.planState,
+  });
+  if (!deferred.active) return [...tools.map(toRegistryToolSpec), ...builtins];
+  const byId = new Map(tools.map((tool) => [tool.id, tool]));
+  const loaded = deferred.loadedIds()
+    .map((id) => byId.get(id))
+    .filter((tool): tool is HarnessInput["tools"][number] => Boolean(tool));
+  const search = !input.allowedBuiltinToolIds || input.allowedBuiltinToolIds.has(TOOL_SEARCH_TOOL_ID)
+    ? [toolSearchToolSpec]
+    : [];
+  return [
+    ...tools.filter((tool) => !deferred.isDeferred(tool.id)).map(toRegistryToolSpec),
+    ...builtins,
+    ...search,
+    ...loaded.map(toRegistryToolSpec),
+  ];
+}
+
 function refreshRunTools(run: HarnessRun): void {
   const next = selectRunTools(run.input);
-  const nextSpecs: ToolSpec[] = [
-    ...next.map((tool) => ({
-      name: tool.id,
-      description: tool.description,
-      parameters: {
-        type: "object" as const,
-        properties: tool.inputSchema.properties,
-        required: tool.inputSchema.required,
-      },
-    })),
-    ...getHarnessBuiltinToolSpecs({
-      includeInteractive: run.input.includeInteractiveTools,
-      allowedToolIds: run.input.allowedBuiltinToolIds,
-      includeTask: Boolean(run.input.taskExecutor),
-      includeCloseTask: Boolean(run.input.closeTaskExecutor),
-      openTaskCompanions: run.input.openTaskCompanions,
-      planState: run.input.planState,
-    }),
-  ];
+  const nextSpecs = buildRunToolSpecs(run.input, next, run.deferredTools);
+  // 本次请求将发送的规格即"可调用"的依据：同轮先加载再调用的工具按请求时快照拒绝。
+  run.deferredTools.commitVisible();
   const oldShape = JSON.stringify(run.allToolSpecs);
   const nextShape = JSON.stringify(nextSpecs);
   if (oldShape === nextShape) return;

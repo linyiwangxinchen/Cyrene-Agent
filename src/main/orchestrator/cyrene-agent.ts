@@ -155,6 +155,8 @@ export interface CyreneRunOptions {
   tools?: ToolDefinition[];
   /** 本轮冻结的模式能力；bridge 创建的 Run 必须提供。 */
   capabilities?: RunCapabilities;
+  /** 本次运行按需加载的工具 ID（与 toolSystemContent 中的目录分段一致）；缺省 = 不延迟。 */
+  deferredToolIds?: string[];
   /** Harness 是否公布需要桌面交互卡片的内置工具；默认开启。 */
   harnessInteractiveTools?: boolean;
   /** 工具权限结算方式；外部渠道全部开启使用 allow_all 跳过逐项审批。 */

@@ -270,6 +270,11 @@ export interface HarnessInput {
   initialState?: AgentState;
   /** 普通工具列表（从 registry 获取） */
   tools: ToolDefinition[];
+  /**
+   * 按需加载的 registry 工具 ID：只在目录中列名，完整规格需模型调用 tool_search 后才随请求发送。
+   * 只取与 tools 的交集，不能扩大权限；缺省或为空时行为与未引入延迟完全一致。
+   */
+  deferredToolIds?: readonly string[];
   /** 当前 run 是否持有浏览器租约；用于按轮生成浏览器工具清单。 */
   browserControlState?: () => "active" | "inactive";
   /** 厂商适配器 ID（用于 LLM 调用） */

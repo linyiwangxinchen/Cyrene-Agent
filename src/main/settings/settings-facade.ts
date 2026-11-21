@@ -33,6 +33,7 @@ import { getGeneralSettingsPath } from "../settings-store";
 import type { GeneralSettings } from "./general-settings";
 import { DEFAULT_MOSSLAND_TTS_MODEL } from "../../shared/tts-types";
 import type { ToolModeOverrides } from "../orchestrator/tools/registry/tool-registry";
+import { normalizeToolDeferralSettings } from "../orchestrator/tools/registry/tool-deferral";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillModeOverrides } from "../skills/types";
 import { normalizeLspServerOverrides } from "../lsp/server-catalog";
@@ -194,6 +195,7 @@ export function normalizeGeneralSettings(
       ? Math.max(1, Math.min(MAX_PARALLEL_TOOL_CALLS, Math.trunc(numberValue)))
       : DEFAULT_GENERAL_SETTINGS.maxParallelToolCalls;
   };
+  const toolDeferral = normalizeToolDeferralSettings(input?.toolDeferral);
   return {
     plugins: Object.fromEntries(
       Object.entries(input?.plugins ?? {}).filter(
@@ -373,6 +375,7 @@ export function normalizeGeneralSettings(
     ttsMosslandFormat: input?.ttsMosslandFormat === "wav" ? "wav" : "mp3",
     toolModeOverrides: normalizeToolModeOverrides(input?.toolModeOverrides),
     chatToolsEnabled: Boolean(input?.chatToolsEnabled),
+    ...(toolDeferral ? { toolDeferral } : {}),
     skillModeOverrides: normalizeSkillModeOverrides(input?.skillModeOverrides),
     lspServerOverrides: normalizeLspServerOverrides(input?.lspServerOverrides),
     recentProjects: normalizeRecentProjects(input?.recentProjects),
