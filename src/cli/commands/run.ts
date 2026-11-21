@@ -43,7 +43,7 @@ export async function cmdRun(): Promise<number> {
     errLine(
       `cyrene run: no package.json found in ${process.cwd()}. Run cyrene from inside a Cyrene project, or use the desktop installer.`,
     );
-    return 0;
+    return 1;
   }
   return result.code;
 }
