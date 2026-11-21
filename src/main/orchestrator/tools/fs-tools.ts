@@ -15,6 +15,7 @@ import { ToolExecutionError } from "./registry/tool-execution-error";
 import { app } from "electron";
 import { getRunReviewTracker } from "../review/run-review-tracker";
 import { resolveFileAccessPath } from "./file-access";
+import { recordFileKnownContent } from "./file-read-tracker";
 
 const LOG_PREFIX = "[FsTools]";
 
@@ -147,6 +148,8 @@ async function executeReadFile(args: Record<string, unknown>, ctx?: ToolContext)
   };
 
   console.log(LOG_PREFIX, "read_file 完成: lines=" + startLine + ".." + endLine + "/" + totalLines);
+  // 先读后写记录：multi_edit 据此确认模型看过文件当前内容
+  recordFileKnownContent(ctx, filePath, buf);
   return JSON.stringify(result);
 }
 
@@ -417,6 +420,11 @@ async function executeWriteFile(args: Record<string, unknown>, ctx?: ToolContext
       "unknown",
     );
   }
+  // 模型刚写过的内容视为已知，后续 multi_edit 无需重新读取
+  try {
+    recordFileKnownContent(ctx, filePath, fs.readFileSync(filePath));
+  } catch { /* 记录失败只会让 multi_edit 要求重新读取 */ }
+
   // Diff Review 卡片证据：新文件/追加=added，覆盖已有=modified
   // diff 展示统一按 LF 拆行，避免 CRLF 残留到卡片渲染
   const insertions = countLines(content);

@@ -550,7 +550,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
       },
 
       // 工具注册：集中到一个显式入口（依赖沙箱/Git/LSP 就绪）
-      registerAllTools: (services) => registerAllTools({ lspManager: services.lsp, gmailService: services.gmail }),
+      registerAllTools: (services) => registerAllTools({ lspManager: services.lsp, gmailService: services.gmail, socialAtomStore: services.social.store }),
 
       initRag: async () => {
         const modelSettings = loadModelSettings();

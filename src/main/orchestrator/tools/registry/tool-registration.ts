@@ -22,13 +22,15 @@ import { registerLspTool } from "../lsp-tool";
 import "../built-in-tools";
 import { registerReminderTool } from "../reminder-tool";
 import { registerChannelFileTool } from "../channel-file-tool";
+import { registerPersonMemoryTools } from "../person-memory-tools";
+import type { SocialAtomStore } from "../../../social-context/store";
 
 export function syncBuiltInToolToggles(settings: GeneralSettings): void {
   toolRegistry.setEnabled("weather", settings.weatherEnabled);
   toolRegistry.setEnabled("plan_trip", settings.travelEnabled);
 }
 
-export function registerAllTools(deps: { lspManager: LspManager; gmailService?: GmailService }): void {
+export function registerAllTools(deps: { lspManager: LspManager; gmailService?: GmailService; socialAtomStore?: SocialAtomStore }): void {
   registerLspTool(deps.lspManager, toolRegistry);
   registerSearchTextTool();
   registerAstGrepTools();
@@ -52,6 +54,8 @@ export function registerAllTools(deps: { lspManager: LspManager; gmailService?: 
     grep: toolRegistry.getById("search_text")!,
   });
   registerMomentsTools();
+  // 显式记忆工具与私聊长期记忆共用组合根构造的社交原子库
+  if (deps.socialAtomStore) registerPersonMemoryTools(toolRegistry, deps.socialAtomStore);
   registerReminderTool(toolRegistry);
   registerChannelFileTool(toolRegistry);
 

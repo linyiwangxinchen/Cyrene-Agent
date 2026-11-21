@@ -1058,7 +1058,7 @@ export async function buildAgentRunOptions(
     skills: enabledSkills as never[],
     skillIds: new Set((enabledSkills as Array<{ id?: unknown }>).map((skill) => String(skill.id ?? "")).filter(Boolean)),
   };
-  const capabilities = deps.resolveRunCapabilities?.({
+  const resolvedCapabilities = deps.resolveRunCapabilities?.({
     mode: resolvedMode,
     activeSearchBackend,
     toolModeOverrides: styleSettings.toolModeOverrides,
@@ -1066,6 +1066,13 @@ export async function buildAgentRunOptions(
     chatToolsEnabled: styleSettings.chatToolsEnabled === true,
     hasFileAttachments,
   }) ?? fallbackCapabilities;
+  // 私聊专属工具（关于这个人的显式记忆）：群聊与插件运行一律不暴露，子任务沿用同一份能力。
+  const capabilities: RunCapabilities = privateContext
+    ? resolvedCapabilities
+    : (() => {
+      const tools = resolvedCapabilities.tools.filter((tool) => tool.privateContextOnly !== true);
+      return { ...resolvedCapabilities, tools, toolIds: new Set(tools.map((tool) => tool.id)) };
+    })();
   // ⚠️ resolveRunCapabilities 存在时的权威路径：覆盖上面 fallback 组的计算。
   enabledSkills = capabilities.skills;
   skillCatalog = deps.buildSkillCatalog(enabledSkills);

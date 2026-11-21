@@ -22,6 +22,8 @@ import { installMcpServerTool } from "./builtin-tools/install-mcp-tool";
 import { runVerificationTool } from "./builtin-tools/run-verification-tool";
 import { runShellTool } from "./builtin-tools/run-shell-tool";
 import { shellJobTool } from "./builtin-tools/shell-job-tool";
+import { globTool } from "./builtin-tools/glob-tool";
+import { multiEditTool } from "./builtin-tools/multi-edit-tool";
 
 // ── 注册（顺序 = 原 built-in-tools.ts 的字面顺序，勿重排）─────────────
 toolRegistry.register(fetchUrlTool);
@@ -35,3 +37,6 @@ toolRegistry.register(installMcpServerTool);
 logger.info(LogTag.BuiltinTools, "registered: fetch_url / download_file / run_shell / install_mcp_server");
 toolRegistry.register(weatherTool);
 toolRegistry.register(webSearchTool);
+// 工作区文件工具：追加在末尾，不改变既有工具的相对顺序
+toolRegistry.register(globTool);
+toolRegistry.register(multiEditTool);

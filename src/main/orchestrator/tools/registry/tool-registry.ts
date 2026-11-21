@@ -93,6 +93,8 @@ export interface ToolDefinition {
   chatBuiltin?: boolean;
   /** Chat 内只有本轮带附件时才开放的内置只读工具。 */
   requiresFileAttachments?: boolean;
+  /** 只在私聊上下文暴露（关于“这个人”的记忆等）：群聊、插件运行时从本轮工具列表移除。 */
+  privateContextOnly?: boolean;
   // MCP 兼容字段：参数 schema，后续接 MCP 时直接复用
   inputSchema: {
     type: "object";
