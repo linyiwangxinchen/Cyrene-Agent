@@ -15,6 +15,7 @@ import { toolRegistry } from "./registry/tool-registry";
 import { buildReplacedDiff, countLines, finalizeFileChanges } from "./registry/tool-evidence";
 import { applyStrReplaceEdits } from "./str-replace-core";
 import { resolveFileAccessPath } from "./file-access";
+import { recordFileKnownContent } from "./file-read-tracker";
 import { currentUserTimezone } from "./built-in-tools";
 import { resolveTimeoutPolicy } from "../../runtime-policy";
 import { getDateLocale } from "../../locale-context";
@@ -418,6 +419,7 @@ function registerStrReplaceTool(): void {
       }
 
       fs.writeFileSync(filePath, result.newContent, "utf8");
+      recordFileKnownContent(ctx, filePath, result.newContent);
       const size = fs.statSync(filePath).size;
       console.log(
         LOG_PREFIX,

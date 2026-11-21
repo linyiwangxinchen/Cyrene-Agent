@@ -25,6 +25,7 @@ const BUILT_IN_TOOL_IDS = [
   "weather",
   "web_search",
   "glob",
+  "multi_edit",
 ] as const;
 
 describe("built-in-tools 注册快照", () => {
