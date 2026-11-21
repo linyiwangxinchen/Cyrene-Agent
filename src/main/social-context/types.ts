@@ -46,4 +46,14 @@ export type ValidatedSocialAtomOperation =
       targetAtomId: string;
       evidenceTurnId: string;
       evidenceQuote: string;
+    }
+  /** 显式记忆工具：把一条标记为过时（不需要替代内容）。 */
+  | {
+      operation: "retire";
+      targetAtomId: string;
+    }
+  /** 显式记忆工具：按用户要求彻底删除一条。 */
+  | {
+      operation: "delete";
+      targetAtomId: string;
     };

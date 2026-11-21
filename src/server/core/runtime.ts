@@ -132,7 +132,7 @@ export async function startHeadlessCore() {
   await initSandbox();
   const lsp = new LspManager({ getServerOverrides: () => loadGeneralSettings().lspServerOverrides });
   const git = createGitService({ getSession: chatsStore.getSessionRecord, resolveExecutable: () => resolveGitExecutable({ systemCommand: "git", bundledPath: "" }) });
-  registerAllTools({ lspManager: lsp });
+  registerAllTools({ lspManager: lsp, socialAtomStore: social.store });
   const music = bootstrapMusicService(resolveMusicPaths());
   // Desktop-only tools have no target on a headless host. All business tools remain registered.
   for (const id of ["play_live2d_action", "live2d_action", "screenshot", "computer_use"]) if (toolRegistry.getById(id)) toolRegistry.unregister(id);

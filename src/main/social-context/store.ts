@@ -66,6 +66,21 @@ export function createSocialAtomStore(filePath?: string): SocialAtomStore {
     applyOperations(conversationId, operations, now = Date.now()) {
       load();
       for (const operation of operations) {
+        if (operation.operation === "delete") {
+          atoms = atoms.filter((atom) => !(
+            atom.id === operation.targetAtomId && atom.conversationId === conversationId
+          ));
+          continue;
+        }
+        if (operation.operation === "retire") {
+          const target = atoms.find((atom) => (
+            atom.id === operation.targetAtomId
+            && atom.conversationId === conversationId
+            && isActive(atom, now)
+          ));
+          if (target) target.status = "superseded";
+          continue;
+        }
         if (operation.operation === "resolve") {
           const target = atoms.find((atom) => (
             atom.id === operation.targetAtomId

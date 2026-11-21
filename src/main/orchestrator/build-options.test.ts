@@ -112,6 +112,28 @@ describe("build-options", () => {
     }
   });
 
+  it("私聊专属工具只在私聊运行暴露，群聊与插件运行移除", async () => {
+    const deps = createBuildDeps();
+    deps.toolRegistry.getEnabled = () => [
+      { id: "memory_recall", enabled: true, name: "想想记得什么", description: "记忆", chatBuiltin: true, privateContextOnly: true },
+      { id: "Read", enabled: true, name: "Read", description: "读文件" },
+    ];
+    for (const mode of ["chat", "work"] as const) {
+      const input = { sessionId: "memory", mode, executionMode: mode, messages: [{ role: "user", content: "你记得我吗" }] };
+      const ids = (result: Awaited<ReturnType<typeof buildAgentRunOptions>>) => ({
+        capability: [...(result.options.capabilities as { toolIds: ReadonlySet<string> }).toolIds],
+        tools: (result.options.tools as Array<{ id: string }>).map((tool) => tool.id),
+      });
+      expect(ids(await buildAgentRunOptions(input, deps)).capability).toContain("memory_recall");
+      for (const shared of [{ privateRelationshipContext: false }, { promptSource: "plugin-agent" }]) {
+        const result = ids(await buildAgentRunOptions({ ...input, ...shared }, deps));
+        expect(result.capability).not.toContain("memory_recall");
+        expect(result.tools).not.toContain("memory_recall");
+        if (mode === "work") expect(result.tools).toContain("Read");
+      }
+    }
+  });
+
   it("当轮纠正以独立请求上下文交给模型，不混入用户消息或历史", async () => {
     const currentUser = { turnId: "u1", text: "先听我说", visibleContent: "先听我说" };
     const input = {
