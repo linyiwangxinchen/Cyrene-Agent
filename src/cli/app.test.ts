@@ -126,11 +126,64 @@ describe("main: default (subsequent)", () => {
   });
 });
 
-describe("main: placeholder", () => {
-  it("doctor prints the planned line", async () => {
-    const code = await main(["doctor"], VERSION);
-    expect(code).toBe(0);
-    expect(stdoutBuf).toContain("planned for a future release");
+describe("main: unavailable commands", () => {
+  it("init and update say they are not provided and exit 2", async () => {
+    expect(await main(["init"], VERSION)).toBe(2);
+    expect(stderrBuf).toContain("当前版本未提供");
+    expect(stderrBuf).toContain("cyrene config init");
+    stderrBuf = "";
+    expect(await main(["update"], VERSION)).toBe(2);
+    expect(stderrBuf).toContain("当前版本未提供");
+  });
+
+  it("help marks init and update as not provided", async () => {
+    await main(["--help"], VERSION);
+    expect(stdoutBuf).toMatch(/init\s+Not provided/);
+    expect(stdoutBuf).toMatch(/update\s+Not provided/);
+    expect(stdoutBuf).toContain("exec");
+    expect(stdoutBuf).toContain("resume");
+  });
+});
+
+describe("main: run", () => {
+  it("fails with exit 1 outside a project directory", async () => {
+    const previous = process.cwd();
+    process.chdir(tmpHome);
+    try {
+      expect(await main(["run"], VERSION)).toBe(1);
+      expect(stderrBuf).toContain("no package.json found");
+    } finally {
+      process.chdir(previous);
+    }
+  });
+});
+
+describe("main: subcommand help", () => {
+  it.each([
+    ["exec", "Usage: cyrene exec"],
+    ["resume", "Usage: cyrene resume"],
+    ["doctor", "Usage: cyrene doctor"],
+    ["login", "Usage: cyrene login"],
+  ])("%s --help prints its own usage", async (command, expected) => {
+    expect(await main([command, "--help"], VERSION)).toBe(0);
+    expect(stdoutBuf).toContain(expected);
+  });
+
+  it("exec rejects unknown options with exit 2", async () => {
+    expect(await main(["exec", "--bogus", "hi"], VERSION)).toBe(2);
+    expect(stderrBuf).toContain("未知选项：--bogus");
+  });
+
+  it("exec rejects an invalid mode and conflicting flags with exit 2", async () => {
+    expect(await main(["exec", "--mode", "learn", "hi"], VERSION)).toBe(2);
+    expect(await main(["exec", "--session", "a", "--new", "hi"], VERSION)).toBe(2);
+    expect(await main(["exec", "--local", "--server", "http://127.0.0.1:1", "hi"], VERSION)).toBe(2);
+    expect(await main(["exec", "--data-dir", "x", "hi"], VERSION)).toBe(2);
+  });
+
+  it("exec refuses plain HTTP to a remote host before sending anything", async () => {
+    expect(await main(["exec", "--server", "http://example.com", "hi"], VERSION)).toBe(2);
+    expect(stderrBuf).toContain("远程服务器必须使用 HTTPS");
   });
 });
 

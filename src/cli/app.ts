@@ -14,13 +14,17 @@ import {
   cmdDefault,
   cmdHello,
   cmdHelp,
-  cmdPlaceholder,
+  cmdUnavailable,
   cmdUnknown,
   cmdVersion,
   type HandlerCtx,
 } from "./commands/handlers.js";
 import { cmdRun } from "./commands/run.js";
 import { cmdConfig } from "./commands/config.js";
+import { cmdDoctor } from "./commands/doctor.js";
+import { cmdExec } from "./commands/exec.js";
+import { cmdLogin, cmdLogout } from "./commands/login.js";
+import { cmdResume } from "./commands/resume.js";
 
 declare const __CYRENE_VERSION__: string;
 
@@ -36,9 +40,6 @@ function resolveVersion(override?: string): string {
 
 export async function main(argv: readonly string[], versionOverride?: string): Promise<number> {
   const ctx: HandlerCtx = { version: resolveVersion(versionOverride) };
-  if (argv[0] === "config" && argv.some((item) => item === "--help" || item === "-h")) {
-    return cmdConfig([]);
-  }
   const cmd: Command = parseArgv(argv);
   switch (cmd.kind) {
     case "default":
@@ -54,9 +55,20 @@ export async function main(argv: readonly string[], versionOverride?: string): P
     case "run":
       return cmdRun();
     case "config":
-      return cmdConfig(cmd.args);
-    case "placeholder":
-      return cmdPlaceholder(cmd.name);
+      // config's own parser has no help flag; its usage doubles as help.
+      return cmdConfig(cmd.args.some((item) => item === "--help" || item === "-h") ? [] : cmd.args);
+    case "exec":
+      return cmdExec(cmd.args);
+    case "resume":
+      return cmdResume(cmd.args);
+    case "doctor":
+      return cmdDoctor(cmd.args);
+    case "login":
+      return cmdLogin(cmd.args);
+    case "logout":
+      return cmdLogout(cmd.args);
+    case "unavailable":
+      return cmdUnavailable(cmd.name);
     case "unknown":
       return cmdUnknown(cmd.name);
   }

@@ -46,10 +46,22 @@ describe("parseArgv", () => {
     expect(parseArgv(["hello", "-v"])).toEqual({ kind: "version" });
   });
 
-  it("maps doctor/init/update to placeholder", () => {
-    expect(parseArgv(["doctor"])).toEqual({ kind: "placeholder", name: "doctor" });
-    expect(parseArgv(["init"])).toEqual({ kind: "placeholder", name: "init" });
-    expect(parseArgv(["update"])).toEqual({ kind: "placeholder", name: "update" });
+  it("hands every token after exec/resume/doctor/login/logout to the command", () => {
+    expect(parseArgv(["exec", "--mode", "code", "--", "-v 是什么"])).toEqual({ kind: "exec", args: ["--mode", "code", "--", "-v 是什么"] });
+    expect(parseArgv(["exec", "--help"])).toEqual({ kind: "exec", args: ["--help"] });
+    expect(parseArgv(["resume", "abc"])).toEqual({ kind: "resume", args: ["abc"] });
+    expect(parseArgv(["doctor", "--json"])).toEqual({ kind: "doctor", args: ["--json"] });
+    expect(parseArgv(["login", "--server", "https://example.test"])).toEqual({ kind: "login", args: ["--server", "https://example.test"] });
+    expect(parseArgv(["logout"])).toEqual({ kind: "logout", args: [] });
+  });
+
+  it("ignores global flags after the -- terminator", () => {
+    expect(parseArgv(["hello", "--", "--help"])).toEqual({ kind: "hello" });
+  });
+
+  it("maps init/update to unavailable", () => {
+    expect(parseArgv(["init"])).toEqual({ kind: "unavailable", name: "init" });
+    expect(parseArgv(["update"])).toEqual({ kind: "unavailable", name: "update" });
   });
 
   it("returns unknown for unrecognised subcommands", () => {
