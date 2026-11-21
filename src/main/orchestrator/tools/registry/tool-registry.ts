@@ -81,6 +81,8 @@ export interface ToolDefinition {
   enabled: boolean;     // 用户是否启用（对应设置面板的开关）
   // 危险等级：决定该工具在哪些权限档位下可调用；不填默认 "safe"
   risk?: ToolRiskLevel;
+  /** 每次调用都必须由前台用户审批（与权限档位、allow_all 渠道无关）。无交互界面时拒绝。 */
+  requiresApproval?: boolean;
   /** 工具暴露的会话模式白名单。未设置 = 全模式通用（向后兼容，行为不变）。
    *  仅 learn/code/work 三种模式参与过滤；chat 模式不暴露任何工具。
    *  注意：modes 是"默认推荐"，可被 ToolModeOverrides 覆盖。 */

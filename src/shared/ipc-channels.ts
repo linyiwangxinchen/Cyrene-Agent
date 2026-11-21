@@ -386,6 +386,8 @@ export const IPC = {
   SKILL_GET_SUGGESTIONS: "skill:get-suggestions",
   // 重新扫描 user skills 目录，安装/删除 skill 后无需重启即可刷新 UI
   SKILL_RESCAN: "skill:rescan",
+  // 从 GitHub 安装 Skill（owner/repo[/path] 或仓库 URL），装完自动重扫
+  SKILL_INSTALL: "skill:install",
 
   // scheduled tasks
   SCHEDULER_LIST: "scheduler:list",

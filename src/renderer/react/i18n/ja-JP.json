@@ -69,6 +69,8 @@
     "skillSuggestionEmpty": "一致するスキルがありません",
     "skillSuggestionSourceUser": "個人",
     "skillSuggestionSourceBuiltin": "組み込み",
+    "slashCommandSourceUser": "マイコマンド",
+    "slashCommandSourceWorkspace": "ワークスペースコマンド",
     "stickerSelected": "選択済みのスタンプ",
     "removeSticker": "スタンプを削除",
     "removeAttachment": "{{name}} を削除",

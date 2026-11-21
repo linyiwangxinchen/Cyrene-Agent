@@ -78,8 +78,8 @@ const chatApi = {
   toggleMaximize: () => ipcRenderer.send(IPC.CHAT_TOGGLE_MAXIMIZE),
   isMaximized: () => ipcRenderer.invoke(IPC.CHAT_IS_MAXIMIZED),
   getEnabledStickers: () => ipcRenderer.invoke(IPC.STICKERS_GET_ENABLED),
-  getSkillSuggestions: (mode: SkillSuggestionMode): Promise<SkillSuggestionItem[]> =>
-    ipcRenderer.invoke(IPC.SKILL_GET_SUGGESTIONS, { mode }),
+  getSkillSuggestions: (mode: SkillSuggestionMode, sessionId?: string): Promise<SkillSuggestionItem[]> =>
+    ipcRenderer.invoke(IPC.SKILL_GET_SUGGESTIONS, { mode, sessionId }),
   /** 从 dataTransfer.files 或 fileInput.files 提取路径后批量摄入。
    *  路径提取在 preload（webUtils.getPathForFile），避免新版 Electron 中 File.path 不可用的问题。
    *  同时携带 File.type（MIME）：主进程图片判定按「扩展名或 MIME」，与渲染端预览口径一致。 */
@@ -399,6 +399,8 @@ const settingsApi = {
   // 三模适配层：skill-模式覆盖层（UI 设置面板用）
   getSkillCatalog: () => ipcRenderer.invoke(IPC.SKILL_GET_CATALOG),
   rescanSkills: () => ipcRenderer.invoke(IPC.SKILL_RESCAN),
+  installSkill: (payload: { source: string; ref?: string; id?: string; overwrite?: boolean }) =>
+    ipcRenderer.invoke(IPC.SKILL_INSTALL, payload),
   getSkillModeOverrides: () => ipcRenderer.invoke(IPC.SKILL_GET_MODE_OVERRIDES),
   setSkillModeOverride: (skillId: string, mode: string, enabled: boolean) =>
     ipcRenderer.invoke(IPC.SKILL_SET_MODE_OVERRIDE, { skillId, mode, enabled }),

@@ -2,6 +2,8 @@
 const INTERACTIVE_TOOL_IDS = new Set([
   "ask_user", "confirm_uncertain_effect", "enter_plan_mode", "write_plan", "submit_plan",
   "pop_quiz", "learn_exam_create_plan", "learn_exam_publish",
+  // 写入/安装用户 Skill 必须由前台用户审批，渠道后台与定时任务不暴露。
+  "skill_write", "skill_install",
 ]);
 
 export function requiresUserInteraction(tool: { id: string; browserControlPhase?: "entry" | "active" }): boolean {

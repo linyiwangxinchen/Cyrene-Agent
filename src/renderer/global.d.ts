@@ -42,7 +42,7 @@ interface ChatWindowApi {
   getEnabledStickers: () => Promise<Array<{ id: string; src: string }>>;
   onStickersChanged?: (callback: () => void) => () => void;
   /** 重新扫描并读取当前会话模式下可调用的 slash 技能。 */
-  getSkillSuggestions: (mode: SkillSuggestionMode) => Promise<SkillSuggestionItem[]>;
+  getSkillSuggestions: (mode: SkillSuggestionMode, sessionId?: string) => Promise<SkillSuggestionItem[]>;
   /** 读取本地图片并转为 dataUrl 预览；失败返回 ok=false + error */
   getImagePreview: (filePath: string) => Promise<{ ok: boolean; dataUrl?: string; error?: string }>;
   /** 通过系统保存对话框导出模型生成的图片。 */

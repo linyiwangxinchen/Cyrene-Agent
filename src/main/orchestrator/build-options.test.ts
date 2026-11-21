@@ -84,6 +84,52 @@ async function buildAgentRunOptions(
 }
 
 describe("build-options", () => {
+  it("文件命令先于 Skill 斜杠激活展开：工作区命令 > 用户命令，命中后同名 Skill 不再激活", async () => {
+    const { expandLatestUserCommand } = await import("../skills/file-commands")
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-command-build-"))
+    try {
+      const userDir = path.join(root, "commands")
+      const workspace = path.join(root, "ws")
+      fs.mkdirSync(userDir, { recursive: true })
+      fs.mkdirSync(path.join(workspace, ".cyrene", "commands"), { recursive: true })
+      fs.writeFileSync(path.join(userDir, "review.md"), "USER_REVIEW $ARGUMENTS")
+      fs.writeFileSync(path.join(workspace, ".cyrene", "commands", "review.md"), "WORKSPACE_REVIEW $1")
+      const deps = createBuildDeps()
+      deps.getWorkspaceBinding = () => ({ workspaceRoot: workspace, displayName: "ws", boundAt: 1 })
+      deps.expandFileCommand = (messages, mode, workspaceRoot) =>
+        expandLatestUserCommand(messages, { userDir, workspaceRoot }, mode)
+      const seenBySkillActivation: string[] = []
+      deps.resolveSlashActivation = (messages) => {
+        seenBySkillActivation.push(String(messages.filter((m) => m.role === "user").at(-1)?.content ?? ""))
+        return ""
+      }
+
+      const result = await buildAgentRunOptions({
+        sessionId: "ws-session", mode: "work", executionMode: "work",
+        messages: [{ role: "user", content: "/review a.ts" }],
+      }, deps)
+      expect(seenBySkillActivation.at(-1)).toBe("WORKSPACE_REVIEW a.ts")
+      expect(JSON.stringify(result.options.messages)).toContain("WORKSPACE_REVIEW a.ts")
+      expect(JSON.stringify(result.options.messages)).not.toContain("/review a.ts")
+
+      deps.getWorkspaceBinding = () => undefined
+      await buildAgentRunOptions({
+        sessionId: "plain", mode: "work", executionMode: "work",
+        messages: [{ role: "user", content: "/review a.ts" }],
+      }, deps)
+      expect(seenBySkillActivation.at(-1)).toBe("USER_REVIEW a.ts")
+
+      // 没有同名命令时原样交给 Skill 斜杠激活
+      await buildAgentRunOptions({
+        sessionId: "plain", mode: "work", executionMode: "work",
+        messages: [{ role: "user", content: "/cyrene-plan-mode 开始" }],
+      }, deps)
+      expect(seenBySkillActivation.at(-1)).toBe("/cyrene-plan-mode 开始")
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   it("把工作区做事经验交给当前请求，群聊不读取经验", async () => {
     const deps = createBuildDeps();
     const workspace = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-method-prompt-"));

@@ -1,6 +1,6 @@
 import { Sender, Suggestion } from "@ant-design/x";
 import { Popover } from "antd";
-import { AlertTriangle, BookOpen, ChevronDown, ExternalLink, FolderOpen, Package, Plus, ScanLine } from "lucide-react";
+import { AlertTriangle, BookOpen, ChevronDown, ExternalLink, FolderOpen, Package, Plus, ScanLine, Terminal } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "../../../i18n";
@@ -473,7 +473,7 @@ export function ChatComposer({
     skillSuggestionsRef.current = [];
     setActiveSlashSuggestionIndex(0);
     const requestId = ++slashRequestIdRef.current;
-    const request = window.chat?.getSkillSuggestions?.(mode);
+    const request = window.chat?.getSkillSuggestions?.(mode, conversationId);
     if (!request) {
       setSkillSuggestionsLoading(false);
       return;
@@ -512,21 +512,28 @@ export function ChatComposer({
         label: <span className="cy-skill-suggestion__status">{t("composer.skillSuggestionEmpty")}</span>,
       }];
     }
-    return filteredSkillSuggestions.map((skill) => ({
-      value: skill.id,
-      label: (
-        <span className="cy-skill-suggestion__label">
-          <strong>{skill.name || skill.id}</strong>
-          <small>/{skill.id}{skill.description ? ` · ${skill.description}` : ""}</small>
-        </span>
-      ),
-      icon: <Package size={15} aria-hidden="true" />,
-      extra: (
-        <span className="cy-skill-suggestion__source">
-          {t(skill.source === "user" ? "composer.skillSuggestionSourceUser" : "composer.skillSuggestionSourceBuiltin")}
-        </span>
-      ),
-    }));
+    return filteredSkillSuggestions.map((skill) => {
+      const isCommand = skill.kind === "command";
+      const hint = isCommand && skill.argumentHint ? ` ${skill.argumentHint}` : "";
+      const sourceKey = isCommand
+        ? (skill.source === "workspace" ? "composer.slashCommandSourceWorkspace" : "composer.slashCommandSourceUser")
+        : (skill.source === "user" ? "composer.skillSuggestionSourceUser" : "composer.skillSuggestionSourceBuiltin");
+      return {
+        value: skill.id,
+        label: (
+          <span className="cy-skill-suggestion__label">
+            <strong>{skill.name || skill.id}</strong>
+            <small>/{skill.id}{hint}{skill.description ? ` · ${skill.description}` : ""}</small>
+          </span>
+        ),
+        icon: isCommand ? <Terminal size={15} aria-hidden="true" /> : <Package size={15} aria-hidden="true" />,
+        extra: (
+          <span className="cy-skill-suggestion__source">
+            {t(sourceKey)}
+          </span>
+        ),
+      };
+    });
   }, [filteredSkillSuggestions, skillSuggestionsLoading, t]);
 
   const applySkillSuggestion = (skillId: string, selectedFromMenu: boolean) => {
