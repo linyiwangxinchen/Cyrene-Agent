@@ -36,7 +36,9 @@ export const DEFAULT_ALWAYS_LOADED_TOOL_IDS: readonly string[] = [
   "read_file",
   "write_file",
   "list_dir",
+  "glob",
   "str_replace",
+  "multi_edit",
   "apply_patch",
   "search_text",
   "run_shell",
@@ -48,6 +50,10 @@ export const DEFAULT_ALWAYS_LOADED_TOOL_IDS: readonly string[] = [
   "invoke_skill",
   "read_skill_reference",
   "channel_send_file",
+  // 私聊里随时可能用到的显式记忆
+  "memory_remember",
+  "memory_recall",
+  "memory_forget",
 ];
 
 /** 前缀匹配的常驻工具（当前搜索后端的 MiniMax 搜索工具）。 */
