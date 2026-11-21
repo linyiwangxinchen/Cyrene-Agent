@@ -353,6 +353,39 @@ describe("build-options", () => {
     }
   });
 
+  it("合适的时刻提议自拍：注入提示、附参考图并用 medium 质量", async () => {
+    const reference = path.join(os.tmpdir(), `cyrene-offer-ref-${process.pid}.png`);
+    fs.writeFileSync(reference, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
+    try {
+      const deps = createBuildDeps();
+      deps.listXilianReferenceImages = vi.fn(() => [reference]);
+      deps.loadModelSettings = () => ({
+        provider: "ChatGPT", baseUrl: "https://proxy.test/v1", model: "gpt-6-astra", apiKey: "k",
+        explicitTransport: "responses", imageGeneration: { enabled: true, model: "gpt-image-2.5-flare" },
+      });
+      const offer = vi.fn(async (_input: { conversationId: string; userText: string }) => ({ hint: "[这一轮可以发自拍]\n对方在想你" }) as { hint: string } | undefined);
+      deps.offerXilianSelfie = offer;
+      const run = (text: string) => {
+        const currentUser = { turnId: "u1", text, visibleContent: text };
+        return buildAgentRunOptions({ sessionId: "xilian-offer", mode: "chat", executionMode: "chat", currentUser,
+          modelContext: { messages: [{ role: "user", content: text }], uncertainEffects: [], throughSeq: 1 } }, deps);
+      };
+      const offered = await run("好想你呀");
+      expect(offer).toHaveBeenCalledWith(expect.objectContaining({ userText: "好想你呀" }));
+      expect(offered.options.soulRuntimeContext).toContain("[这一轮可以发自拍]");
+      expect(offered.options.settings.imageGeneration).toMatchObject({ enabled: true, quality: "medium" });
+      expect(JSON.stringify(offered.options.messages.at(-1)!.content)).toContain("image_url");
+
+      offer.mockResolvedValueOnce(undefined);
+      const plain = await run("今天吃什么");
+      expect(plain.options.soulRuntimeContext).not.toContain("[这一轮可以发自拍]");
+      expect(plain.options.settings.imageGeneration).not.toHaveProperty("quality");
+      expect(plain.options.messages.at(-1)!.content).toBe("今天吃什么");
+    } finally {
+      fs.rmSync(reference, { force: true });
+    }
+  });
+
   it("把只读的虚拟生活快照放入当前轮上下文", async () => {
     const deps = createBuildDeps();
     deps.buildXilianLifeContext = () => "【昔涟虚拟生活快照】\n地点：星炉台\n正在做：维护一盏小灯";

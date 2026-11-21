@@ -50,6 +50,11 @@ import { buildPersonMemoryContext } from "../social-context/context";
 import type { SocialAtom } from "../social-context/types";
 import type { RelationshipChannel } from "../relationship/relationship-log-core";
 import { isMemoryFollowupAtomOpen, MEMORY_FOLLOWUP_SOURCE, memoryFollowupOpportunities } from "./memory-initiative";
+import { createGeneratedImageStore } from "../chats/generated-image-store";
+import { buildXilianLifeSnapshot, buildXilianSelfiePrompt } from "../xilian-world/life-context";
+import { listXilianReferenceImages } from "../persona/xilian-reference-images";
+import { getSharedSelfieLog, normalizeSelfieFrequency, relationshipAllowsSelfie } from "../persona/xilian-selfie-moments";
+import { generateProactiveSelfie, SELFIE_CAPTION_NOTE, SELFIE_SOURCE, selfieOpportunity, selfieSlot } from "./proactive-selfie";
 
 export interface ProactiveLifecycleOptions {
   loadGeneralSettings: () => GeneralSettings;
@@ -89,6 +94,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   const initiativeStore = new InitiativeOpportunityStore(path.join(app.getPath("userData"), "initiative-opportunities.json"));
   const worldStore: XilianWorldStore = getSharedXilianWorldStore(path.join(app.getPath("userData"), "xilian-world.json"));
   const amphoreus = createAmphoreusRuntime(worldStore);
+  const generatedImageStore = createGeneratedImageStore({ rootDirectory: path.join(app.getPath("userData"), "chat-media", "generated-images") });
+  const selfieLog = getSharedSelfieLog(path.join(app.getPath("userData"), "xilian-selfies.json"));
   let normalConversationBusyCount = 0;
   let proactiveScreenLocked = false;
   let lastMessageActivityAt: number | null = null;
@@ -99,6 +106,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     history: ProactiveHistoryTurn[]; ordinary: ProactiveHistoryTurn[]; worldShare: boolean; careStale?: boolean;
     /** Material for the compose step, frozen with the decision prompt. */
     compose?: { persona: string; personMemory: string; history: ProactiveHistoryTurn[]; timezone: string; replyBurden?: ProactiveCandidate["replyBurden"] };
+    /** 主动自拍：先生成图片，再写配文。 */
+    selfie?: { scene: string; conversationId: string };
   } = { history: [], ordinary: [], worldShare: false };
   let lastOutcome: ProactiveEvaluationStatus["lastOutcome"];
   let proactiveStatus: ProactiveEvaluationStatus = {
@@ -118,6 +127,23 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       replyBurden: opportunity.replyBurden, momentSummary: opportunity.summary,
       ...(opportunity.momentId ? { momentId: opportunity.momentId } : {}),
     };
+  }
+
+  function imageGenerationSettings(): { enabled: boolean; model: string } | undefined {
+    const image = resolveSessionModelSettings(loadModelSettings(), {}).imageGeneration;
+    return image?.enabled && image.model.trim() ? image : undefined;
+  }
+
+  function currentLifeSnapshot(now: number): ReturnType<typeof buildXilianLifeSnapshot> | undefined {
+    try {
+      const timezone = resolveChatContextTimezone(loadUserProfile().timezone);
+      const state = worldStore.advance({ now, timezone });
+      const timeline = worldStore.queryTimeline({ dateKey: state.worldDate, order: "desc", limit: 8 });
+      return buildXilianLifeSnapshot({ state, timeline, now, timezone, world: worldStore.worldView().amphoreus });
+    } catch (error) {
+      console.warn("[XilianSelfie] 生活快照读取失败", error);
+      return undefined;
+    }
   }
 
   function validateInitiative(candidate: ProactiveCandidate): string | undefined {
@@ -150,6 +176,11 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     if (opportunity.source === "amphoreus") {
       const personal = worldStore.worldView().amphoreus?.personal;
       if (!personal?.changes.some(change => change.eventId === opportunity.sourceEventId && String(change.version) === String(opportunity.evidenceVersion))) return "world_source_changed";
+    }
+    if (opportunity.source === SELFIE_SOURCE) {
+      if (!opportunity.conversationId || isGroupBoundConversation(opportunity.conversationId)) return "selfie_private_chat_required";
+      if (!imageGenerationSettings()) return "selfie_image_generation_disabled";
+      if (selfieSlot(getProactiveRuntimeSnapshot().localHour) !== opportunity.evidenceVersion) return "selfie_time_not_suitable";
     }
     if (["inner_life", "shared_interest"].includes(opportunity.source) && worldStore.worldView().amphoreus?.personal?.currentActivity?.eventId !== opportunity.sourceEventId) return "life_activity_changed";
     // 对方已经说了结果（提取器关闭了这条），就不再问。
@@ -307,6 +338,14 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       timezone: snapshot.timezone,
       replyBurden: candidate.replyBurden,
     };
+    if (initiative?.source === SELFIE_SOURCE) {
+      const life = currentLifeSnapshot(snapshot.now);
+      generationShares.selfie = {
+        scene: life ? buildXilianSelfiePrompt(life) : "生成昔涟一张日常生活自拍，单人物、竖构图、脸部清晰。",
+        conversationId: generationDeliveryContext.conversationId ?? historyTarget?.sessionId ?? "proactive-local",
+      };
+      if (!histories.careAllowed) generationShares.careStale = true;
+    }
     const lastUser = histories.ordinary.filter(turn => turn.role === "user").at(-1);
     if (standaloneCare) {
       generationShares.careStale = !companion.relationship.proactiveLifeEnabled || !histories.careAllowed
@@ -446,7 +485,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     if (!getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed) return { kind: "cancelled", reason: "stale_epoch" };
     const sink = conversationJournal.createRunSink({ conversationId: session.id, runId });
     const assistantEntryId = await sink.appendAssistant({
-      message: { role: "assistant", content: input.text },
+      message: { role: "assistant", content: input.text, ...(input.attachments?.length ? { attachments: input.attachments } : {}) },
       roundId: "proactive",
     });
     await conversationJournal.appendPresentationNext(
@@ -502,7 +541,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           if (!current.available || current.recipient.targetId !== recipient.targetId || current.recipient.conversationId !== recipient.conversationId) return { kind: "cancelled" as const, reason: "binding_changed" };
           // CTA 是外发的前置事实：失败重试使用同一 intent、同一 assistant、同一 outbox。
           const sink = conversationJournal.createRunSink({ conversationId, runId, assistantTurnId });
-          const messageId = await sink.appendAssistant({ message: { role: "assistant", content: input.text }, roundId: "proactive" });
+          const messageId = await sink.appendAssistant({ message: { role: "assistant", content: input.text,
+            ...(input.attachments?.length ? { attachments: input.attachments } : {}) }, roundId: "proactive" });
           await conversationJournal.appendPresentationNext(conversationId, messageId, `${runId}:presentation`, {
             content: input.text, channelSource: { channel, chatType: "private" },
             runSnapshot: { runId, status: "terminal", updatedAt: input.intentAt ?? 0 },
@@ -510,6 +550,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           const channelResult = await sendProactiveChannelMessage({
             operationId, assistantTurnId, runId,
             channel, text: input.text, mobileMessageSegmentation: settings.mobileMessageSegmentation,
+            ...(input.attachments?.length ? { imagePaths: input.attachments.map(item => item.filePath) } : {}),
             manager: channelManager, recipient,
             // authoritative assistant already exists; callback never creates a second reply.
             recordDelivery: async () => undefined,
@@ -544,6 +585,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     });
 
     recordProactiveDeliveryMetadata(input, result);
+    if (result.kind === "committed" && input.attachments?.length) {
+      try { selfieLog.recordProactiveSent(input.deliveryContext?.conversationId, Date.now()); } catch (error) { console.warn("[XilianSelfie] 自拍记录写入失败", error); }
+    }
     if (result.kind === "committed") {
       if (!result.deliveryStatus && frozen?.followupId && frozen.conversationId) await getRelationshipStore().settleFollowup(frozen.followupId, frozen.conversationId, input.intentId, Date.now(), "asked");
     }
@@ -596,12 +640,36 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         const decision = await runProactiveModel({ settings: vendorSettings, messages, timeoutMs: 45_000 });
         const compose = generationShares.compose;
         if (decision.kind !== "send" || !compose) return decision;
+        const selfie = generationShares.selfie;
+        let attachments: import("../../shared/generated-image").GeneratedImageAttachment[] | undefined;
+        if (selfie) {
+          const image = settings.imageGeneration?.enabled && settings.imageGeneration.model.trim() ? settings.imageGeneration : undefined;
+          if (!image) return { kind: "drop" };
+          try {
+            const saved = await generateProactiveSelfie({
+              config: vendorSettings, imageModel: image.model, conversationId: selfie.conversationId, store: generatedImageStore,
+              scene: `${selfie.scene}\n她发这张自拍时想说的：${decision.text}`,
+              referencePaths: listXilianReferenceImages([
+                app.getPath("userData"),
+                typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,
+                path.join(process.cwd(), "resources"),
+              ]),
+            });
+            if (!saved) return { kind: "drop" };
+            attachments = [saved];
+            console.log("[XilianSelfie] 主动自拍已生成");
+          } catch (error) {
+            console.warn("[XilianSelfie] 主动自拍生成失败", error);
+            return { kind: "error", reason: "selfie_generation_failed" };
+          }
+        }
         // Step two: write the message as an ordinary turn of this private chat.
         const result = await runProactiveModel({
           settings: vendorSettings,
           messages: buildProactiveComposeMessages({
             persona: compose.persona, personMemory: compose.personMemory, history: compose.history,
-            plan: decision.text, localNow: new Date(), timezone: compose.timezone, replyBurden: compose.replyBurden,
+            plan: selfie ? `${decision.text}\n${SELFIE_CAPTION_NOTE}` : decision.text,
+            localNow: new Date(), timezone: compose.timezone, replyBurden: compose.replyBurden,
           }),
           timeoutMs: 45_000,
           parse: "message",
@@ -611,7 +679,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           || restatesRecentReply(result.text, generationShares.ordinary, Date.now()))) {
           return { kind: "drop" };
         }
-        return result;
+        return result.kind === "send" && attachments ? { ...result, attachments } : result;
       },
       // Model failure is fail-closed: the proactive service cancels this
       // attempt instead of sending a generic canned message.
@@ -730,6 +798,13 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
               }
               if (histories.conversationId && options.listPersonMemory) {
                 opportunities.push(...memoryFollowupOpportunities(options.listPersonMemory(histories.conversationId, ctx.now), ctx.now, histories.conversationId));
+              }
+              if (histories.conversationId && relationshipAllowsSelfie(companion.relationship) && imageGenerationSettings()
+                && selfieLog.canSendProactive(normalizeSelfieFrequency(companion.relationship.selfieFrequency), ctx.now)) {
+                const life = companion.relationship.innerLifeEnabled ? currentLifeSnapshot(ctx.now) : undefined;
+                const selfie = selfieOpportunity({ now: ctx.now, localDate: ctx.localDate, localHour: ctx.localHour,
+                  conversationId: histories.conversationId, location: life?.location, activity: life?.currentActivity });
+                if (selfie) opportunities.push(selfie);
               }
             }
             if (companion.relationship.innerLifeEnabled && histories.conversationId) {

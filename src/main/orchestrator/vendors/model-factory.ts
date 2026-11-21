@@ -108,7 +108,7 @@ export function prepareModelCall(input: {
       // Some OpenAI-compatible Responses gateways reject the documented
       // `auto` enum even though the upstream API accepts it. Use a concrete
       // baseline that works for both the official API and configured relays.
-      size: "1024x1024", quality: "low", partialImages: 0 });
+      size: "1024x1024", quality: imageGeneration.quality ?? "low", partialImages: 0 });
   }
   const choice = policy.tool_choice;
   const named = typeof choice === "object" && choice !== null

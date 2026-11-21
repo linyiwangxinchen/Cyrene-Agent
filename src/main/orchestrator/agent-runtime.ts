@@ -24,6 +24,7 @@ import type { StickerTextEntry } from "../sticker-text-matcher";
 import { buildRelationshipContext, recordRelationshipTurn, getRelationshipStore, type CompanionFeedbackInput } from "../relationship/relationship-log";
 import { buildPersonMemoryContext } from "../social-context/context";
 import { listXilianReferenceImages } from "../persona/xilian-reference-images";
+import { buildSelfieOfferHint, getSharedSelfieLog, normalizeSelfieFrequency, relationshipAllowsSelfie } from "../persona/xilian-selfie-moments";
 import * as momentsStore from "../moments/moments-store";
 import { momentsService } from "../moments/moments-service";
 import { buildMomentsContextBlock } from "../moments/moments-context";
@@ -138,9 +139,19 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
   const xilianWorldStore = getSharedXilianWorldStore(path.join(app.getPath("userData"), "xilian-world.json"));
   const initiativeStore = new InitiativeOpportunityStore(path.join(app.getPath("userData"), "initiative-opportunities.json"));
   const transcriptStore = getConversationTranscriptStore(app.getPath("userData"));
-  const generatedImageStore = createGeneratedImageStore({
+  const generatedImageStoreBase = createGeneratedImageStore({
     rootDirectory: path.join(app.getPath("userData"), "chat-media", "generated-images"),
   });
+  const selfieLog = getSharedSelfieLog(path.join(app.getPath("userData"), "xilian-selfies.json"));
+  // 图片落盘时，把这段时间内的自拍提议或请求记为已发出，用于冷却和上限。
+  const generatedImageStore: typeof generatedImageStoreBase = {
+    ...generatedImageStoreBase,
+    save: async (input) => {
+      const saved = await generatedImageStoreBase.save(input);
+      selfieLog.recordImageSaved(input.conversationId, Date.now());
+      return saved;
+    },
+  };
   const transcriptRunStore = getHarnessRunStore(app.getPath("userData"));
   // Production composition owns the singleton; unit/fallback callers retain
   // the same service contract but fail closed until one is injected.
@@ -269,6 +280,18 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           return "";
         }
       },
+      offerXilianSelfie: async ({ conversationId, userText }) => {
+        const { relationship } = await getRelationshipStore().snapshot();
+        if (!relationshipAllowsSelfie(relationship)) return undefined;
+        const now = Date.now();
+        const trigger = selfieLog.offerForReply({ conversationId, userText, frequency: normalizeSelfieFrequency(relationship.selfieFrequency), now });
+        if (!trigger) return undefined;
+        const timezone = resolveChatContextTimezone(rawDeps.loadUserProfile().timezone);
+        const hour = Number(new Intl.DateTimeFormat("en-US", { timeZone: timezone, hour: "numeric", hourCycle: "h23" }).format(now));
+        console.log(`[XilianSelfie] 本轮可以发自拍 trigger=${trigger}`);
+        return { hint: buildSelfieOfferHint(trigger, hour) };
+      },
+      noteXilianSelfieRequested: (conversationId) => selfieLog.noteRequested(conversationId, Date.now()),
       listXilianReferenceImages: () => listXilianReferenceImages([
         app.getPath("userData"),
         typeof process.resourcesPath === "string" ? process.resourcesPath : undefined,

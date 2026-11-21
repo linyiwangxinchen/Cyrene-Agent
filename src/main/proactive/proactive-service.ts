@@ -22,6 +22,8 @@ export interface ProactiveCommitInput {
   intentId?: string;
   candidate: ProactiveCandidate;
   text: string;
+  /** 主动自拍：随文字一起发出的已落盘图片。 */
+  attachments?: import("../../shared/generated-image").GeneratedImageAttachment[];
   source: "model" | "fallback";
   fallbackPayload?: unknown;
   generationEpoch: number;
@@ -173,6 +175,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       intentId: intent.intentId,
       candidate: intent.candidate,
       text: intent.text,
+      ...(intent.attachments?.length ? { attachments: intent.attachments } : {}),
       source: intent.source,
       ...(intent.fallbackPayload !== undefined ? { fallbackPayload: intent.fallbackPayload } : {}),
       generationEpoch: intent.generationEpoch,
@@ -269,6 +272,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         }
 
         let text: string;
+        let attachments: ProactiveCommitInput["attachments"];
         let source: "model" | "fallback";
         let fallbackPayload: unknown;
         if (result.kind === "silent" || result.kind === "hold" || result.kind === "drop") {
@@ -287,6 +291,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         }
         if (result.kind === "send") {
           text = result.text;
+          attachments = result.attachments?.length ? result.attachments : undefined;
           source = "model";
         } else {
           // 技术失败或无效输出才允许寻找旧预设；Epoch 失效已在上方提前拦截。
@@ -325,6 +330,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           const directResult = await deps.commitMessage({
             candidate,
             text,
+            ...(attachments ? { attachments } : {}),
             source,
             ...(fallbackPayload !== undefined ? { fallbackPayload } : {}),
             generationEpoch,
@@ -347,6 +353,7 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           intentAt: commitSnapshot.now,
           ...(commitSnapshot.localDate ? { localDate: commitSnapshot.localDate } : {}),
           text,
+          ...(attachments ? { attachments } : {}),
           source,
           ...(fallbackPayload !== undefined ? { fallbackPayload } : {}),
           ...(frozenDeliveryTarget ? { deliveryTarget: frozenDeliveryTarget } : {}),

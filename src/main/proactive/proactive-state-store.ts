@@ -4,6 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
 import { normalizeDurableCandidate, type ProactiveCommitIntent, type ProactiveState, type ProactiveDeliveryContext } from "./proactive-types";
+import type { GeneratedImageAttachment } from "../../shared/generated-image";
 
 export function defaultProactiveState(): ProactiveState {
   return {
@@ -48,6 +49,13 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
       ...(typeof context.composedAt === "number" && typeof context.timezone === "string" ? { composedAt: context.composedAt, timezone: context.timezone } : {}),
       ...Object.fromEntries(["conversationId", "sessionId", "targetId", "threadId", "followupId"].filter(key => typeof context[key] === "string").map(key => [key, context[key]])) } : undefined;
   if (value.deliveryContext !== undefined && !deliveryContext) return undefined;
+  // 主动自拍的图片：只接受已落盘的模型图片引用，损坏则整条意图作废，避免发出缺图的配文。
+  const attachments = Array.isArray(value.attachments)
+    ? value.attachments.filter((item): item is GeneratedImageAttachment => isRecord(item) && item.kind === "image" && item.source === "model"
+      && item.status === "done" && typeof item.id === "string" && typeof item.filePath === "string" && typeof item.name === "string"
+      && typeof item.byteLength === "number")
+    : [];
+  if (value.attachments !== undefined && (!Array.isArray(value.attachments) || attachments.length !== value.attachments.length)) return undefined;
   return {
     intentId: value.intentId,
     sequence: value.sequence as number,
@@ -59,6 +67,7 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
     source: value.source,
     ...(value.deliveryTarget === "local" || value.deliveryTarget === "wechat" || value.deliveryTarget === "feishu" ? { deliveryTarget: value.deliveryTarget } : {}),
     ...(deliveryContext ? { deliveryContext } : {}),
+    ...(attachments.length ? { attachments } : {}),
     ...(Object.prototype.hasOwnProperty.call(value, "fallbackPayload") ? { fallbackPayload: value.fallbackPayload } : {}),
   };
 }

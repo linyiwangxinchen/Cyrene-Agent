@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../orchestrator/vendors/types";
+import type { GeneratedImageAttachment } from "../../shared/generated-image";
 import { resolveChatContextTimezone } from "../chat-time-context";
 import { getZonedDateParts } from "./proactive-trigger";
 
@@ -39,7 +40,7 @@ export interface BuildProactiveMessagesInput {
  * rule-reading JSON task.
  */
 export type ProactiveModelDecision =
-  | { kind: "send"; text: string }
+  | { kind: "send"; text: string; attachments?: GeneratedImageAttachment[] }
   | { kind: "hold"; resumeOn: "user_message" | "evidence_change" }
   | { kind: "drop" }
   | { kind: "silent" }

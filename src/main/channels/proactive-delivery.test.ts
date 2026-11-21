@@ -315,4 +315,31 @@ describe("bound proactive recipient selection", () => {
     expect(recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ conversationId: "local-chat" }), "考试准备得怎么样啦？");
     expect(appendHistory).not.toHaveBeenCalled();
   });
+  it("sends a proactive selfie image before its caption", async () => {
+    const adapter = fakeAdapter();
+    const registry = createProactiveChannelRecipientRegistry();
+    registry.remember(incoming("wechat", "wx-1"), "session-wx-1");
+    const result = await sendProactiveChannelMessage({
+      channel: "wechat", text: "刚拍的，给你看看♪", mobileMessageSegmentation: "off",
+      manager: { getAdapter: () => adapter }, recipientRegistry: registry, appendHistory: vi.fn(), appendLog: vi.fn(),
+      imagePaths: ["/tmp/selfie.png"],
+    });
+    expect(result).toEqual({ kind: "committed", deliveredParts: 2, totalParts: 2 });
+    expect(vi.mocked(adapter.send).mock.calls.map(([message]) => message.parts[0].kind)).toEqual(["image", "text"]);
+    expect(vi.mocked(adapter.send).mock.calls[0][0].parts[0]).toEqual({ kind: "image", filePath: "/tmp/selfie.png" });
+  });
+
+  it("cancels a proactive selfie when the channel cannot send images", async () => {
+    const adapter = fakeAdapter();
+    adapter.capability.image = false;
+    const registry = createProactiveChannelRecipientRegistry();
+    registry.remember(incoming("wechat", "wx-1"), "session-wx-1");
+    const result = await sendProactiveChannelMessage({
+      channel: "wechat", text: "刚拍的♪", mobileMessageSegmentation: "off",
+      manager: { getAdapter: () => adapter }, recipientRegistry: registry, appendHistory: vi.fn(), appendLog: vi.fn(),
+      imagePaths: ["/tmp/selfie.png"],
+    });
+    expect(result).toEqual({ kind: "cancelled", reason: "image_unsupported" });
+    expect(adapter.send).not.toHaveBeenCalled();
+  });
 });

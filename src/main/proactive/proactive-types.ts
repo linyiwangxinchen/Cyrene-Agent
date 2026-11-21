@@ -82,6 +82,8 @@ export interface ProactiveCommitIntent {
   intentAt: number;
   localDate?: string;
   text: string;
+  /** 随消息一起发出的已落盘图片（主动自拍）。 */
+  attachments?: import("../../shared/generated-image").GeneratedImageAttachment[];
   source: "model" | "fallback";
   fallbackPayload?: unknown;
   deliveryTarget?: "local" | "wechat" | "feishu";

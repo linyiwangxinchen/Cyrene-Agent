@@ -56,7 +56,10 @@ export interface RelationshipState {
   affection: boolean;
   innerLifeEnabled: boolean;
   proactiveLifeEnabled: boolean;
+  /** 昔涟在合适的时刻主动发自拍的频率；缺省按 normal。 */
+  selfieFrequency?: SelfieFrequency;
 }
+export type SelfieFrequency = "off" | "low" | "normal" | "high";
 export interface AffectState {
   id: string;
   valence: number;
@@ -159,7 +162,7 @@ export interface CompanionSnapshot {
   taskLessons?: CompanionTaskLesson[];
 }
 export type RelationshipPreferences = Pick<RelationshipState,
-  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "learnConversationStyle" | "learnTaskMethods" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled" | "relationshipMode">;
+  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "learnConversationStyle" | "learnTaskMethods" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled" | "relationshipMode" | "selfieFrequency">;
 export type CompanionCommand = { expectedRevision: number } & (
   | { type: "preferences"; patch: Partial<RelationshipPreferences> }
   | { type: "permissions"; patch: Partial<CompanionPermissions> }

@@ -110,6 +110,8 @@ interface ProactiveChannelDeliveryInput {
   /** A target frozen with the model context; never resolve another recipient mid-turn. */
   recipient?: RecentProactiveChannelRecipient;
   recordDelivery?: (recipient: RecentProactiveChannelRecipient, text: string) => Promise<void>;
+  /** 主动自拍等随消息发出的本地图片；先发图，再发文字。 */
+  imagePaths?: readonly string[];
 }
 
 export async function sendProactiveChannelMessage(
@@ -129,8 +131,15 @@ export async function sendProactiveChannelMessage(
     .filter((part): part is Extract<OutgoingPart, { kind: "text" }> => part.kind === "text")
     .map(part => part.text);
   if (texts.length === 0) return { kind: "cancelled", reason: "empty_text" };
+  const images = adapter.capability.image === false ? [] : [...new Set(input.imagePaths ?? [])];
+  if ((input.imagePaths?.length ?? 0) > 0 && images.length === 0) return { kind: "cancelled", reason: "image_unsupported" };
+  const plan: OutgoingPart[] = [
+    ...images.map(filePath => ({ kind: "image" as const, filePath })),
+    ...texts.map(text => ({ kind: "text" as const, text })),
+  ];
 
   const deliveredTexts: string[] = [];
+  let deliveredImages = 0;
   let failureReason = "send_failed";
   let deliveryStatus: "failed" | "unknown" | "cancelled" | undefined;
   if (getChannelRecoveryStore()) {
@@ -139,29 +148,32 @@ export async function sendProactiveChannelMessage(
     const result = await delivery.send({
       channel: input.channel, targetId: recipient.targetId,
       ...(recipient.threadId ? { threadId: recipient.threadId } : {}),
-      parts: texts.map(text => ({ kind: "text" as const, text })),
+      parts: plan,
     }, {
       operationId: input.operationId, conversationId: recipient.conversationId ?? recipient.sessionId,
       assistantTurnId: input.assistantTurnId, runId: input.runId,
       canContinue: () => (!input.canContinue || input.canContinue()) && adapter.getStatus().phase === "running",
     });
-    deliveredTexts.push(...texts.slice(0, result.deliveredParts ?? (result.ok ? texts.length : 0)));
+    const deliveredParts = result.deliveredParts ?? (result.ok ? plan.length : 0);
+    deliveredImages = Math.min(images.length, deliveredParts);
+    deliveredTexts.push(...texts.slice(0, Math.max(0, deliveredParts - images.length)));
     if (!result.ok) { failureReason = result.error; deliveryStatus = result.status; }
-  } else for (const text of texts) {
+  } else for (const part of plan) {
     if (input.canContinue && !input.canContinue()) break;
     if (adapter.getStatus().phase !== "running") break;
     const message: OutgoingMessage = {
       channel: input.channel,
       targetId: recipient.targetId,
       ...(recipient.threadId ? { threadId: recipient.threadId } : {}),
-      parts: [{ kind: "text", text }],
+      parts: [part],
     };
     const result = await delivery.send(message);
     if (!result.ok) { failureReason = result.error; deliveryStatus = result.status; break; }
-    deliveredTexts.push(text);
+    if (part.kind === "text") deliveredTexts.push(part.text);
+    else deliveredImages += 1;
   }
 
-  if (deliveredTexts.length === 0) return { kind: "cancelled", reason: failureReason, ...(deliveryStatus ? { deliveryStatus } : {}) };
+  if (deliveredTexts.length === 0 && deliveredImages === 0) return { kind: "cancelled", reason: failureReason, ...(deliveryStatus ? { deliveryStatus } : {}) };
 
   const deliveredText = deliveredTexts.join("");
   // Delivery already happened: a derived history/log failure must not trigger a resend.
@@ -176,14 +188,14 @@ export async function sendProactiveChannelMessage(
       senderId: recipient.targetId,
       chatId: recipient.targetId,
       text: deliveredText,
-      hasAttachments: false,
+      hasAttachments: deliveredImages > 0,
     });
   } catch { console.warn("[Proactive] delivered message audit write failed"); }
 
   return {
     kind: "committed",
-    deliveredParts: deliveredTexts.length,
-    totalParts: texts.length,
+    deliveredParts: deliveredTexts.length + deliveredImages,
+    totalParts: plan.length,
     ...(deliveryStatus ? { deliveryStatus, error: failureReason } : {}),
   };
 }

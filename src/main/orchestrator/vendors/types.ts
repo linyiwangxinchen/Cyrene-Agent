@@ -45,7 +45,7 @@ export interface VendorConfig {
   /** 当前模型在档案中显式配置的推理规则。 */
   manualReasoning?: ManualReasoningConfig;
   /** 仅主会话调用使用；摘要等辅助请求不读取此配置。 */
-  imageGeneration?: { enabled: boolean; model: string };
+  imageGeneration?: ImageGenerationRequestConfig;
 }
 
 export type OpenAIContentBlock =
@@ -163,9 +163,15 @@ export interface ChatRequest {
   /** 仅供本地缓存键与诊断使用，Adapter 不得将该字段直接发给厂商。 */
   promptLayers?: PromptLayerMetadata;
   /** 仅主会话可设置；摘要、标题等辅助请求保持缺省关闭。 */
-  imageGeneration?: { enabled: boolean; model: string };
+  imageGeneration?: ImageGenerationRequestConfig;
 }
 
+export interface ImageGenerationRequestConfig {
+  enabled: boolean;
+  model: string;
+  /** 缺省 low；昔涟自拍用 medium，细节（耳朵、角饰）更清楚。 */
+  quality?: "low" | "medium" | "high";
+}
 /**
  * Transport-无关的统一流式事件。
  * Reader 层（createSseReader）把 HTTP body 字节流切分成 StreamEvent 列表；

@@ -5,7 +5,7 @@ import { normalizeFollowups, resolveExplicitFollowupReply } from "./followup-sta
 import { classifyCompanionFeedback, type CompanionLearningPreference } from "./companion-learning"
 import { COMPANION_LEARNING_TOPICS, type CompanionLearnedPreference, type CompanionLearningTopic, type CompanionFollowup, type CompanionCommitment, type CompanionCommitmentStatus } from "../../shared/companion"
 import { COMPANION_TASK_KINDS, COMPANION_TASK_METHODS, type CompanionTaskKind, type CompanionTaskLesson, type CompanionTaskMethod } from "../../shared/companion"
-import type { CompanionSnapshot, CompanionCommand, CompanionPermissions, CompanionRecord, RelationshipPreferences, RepairCase, RepairCaseStatus, RelationshipMode } from "../../shared/companion"
+import type { CompanionSnapshot, CompanionCommand, CompanionPermissions, CompanionRecord, RelationshipPreferences, RepairCase, RepairCaseStatus, RelationshipMode, SelfieFrequency } from "../../shared/companion"
 import { isCompanionEvent, sanitizeCompanionEvent, type CompanionEvent } from "../../shared/companion-events"
 import { applyBondEvent, createDefaultBondProgress, normalizeBondProgress, type BondProgressState } from "../../shared/companion-progress"
 import { XILIAN_CHARACTER_PACK } from "../character-packs/xilian-pack"
@@ -317,7 +317,7 @@ function normalizeData(value: unknown): RelationshipLogData {
   const bondProgress = normalizeBondProgress(raw.bondProgress);
   // Validate migrated/persisted values as well as incoming IPC patches. Do not
   // silently reset damaged user data or accidentally disable a saved restriction.
-  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "tasteNotes", "closeness", "paused", "recordHistory", "learnConversationStyle", "learnTaskMethods", "style", "affection", "innerLifeEnabled", "proactiveLifeEnabled", "relationshipMode"]
+  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "tasteNotes", "closeness", "paused", "recordHistory", "learnConversationStyle", "learnTaskMethods", "style", "affection", "innerLifeEnabled", "proactiveLifeEnabled", "relationshipMode", "selfieFrequency"]
     .filter(key => (relationship as unknown as Record<string, unknown>)[key] !== undefined)
     .map(key => [key, (relationship as unknown as Record<string, unknown>)[key]])));
   const permissions = { ...EMPTY_DATA.permissions, ...raw.permissions };
@@ -410,6 +410,9 @@ function validatePatch(patch: unknown): RelationshipPreferencesPatch {
     } else if (key === "relationshipMode") {
       if (!["assistant", "friend", "companion", "partner"].includes(String(value))) throw new Error("未知关系模式");
       result[key] = value as RelationshipMode;
+    } else if (key === "selfieFrequency") {
+      if (!["off", "low", "normal", "high"].includes(String(value))) throw new Error("未知自拍频率");
+      result[key] = value as SelfieFrequency;
     } else throw new Error(`不允许修改字段：${key}`);
   }
   return result;

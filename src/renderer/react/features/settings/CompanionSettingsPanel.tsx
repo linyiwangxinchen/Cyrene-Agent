@@ -60,7 +60,7 @@ export function CompanionSettingsPanel() {
   function accept(value: CompanionSnapshot) {
     setSnapshot(value);
     const r = value.relationship;
-    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion", learnConversationStyle: r.learnConversationStyle ?? true });
+    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion", learnConversationStyle: r.learnConversationStyle ?? true, selfieFrequency: r.selfieFrequency ?? "normal" });
     setPermissions({ ...value.permissions });
   }
   useEffect(() => {
@@ -161,6 +161,7 @@ export function CompanionSettingsPanel() {
           <label className="cy-companion__switch">记住聊天偏好<Switch aria-label="记住聊天偏好" checked={draft.learnConversationStyle ?? true} onChange={value => field("learnConversationStyle", value)} /></label>
           <label className="cy-companion__switch">虚构角色小记<Switch aria-label="虚构角色小记" checked={draft.innerLifeEnabled} onChange={value => field("innerLifeEnabled", value)} /></label>
           <label className="cy-companion__switch">主动关怀<Switch aria-label="主动关怀" checked={draft.proactiveLifeEnabled} onChange={value => field("proactiveLifeEnabled", value)} /></label>
+          <label>主动发自拍<Select aria-label="主动发自拍" value={draft.selfieFrequency ?? "normal"} onChange={value => field("selfieFrequency", value)} options={[{ value: "off", label: "关闭" }, { value: "low", label: "偶尔（每周一两次）" }, { value: "normal", label: "适中（每天最多一次主动）" }, { value: "high", label: "多一点（每天最多两次主动）" }]} /><span>微信私聊里，聊到想念、开心或需要打气时，昔涟会挑合适的时候发自拍。需要在模型设置里开启图片生成；仅限陪伴者和亲密伴侣，且开启亲昵表达。</span></label>
           <label className="cy-companion__wide">昔涟的兴趣与品味<Input.TextArea aria-label="昔涟的兴趣与品味" autoSize={{ minRows: 2, maxRows: 6 }} value={draft.tasteNotes.join("\n")} onChange={e => field("tasteNotes", e.target.value.split("\n"))} placeholder="每行一项，最多 30 项，每项 120 字；例如：喜欢雨天、蓝色和把复杂问题讲清楚" /></label>
           <p className="cy-companion__wide">同时开启偏好设置中的主动聊天后，昔涟会在合适的时候偶尔发一句日常关心，也可以跟进共同目标和重要时刻。重要时刻可写“MM-DD 名称”（每年）或“YYYY-MM-DD 名称”（单次）。精确时间提醒请使用定时任务。</p>
           <p className="cy-companion__wide">角色小记每天最多一条，并明确标记虚构；不会为它单独发送消息。关闭关系记录不影响原始聊天历史和已启用的长期记忆，长期记忆请在“记忆”中设置。</p>
