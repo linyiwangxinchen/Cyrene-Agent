@@ -69,6 +69,21 @@ it("allows an explicitly headless channel to skip companion ask rules without pu
   expect(state.send).not.toHaveBeenCalled();
 });
 
+it.each([
+  { patch: {}, allowed: true, draft: false },
+  { patch: { confirmTools: ["fixture"] }, allowed: false, draft: true },
+  { patch: { deniedTools: ["fixture"], confirmTools: ["fixture"] }, allowed: false, draft: false },
+  { patch: { paused: true }, allowed: false, draft: false },
+  { patch: { preset: "basic" as const }, allowed: false, draft: false },
+])("honors explicit controls for configured background replies: $patch", async ({ patch, allowed, draft }) => {
+  await getRelationshipStore().command({ type: "permissions", expectedRevision: 1, patch: { preset: "full", ...patch } });
+  const result = await checkPermission({ toolId: "fixture", toolName: "fixture", toolDescription: "fixture", args: {},
+    risk: "fs-write", effect: "mutation", allowPrompt: false, bypassBasePolicy: true, bypassCompanionApproval: "preset" });
+  expect(result.allowed).toBe(allowed);
+  expect(Boolean(result.needsApproval)).toBe(draft);
+  expect(state.send).not.toHaveBeenCalled();
+});
+
 it("rejects an approved call if its authorization was revoked while the card was open", async () => {
   const handlers = new Map<string, (...args: any[]) => unknown>();
   registerPermissionIpc({ handle: (name, fn) => { handlers.set(name, fn); }, on() {}, dispose() {}, removeHandler() {} });

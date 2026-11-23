@@ -15,6 +15,7 @@ import { buildToolSystemPrompt } from "./orchestrator/system-prompt-builder";
 import { resolveEffectKind, type ToolDefinition } from "./orchestrator/tools/registry/tool-registry";
 import { checkPermission } from "./permission";
 import type { ConversationJournalService } from "./orchestrator/conversation-journal-service";
+import type { PluginSource } from "../plugins/types";
 
 const DEFAULT_MAX_ROUNDS = 50;
 const DEFAULT_MAX_WALL_MS = 15 * 60_000;
@@ -24,6 +25,7 @@ const executionLedgers = new ExecutionLedgerStore();
 
 export interface PluginAgentRunnerDeps {
   pluginId: string;
+  source?: PluginSource;
   pluginSignal: AbortSignal;
   userDataPath: string;
   agentRuntime: Pick<AgentRuntime, "buildOptions">;
@@ -174,6 +176,21 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
     const maxRounds = positiveInteger(options.maxRounds, DEFAULT_MAX_ROUNDS, "maxRounds", 1_000);
     const maxWallMs = positiveInteger(options.maxWallMs, DEFAULT_MAX_WALL_MS, "maxWallMs", 24 * 60 * 60_000);
     const tools = validateAndMapTools(deps.pluginId, options.tools);
+    const gardenGuard = deps.source === "builtin" && deps.pluginId === "bili-garden" && options.purpose === "bili-guard";
+    const replyId = "bili-garden_propose_interaction";
+    const replyTool = gardenGuard ? tools.find(tool => tool.id === replyId) : undefined;
+    const prepareDraft = replyTool && options.tools.find(tool => tool.id === replyId)?.prepareDraft;
+    // Bind the decision to the exact invocation checked by the dispatcher, including any hook edits.
+    const replyModes = new WeakMap<Record<string, unknown>, "configured" | "draft">();
+    if (replyTool && prepareDraft) {
+      const execute = replyTool.execute;
+      replyTool.execute = (args, ctx) => {
+        const mode = replyModes.get(args);
+        replyModes.delete(args);
+        if (!mode) throw new Error("守护回复缺少本次权限检查");
+        return mode === "draft" ? prepareDraft(args) : execute(args, ctx);
+      };
+    }
     if (options.firstRoundToolId !== undefined && !tools.some(tool => tool.id === options.firstRoundToolId)) {
       throw new Error("首轮指定的工具必须在本次插件工具清单中");
     }
@@ -255,7 +272,13 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
           // pause/denial. Headless goals cannot display a fresh approval card.
           const permission = await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description,
             args, risk: tool.risk ?? "safe", effect: resolveEffectKind(tool, args), runId,
+            ...(gardenGuard && (toolId === replyId || toolId === "bili-garden_finish_report")
+              ? { bypassCompanionApproval: "preset" as const } : {}),
             signal: signals.signal, bypassBasePolicy: true, allowPrompt: false });
+          if (tool === replyTool && prepareDraft && (permission.allowed || permission.needsApproval)) {
+            replyModes.set(args, permission.allowed ? "configured" : "draft");
+            return true;
+          }
           if (!permission.allowed) emitEvent(options.onEvent, { kind: "tool_denied", toolName: toolId,
             reason: permission.reason || "宿主未授权执行该工具" });
           return permission.allowed;

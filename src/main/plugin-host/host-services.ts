@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { PluginLlmService } from "../../plugins/api";
+import type { PluginSource } from "../../plugins/types";
 import type { PluginHostServiceFactory } from "../../plugins/context";
 import type { ChatSession, ChatSessionMeta } from "../../shared/chat-types";
 import {
@@ -27,6 +28,7 @@ export interface PluginHostServicesOptions {
   /** 为每个插件绑定无头目标运行入口；未提供时保持旧宿主兼容。 */
   createAgentRunner?: (input: {
     pluginId: string;
+    source?: PluginSource;
     signal: AbortSignal;
   }) => NonNullable<PluginLlmService["runGoal"]>;
   storage: SafeStorageLike;
@@ -44,8 +46,8 @@ export interface PluginHostServicesOptions {
  */
 export function createHostServiceFactory(options: PluginHostServicesOptions): PluginHostServiceFactory {
   return {
-    createForPlugin({ pluginId, signal, trackResource }) {
-      const runGoal = options.createAgentRunner?.({ pluginId, signal });
+    createForPlugin({ pluginId, source, signal, trackResource }) {
+      const runGoal = options.createAgentRunner?.({ pluginId, source, signal });
       return {
         channels: { has: (channelId) => options.channelManager.has(channelId) },
         llm: {

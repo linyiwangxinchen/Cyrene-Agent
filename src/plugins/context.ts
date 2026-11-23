@@ -8,6 +8,7 @@ import type {
   PluginLlmService,
   PluginManifest,
   PluginPromptProvider,
+  PluginSource,
   PluginTool,
 } from "./types";
 import type { PluginPromptRegistry } from "./prompts";
@@ -37,6 +38,7 @@ const DEP_TO_FIELD: Record<string, keyof PluginDeps> = {
 export interface PluginHostServiceFactory {
   createForPlugin(input: {
     pluginId: string;
+    source?: PluginSource;
     signal: AbortSignal;
     trackResource: PluginResourceTracker;
   }): PluginDeps;
@@ -91,6 +93,7 @@ export function createContext(
   runtime: PluginRuntime,
   eventBus: Pick<PluginEventBus, "on" | "emit">,
   declaredDeps?: PluginManifest["deps"],
+  source: PluginSource = "user",
 ): DisposableContext {
   // dispose 阶段聚合的错误，在释放完成后统一告警。
   const cleanupErrors: unknown[] = [];
@@ -113,6 +116,7 @@ export function createContext(
   const provided: PluginDeps = runtime.hostServices
     ? runtime.hostServices.createForPlugin({
       pluginId: id,
+      source,
       signal: abortController.signal,
       trackResource: tracker,
     })

@@ -1,8 +1,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPluginAgentRunner } from "./plugin-agent";
+import { checkPermission } from "./permission";
 vi.mock("./permission", () => ({ checkPermission: vi.fn(async () => ({ allowed: true })) }));
 
 describe("原生内容插件的共享人格与工具策略", () => {
+  it.each([
+    ["user", "bili-guard"], ["builtin", "bili-discover"],
+  ] as const)("守护的草稿权限不授予 %s 来源的 %s 任务", async (source, purpose) => {
+    const id = "bili-garden_propose_interaction";
+    const prepareDraft = vi.fn();
+    const run = createPluginAgentRunner({ pluginId: "bili-garden", source, pluginSignal: new AbortController().signal,
+      userDataPath: "unused", agentRuntime: { buildOptions: async () => ({ options: { settings: {}, messages: [] } }) } as never,
+      runHarness: async (input: any) => {
+        vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, needsApproval: true });
+        expect(await input.checkPermission(id, {})).toBe(false);
+        expect(vi.mocked(checkPermission).mock.lastCall?.[0].bypassCompanionApproval).toBeUndefined();
+        return { finalAnswer: "", rounds: 0, finalState: { uncertainEffects: [] } } as never;
+      },
+    });
+    await run({ runId: "guard-permission", goal: "回复评论", purpose,
+      tools: [{ id, name: "reply", description: "回复", enabled: true, effectKind: "mutation",
+        inputSchema: { type: "object", properties: {} }, prepareDraft, execute: vi.fn() }] });
+    expect(prepareDraft).not.toHaveBeenCalled();
+  });
   it("沿用 Chat 人格、档案和动态上下文，不注入 Minecraft 或原全局工具清单", async () => {
     const buildOptions = vi.fn(async () => ({ options: {
       settings: { provider: "fixture", model: "fixture", baseUrl: "https://example.test", apiKey: "test" },

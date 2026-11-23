@@ -240,12 +240,12 @@ export async function checkPermission(input: {
   /** 后台续轮没有所属会话的审批界面，遇到 ask 时直接拒绝。 */
   allowPrompt?: boolean;
   /** 明确授权的无头渠道运行跳过昔涟的 ask/confirm 规则；暂停和 deniedTools 仍然优先。 */
-  bypassCompanionApproval?: boolean;
+  bypassCompanionApproval?: boolean | "preset";
   effect?: ToolEffectKind;
   bypassBasePolicy?: boolean;
   /** 工具声明必须逐次审批：任何档位、allow_all 渠道都不能跳过；无交互界面时直接拒绝。 */
   requireApproval?: boolean;
-}): Promise<{ allowed: boolean; reason?: string }> {
+}): Promise<{ allowed: boolean; reason?: string; needsApproval?: boolean }> {
   if (input.signal?.aborted) throw createAbortError();
   const level = currentLevel;
   const profile = getRelationshipStore().getControls().permissions;
@@ -253,7 +253,9 @@ export async function checkPermission(input: {
   // 渠道设置中的“允许可用工具”是一个明确的无头执行边界：
   // 不把昔涟 preset/full 或 confirmTools 变成 Web 审批等待。
   // companionToolPolicy 仍先检查 paused/deniedTools，因此撤销能力即时生效。
-  const extra = input.bypassCompanionApproval && companionPolicy === "ask" && !input.requireApproval
+  const allowConfiguredAction = input.bypassCompanionApproval === true ||
+    (input.bypassCompanionApproval === "preset" && !profile.confirmTools.includes(input.toolId));
+  const extra = allowConfiguredAction && companionPolicy === "ask" && !input.requireApproval
     ? "inherit"
     : companionPolicy;
   if (extra === "deny") return { allowed: false, reason: "昔涟能力限制已暂停或禁止此工具，请在昔涟设置中查看。" };
@@ -271,7 +273,7 @@ export async function checkPermission(input: {
     };
   }
   if (input.allowPrompt === false) {
-    return { allowed: false, reason: "后台续轮无法请求人工审批，请回到原会话继续操作。" };
+    return { allowed: false, needsApproval: true, reason: "后台续轮无法请求人工审批，请回到原会话继续操作。" };
   }
   // ask → 弹审批（不设超时，等用户回应或 run 终态取消）
   const approved = await requestApproval({

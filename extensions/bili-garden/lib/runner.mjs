@@ -9,6 +9,7 @@ function tool(
   required,
   execute,
   effectKind = "read",
+  prepareDraft,
 ) {
   return {
     id: `bili-garden_${id}`,
@@ -21,6 +22,7 @@ function tool(
     ledgerPolicy: "bypass",
     inputSchema: { type: "object", properties, required },
     execute: async (args) => JSON.stringify(await execute(args)),
+    ...(prepareDraft ? { prepareDraft: async (args) => JSON.stringify(await prepareDraft(args)) } : {}),
   };
 }
 const str = (description) => ({ type: "string", description });
@@ -61,13 +63,17 @@ export class GardenRunner {
     const replyFor = item => this.store.actionByKey(`${item.accountUid}:reply:${item.bvid}:${item.rpid}`);
     const attempted = new Set();
     let replyDenied;
-    const propose = async (args) => {
+    const propose = async (args, draftOnly = false) => {
       signal.throwIfAborted();
       if (run.kind === "question") throw new Error("追问不产生对外互动");
       let target;
       if (run.kind === "guard") {
         target = guardItems.find(item => item.bvid === args.bvid && String(item.rpid) === String(args.rpid));
         if (args.kind !== "reply" || !target) throw new Error("守护轮只能回复清单中的原评论");
+        const current = this.config();
+        if (!current.guardOn) throw new Error("评论守护已关闭");
+        if ((target.kind === "at" || !current.guardOwnAll) && !current.guardWhitelist.includes(String(target.uid)))
+          throw new Error("该用户已不在守护白名单");
         if (attempted.has(target)) {
           const action = replyFor(target);
           if (action) return action;
@@ -77,7 +83,7 @@ export class GardenRunner {
         ...args, guard: Boolean(target), expectedAccountUid: target?.accountUid,
       }, run);
       if (target) attempted.add(target);
-      if (!this.config().autoSend || draft.status !== "draft") return draft;
+      if (draftOnly || !this.config().autoSend || draft.status !== "draft") return draft;
       try { return await this.policy.execute(draft.id, { signal, runId: run.id }); }
       catch (error) {
         if (this.store.action(draft.id)?.status === "draft")
@@ -231,6 +237,7 @@ export class GardenRunner {
         ["kind", "reason"],
         propose,
         "mutation",
+        run.kind === "guard" ? args => propose(args, true) : undefined,
       ),
       tool(
         "finish_report",
@@ -366,10 +373,13 @@ export class GardenRunner {
         const remainingMs = deadline - Date.now();
         const remainingRounds = cfg.maxRounds - (result.rounds ?? 0);
         if (remainingMs <= 0 || remainingRounds < 1) break;
+        const replyToMention = (args, draftOnly = false) => propose({
+          kind: "reply", bvid: item.bvid, rpid: String(item.rpid), text: args.text,
+          reason: "回应白名单用户在原评论中的直接提及",
+        }, draftOnly);
         const submit = tool("propose_interaction", "提交对这条 @ 原评论的公开回复。", {
           text: str("给原评论作者的一句话，最多 300 字"),
-        }, ["text"], a => propose({ kind: "reply", bvid: item.bvid, rpid: String(item.rpid),
-          text: a.text, reason: "回应白名单用户在原评论中的直接提及" }), "mutation");
+        }, ["text"], replyToMention, "mutation", args => replyToMention(args, true));
         submit.id = `${this.pluginId}_propose_interaction`;
         const evidence = this.store.get("evidence", item.bvid);
         const retry = await this.llm.runGoal({

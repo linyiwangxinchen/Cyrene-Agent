@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { createRequire } from "node:module";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, copyFile, symlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,6 +11,7 @@ const require = createRequire(import.meta.url),
 const data = await mkdtemp(path.join(os.tmpdir(), "cyrene-garden-agent-")),
   requests = [];
 const responses = process.argv.includes("--responses");
+const confirmReply = process.argv.includes("--confirm-reply");
 const messagesOf = body => body.messages ?? body.input;
 const toolName = tool => tool.function?.name ?? tool.name;
 const model = createServer(async (req, res) => {
@@ -92,9 +93,17 @@ const model = createServer(async (req, res) => {
   );
 });
 await new Promise((r) => model.listen(0, "127.0.0.1", r));
-const id = "bili-garden-fixture",
-  dir = path.join(data, "plugins", id);
+// Stage a private builtin scan root so the actual plugin provenance reaches the permission check.
+const id = "bili-garden", appRoot = path.join(data, "app"),
+  dir = path.join(appRoot, "dist", "plugins", id);
 await mkdir(dir, { recursive: true });
+await mkdir(path.join(appRoot, "dist", "headless"));
+for (const file of ["core.cjs", "conversation-database-worker.js", "knowledge-index-worker.js"])
+  await copyFile(path.resolve("dist/headless", file), path.join(appRoot, "dist", "headless", file));
+for (const name of ["node_modules", "prompts", "assets", "skills"])
+  await symlink(path.resolve(name), path.join(appRoot, name), process.platform === "win32" ? "junction" : "dir");
+await copyFile(path.resolve("package.json"), path.join(appRoot, "package.json"));
+process.env.CYRENE_APP_ROOT = appRoot;
 await mkdir(path.join(data, "prompts"));
 await writeFile(
   path.join(data, "prompts/chat_identity.md"),
@@ -242,6 +251,9 @@ try {
   assert.ok(run.usage.cachedInput > 0);
   assert.equal(snapshot.profiles[0].id, "fixture");
   assert.ok(!JSON.stringify(snapshot.profiles).includes("fixture-local-only"));
+  const controls = await invoke("companion:get");
+  await invoke("companion:update", { type: "permissions", expectedRevision: controls.revision,
+    patch: { preset: "full", confirmTools: confirmReply ? [id + "_propose_interaction"] : [] } });
   await call("config", { guardOn: true, autoSend: true, guardWhitelist: ["456"], quietStart: "00:00", quietEnd: "00:00" });
   const guardStarted = await call("guard");
   assert.equal(guardStarted.started, true);
@@ -254,11 +266,17 @@ try {
   assert.equal(guardRun.status, "success", JSON.stringify({ guardRun, logs }));
   assert.equal(snapshot.guard.lastScan.allowedAt, 1);
   assert.equal(snapshot.actions.length, 1);
-  assert.equal(snapshot.actions[0].status, "sent");
+  assert.equal(snapshot.actions[0].status, confirmReply ? "draft" : "sent");
   assert.equal(snapshot.actions[0].rpid, "100");
   assert.equal(snapshot.actions[0].evidenceSource, "comment");
   assert.ok(requests.some(r => r.tools?.length === 1 && toolName(r.tools[0]).endsWith("_propose_interaction")));
-  assert.match(snapshot.reports.find(r => r.runId === guardStarted.runId).summary, /已发送 1 条/);
+  assert.match(snapshot.reports.find(r => r.runId === guardStarted.runId).summary,
+    confirmReply ? /已发送 0 条，待确认草稿 1 条/ : /已发送 1 条/);
+  if (confirmReply) {
+    const sent = await call("send", { id: snapshot.actions[0].id });
+    assert.equal(sent.status, "sent");
+    assert.equal(sent.receipt.rpid, "200");
+  }
   assert.ok(requests.some(request => JSON.stringify(messagesOf(request)).includes("没有可读字幕/语音")));
   const beforeDuplicate = requests.length;
   assert.equal((await call("guard")).started, false);

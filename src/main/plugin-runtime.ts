@@ -125,8 +125,9 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
             options,
           ),
         },
-        createAgentRunner: ({ pluginId, signal }) => createPluginAgentRunner({
+        createAgentRunner: ({ pluginId, source, signal }) => createPluginAgentRunner({
           pluginId,
+          source,
           pluginSignal: signal,
           userDataPath: app.getPath("userData"),
           agentRuntime: deps.agentRuntime,

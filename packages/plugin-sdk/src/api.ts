@@ -125,6 +125,8 @@ export interface PluginTool {
   effectKind?: "read" | "mutation" | "verification" | "external_side_effect" | "unknown";
   verificationPolicy?: "none" | "artifact" | "code" | "unknown";
   execute(args: Record<string, unknown>, ctx?: PluginToolContext): Promise<string>;
+  /** 内置评论守护需逐项确认时，仅持久化本地草稿，供用户在插件面板确认。 */
+  prepareDraft?(args: Record<string, unknown>): Promise<string>;
 }
 
 export interface PluginChannelCapability {

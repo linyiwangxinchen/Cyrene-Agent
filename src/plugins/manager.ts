@@ -649,6 +649,7 @@ export class PluginManager {
         this.opts.runtime,
         this.eventBus,
         record.manifest.deps,
+        record.source,
       );
       try {
         await plugin.register(ctx);
