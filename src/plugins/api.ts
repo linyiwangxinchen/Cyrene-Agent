@@ -208,6 +208,7 @@ export interface PluginLlmGenerateOptions {
 export type PluginAgentEvent =
   | { kind: "round_started"; round: number }
   | { kind: "tool_started"; toolName: string }
+  | { kind: "tool_denied"; toolName: string; reason: string }
   | { kind: "tool_finished"; toolName: string; ok: boolean };
 
 export interface PluginAgentRunOptions {
@@ -225,6 +226,8 @@ export interface PluginAgentRunOptions {
   checkTool?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
   /** 不注册的冻结工具集；直接复用 PluginTool 完整契约。 */
   tools: ReadonlyArray<PluginTool>;
+  /** 首轮请求指定已声明的工具，后续轮次正常结束。执行仍经过宿主权限检查。 */
+  firstRoundToolId?: string;
   /** 可选任务诊断标签；宿主以 plugin:<id>:<purpose> 标记该次运行与工具上下文。 */
   purpose?: string;
   /** 插件持有的取消信号。 */

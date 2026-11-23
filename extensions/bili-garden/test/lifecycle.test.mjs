@@ -15,6 +15,7 @@ test("卸载后执行宿主清理不会访问已释放的插件实例", async t 
     deps: { llm: { runGoal: async () => {}, listProfiles: async () => [] }, secrets: {} },
     onDispose: cleanup => cleanups.push(cleanup),
     registerIpc: () => {},
+    registerPromptProvider: () => {},
     registerTool: () => {},
   });
   await unregister();

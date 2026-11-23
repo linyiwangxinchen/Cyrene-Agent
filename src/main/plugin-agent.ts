@@ -174,6 +174,9 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
     const maxRounds = positiveInteger(options.maxRounds, DEFAULT_MAX_ROUNDS, "maxRounds", 1_000);
     const maxWallMs = positiveInteger(options.maxWallMs, DEFAULT_MAX_WALL_MS, "maxWallMs", 24 * 60 * 60_000);
     const tools = validateAndMapTools(deps.pluginId, options.tools);
+    if (options.firstRoundToolId !== undefined && !tools.some(tool => tool.id === options.firstRoundToolId)) {
+      throw new Error("首轮指定的工具必须在本次插件工具清单中");
+    }
     const label = diagnosticLabel(deps.pluginId, options.purpose);
 
     const deadline = deps.createDeadline?.(maxWallMs) ?? AbortSignal.timeout(maxWallMs);
@@ -239,6 +242,7 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
         usage.cachedInput += reported.cachedInput ?? 0;
       },
       includeInteractiveTools: false,
+      ...(options.firstRoundToolId ? { firstRoundToolId: options.firstRoundToolId, allowedBuiltinToolIds: new Set<string>() } : {}),
       planState: undefined,
       taskExecutor: undefined,
       checkPermission: async (toolId, args) => {
@@ -249,9 +253,12 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
           if (!tool) return false;
           // Preserve the plugin's existing grants, but honor a user's additional
           // pause/denial. Headless goals cannot display a fresh approval card.
-          return (await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description,
+          const permission = await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description,
             args, risk: tool.risk ?? "safe", effect: resolveEffectKind(tool, args), runId,
-            signal: signals.signal, bypassBasePolicy: true, allowPrompt: false })).allowed;
+            signal: signals.signal, bypassBasePolicy: true, allowPrompt: false });
+          if (!permission.allowed) emitEvent(options.onEvent, { kind: "tool_denied", toolName: toolId,
+            reason: permission.reason || "宿主未授权执行该工具" });
+          return permission.allowed;
         }
         catch { return false; }
       },

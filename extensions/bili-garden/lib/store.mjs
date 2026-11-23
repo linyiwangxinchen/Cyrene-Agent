@@ -169,10 +169,8 @@ export class GardenStore {
       .all(accountUid, accountUid).map(row => ({ id: row.id, ...JSON.parse(row.data) }));
   }
   draft({ idem, day, runId = null, kind, ...data }) {
-    const old = this.db
-      .prepare("SELECT id FROM actions WHERE idem=?")
-      .get(idem);
-    if (old) return this.action(old.id);
+    const old = this.actionByKey(idem);
+    if (old) return old;
     const id = randomUUID(),
       at = this.now();
     this.db
@@ -183,6 +181,10 @@ export class GardenStore {
   action(id) {
     const r = this.db.prepare("SELECT * FROM actions WHERE id=?").get(id);
     return r ? { ...JSON.parse(r.data), ...r, data: undefined } : null;
+  }
+  actionByKey(idem) {
+    const row = this.db.prepare("SELECT id FROM actions WHERE idem=?").get(idem);
+    return row ? this.action(row.id) : null;
   }
   actions(limit = 200) {
     return this.db

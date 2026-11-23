@@ -12,6 +12,12 @@ import { createHash } from "node:crypto";
 
 const PYPI_INDEX = "https://pypi.org/simple/";
 const ALIYUN_INDEX = "https://mirrors.aliyun.com/pypi/simple/";
+const biliIdFields = new Set(["id", "uid", "mid", "rpid", "root", "root_id", "parent"]);
+export function parseWorkerMessage(line) {
+  return JSON.parse(line, (key, value, context) =>
+    biliIdFields.has(key) && typeof value === "number" && !Number.isSafeInteger(value)
+      ? context.source : value);
+}
 const ASR_PACKAGES = [
   "faster-whisper>=1.2.1,<2",
   "yt-dlp",
@@ -400,7 +406,7 @@ export class PythonRuntime {
         buffer = buffer.slice(end + 1);
         let m;
         try {
-          m = JSON.parse(line);
+          m = parseWorkerMessage(line);
         } catch {
           continue;
         }

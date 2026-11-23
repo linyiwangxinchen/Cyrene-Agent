@@ -60,6 +60,7 @@ export async function callLLM(
   onReasoningDelta?: (delta: string) => void,
   onTextDelta?: (delta: string) => void,
   onRetryStatus?: (status: ModelRetryStatus) => void,
+  firstRoundToolId?: string,
 ): Promise<ChatResponse> {
   const adapter = getAdapterForConfig(vendorConfig);
   const composed = composePromptLayers(promptLayers, messages);
@@ -68,6 +69,7 @@ export async function callLLM(
     model: vendorConfig.model,
     messages: composed.messages,
     tools: normalizeToolSpecsForCache(tools),
+    ...(firstRoundToolId ? { toolChoiceIntent: { mode: "must_call", toolName: firstRoundToolId } as const } : {}),
     stream: true,
     ...(requestMaxTokens !== undefined ? { maxTokens: requestMaxTokens } : {}),
     promptLayers: composed.metadata,

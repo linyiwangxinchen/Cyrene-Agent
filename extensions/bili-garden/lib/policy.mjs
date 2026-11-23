@@ -1,5 +1,12 @@
 import { localClock, videoId } from "./config.mjs";
 const riskPattern = /-352|-412|-799|-509|风控|risk/i;
+function replyId(value) {
+  if (typeof value === "number" && !Number.isSafeInteger(value))
+    throw new Error("旧记录的楼层 ID 精度不足，请重新 @ 昔涟");
+  const id = String(value || "0");
+  if (!/^\d+$/.test(id)) throw new Error("评论楼层 ID 无效");
+  return Number.isSafeInteger(Number(id)) ? Number(id) : id;
+}
 export function invitation(text) {
   const s = String(text || "").trim();
   return (
@@ -29,12 +36,14 @@ export class InteractionPolicy {
     if (input.kind !== "reply" || !input.guard) return false;
     const pending = this.store.get("guard", `${accountUid}:${input.rpid}`);
     return Boolean(pending && pending.kind === "at" && pending.bvid === bvid
-      && pending.status === "pending" && String(pending.text || "").trim());
+      && pending.status === "pending");
   }
   async draft(input, run) {
     const config = this.config(),
       account = await this.account();
     if (!account.loggedIn) throw new Error("请先登录");
+    if (input.expectedAccountUid && input.expectedAccountUid !== account.uid)
+      throw new Error("登录账号已变更，请重新扫描评论");
     const kind = String(input.kind),
       allowed = ["comment", "reply", "dm", "like", "fav"];
     if (!allowed.includes(kind)) throw new Error("互动类型无效");
@@ -93,7 +102,7 @@ export class InteractionPolicy {
       pending?.status === "pending" &&
       pending.attempts <= 3
     ) {
-      return this.store.updateAction(action.id, "draft", { text, reason });
+      return this.store.updateAction(action.id, "draft", { text, reason, error: null });
     }
     return action;
   }
@@ -201,13 +210,14 @@ export class InteractionPolicy {
       args = {
         bvid: a.bvid,
         text: a.text,
-        rpid: Number(a.rpid) || 0,
-        root: Number(a.root) || 0,
+        rpid: replyId(a.rpid),
+        root: a.guard ? 0 : replyId(a.root),
       };
-      if (a.guard)
-        args.root =
-          Number(this.store.get("guard", `${a.accountUid}:${a.rpid}`).root) ||
-          0;
+      if (a.guard) {
+        const target = this.store.get("guard", `${a.accountUid}:${a.rpid}`);
+        args.rpid = replyId(target.rpid);
+        args.root = replyId(target.root);
+      }
       else if (config.commentMode === "invited") args.root = 0;
       if (a.kind === "reply" && !args.rpid)
         throw new Error("回复缺少目标评论 ID");

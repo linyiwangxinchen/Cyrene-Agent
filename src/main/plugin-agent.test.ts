@@ -130,7 +130,7 @@ describe("plugin-agent", () => {
     vi.mocked(checkPermission).mockResolvedValueOnce({ allowed: false, reason: "paused" });
     expect(await input.checkPermission("minecraft-bot_goto", { x: 0, y: 0, z: 0 })).toBe(false);
     expect(checkPermission).toHaveBeenLastCalledWith(expect.objectContaining({ bypassBasePolicy: true, allowPrompt: false, effect: "mutation" }));
-    expect(events).toEqual([]);
+    expect(events).toEqual([{ kind: "tool_denied", toolName: "minecraft-bot_goto", reason: "paused" }]);
     expect(result).toEqual({
       text: "木头已收集。",
       terminal: { status: "success", externalEffectsMayContinue: false },

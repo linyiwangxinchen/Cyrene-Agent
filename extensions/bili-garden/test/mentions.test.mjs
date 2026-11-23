@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { GardenStore } from "../lib/store.mjs";
 import { GardenService } from "../lib/service.mjs";
+import { parseWorkerMessage } from "../lib/python.mjs";
 
 const BV = "BV17x411w7KC";
 function setup(t, { call, llm = {}, config = {} } = {}) {
@@ -26,6 +27,93 @@ function setup(t, { call, llm = {}, config = {} } = {}) {
   return { service, store, advance: () => { now += 11 * 60000; } };
 }
 const mention = (rpid = "100", uid = "456") => ({ bvid: BV, rpid, uid, root_id: 0, text: "@昔涟 你在吗？" });
+
+function scanWith(at, reply) {
+  return async (name, args) => {
+    if (name === "bili_user_videos") return { videos: [] };
+    if (name === "bili_guard_scan") return { at, comments: [] };
+    assert.equal(name, "bili_reply");
+    return reply(args);
+  };
+}
+
+test("楼中楼 @ 缺少原文时，Python 返回的大整数仍准确送达原楼", async t => {
+  const message = parseWorkerMessage('{"result":{"rpid":9007199254740993,"root_id":9007199254740995}}');
+  const at = { ...mention(), text: "", ...message.result };
+  const sent = [];
+  const { service, store } = setup(t, { call: scanWith([at], args => {
+    sent.push(args); return { success: true, rpid: "999" };
+  }), llm: { runGoal: async options => {
+    if (options.firstRoundToolId) await options.tools[0].execute({ text: "我在，你想聊什么？" });
+    return { terminal: { status: "success" } };
+  } } });
+  const { runId } = await service.dispatch("guard"); await service.active.promise;
+  assert.equal(store.run(runId).status, "success");
+  assert.deepEqual(sent.map(args => [args.rpid, args.root]), [["9007199254740993", "9007199254740995"]]);
+});
+
+test("部分 @ 已回复而模型用文字收尾时，只补交遗漏的原楼，报告按回执生成", async t => {
+  const sent = [], goals = [];
+  const { service, store } = setup(t, {
+    call: scanWith([mention(), { ...mention("101"), root_id: "99" }], args => {
+      sent.push(args); return { success: true, rpid: String(500 + sent.length) };
+    }),
+    llm: { runGoal: async options => {
+      goals.push(options.runId);
+      const submit = options.tools.find(tool => tool.name === "propose_interaction");
+      if (options.firstRoundToolId) {
+        assert.equal(options.firstRoundToolId, submit.id);
+        assert.deepEqual(options.tools.map(tool => tool.id), [submit.id]);
+        await submit.execute({ text: "我在呀，你想聊哪一段？", rpid: "777", bvid: "BV1JcnW6pEFT", root: "888" });
+      } else {
+        await submit.execute({ kind: "reply", bvid: BV, rpid: "100", text: "我在呢。", reason: "回应原楼中的直接呼唤" });
+      }
+      return { text: "我已经回复了。", terminal: { status: "success" }, rounds: 2, usage: { input: 10, output: 2 } };
+    } },
+  });
+  const { runId } = await service.dispatch("guard"); await service.active.promise;
+  assert.deepEqual(goals, [runId, runId + "-at-101"]);
+  assert.deepEqual(sent.map(a => [a.bvid, a.rpid, a.root]), [[BV, 100, 0], [BV, 101, 99]]);
+  assert.equal(store.run(runId).status, "success");
+  assert.equal(store.run(runId).usage.input, 20);
+  assert.match(store.get("report", runId).summary, /已发送 2 条/);
+  assert.equal((await service.dispatch("guard")).started, false);
+  assert.equal(sent.length, 2);
+});
+
+for (const outcome of ["draft", "uncertain", "denied", "text"]) {
+  test(`@ 补交回复按实际结果结算：${outcome}`, async t => {
+    let sends = 0, goals = 0;
+    const { service, store } = setup(t, { config: { autoSend: outcome !== "draft" },
+      call: scanWith([mention()], () => { sends++; return {}; }),
+      llm: { runGoal: async options => {
+        goals++;
+        if (outcome === "denied")
+          options.onEvent({ kind: "tool_denied", toolName: "bili-garden_propose_interaction", reason: "宿主权限已暂停" });
+        else if (options.firstRoundToolId && outcome !== "text") {
+          const submission = options.tools[0].execute({ text: "我看到你叫我啦。" });
+          if (outcome === "uncertain") await assert.rejects(submission, /成功回执/);
+          else await submission;
+        }
+        return { terminal: { status: "success" }, text: "运行小结：已回复。" };
+      } },
+    });
+    const { runId } = await service.dispatch("guard"); await service.active.promise;
+    assert.equal(goals, outcome === "denied" ? 1 : 2);
+    assert.equal(sends, outcome === "uncertain" ? 1 : 0);
+    if (outcome === "draft") {
+      assert.equal(store.run(runId).status, "success");
+      assert.match(store.get("report", runId).summary, /已发送 0 条，待确认草稿 1 条/);
+      assert.equal(store.actions()[0].text, "我看到你叫我啦。");
+    } else {
+      assert.equal(store.run(runId).status, "failed");
+      assert.match(store.run(runId).error, { uncertain: /成功回执/, denied: /宿主权限已暂停/, text: /未提交回复工具/ }[outcome]);
+      assert.equal(store.get("report", runId), null);
+    }
+    if (["draft", "uncertain"].includes(outcome)) assert.equal((await service.dispatch("guard")).started, false);
+    else assert.equal(store.pendingGuard("123", 3).length, 1);
+  });
+}
 
 test("UP 视频列表失败不阻断其他视频中的白名单 @，扫描结果可见", async t => {
   const calls = [];
@@ -139,4 +227,20 @@ test("模型没有处理 @ 时不能用空报告伪装成功", async t => {
   assert.equal(store.runs()[0].status, "failed");
   assert.match(store.runs()[0].error, /未处理/);
   assert.equal(store.pendingGuard("123", 3).length, 1);
+});
+
+test("历史明确失败的 @ 在仅草稿模式重试后清除旧失败原因", async t => {
+  const { service, store } = setup(t, { config: { autoSend: false },
+    call: scanWith([mention()], () => assert.fail("草稿模式不可发出")),
+    llm: { runGoal: async options => {
+      if (options.firstRoundToolId) await options.tools[0].execute({ text: "这次看到啦！" });
+      return { terminal: { status: "success" } };
+    } },
+  });
+  const old = store.draft({ idem: `123:reply:${BV}:100`, day: "2026-11-01", kind: "reply", rpid: "100", bvid: BV, accountUid: "123", guard: true });
+  store.updateAction(old.id, "failed", { error: "上次平台拒绝" });
+  const { runId } = await service.dispatch("guard"); await service.active.promise;
+  assert.equal(store.run(runId).status, "success");
+  assert.equal(store.action(old.id).text, "这次看到啦！");
+  assert.equal(store.action(old.id).error, null);
 });

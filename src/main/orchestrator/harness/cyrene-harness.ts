@@ -682,6 +682,7 @@ async function callRoundLLM(run: HarnessRun, promptLayers: PromptLayers, roundId
         if (visibleDelta) run.input.onEvent?.({ type: "candidate_text_delta", roundId, delta: visibleDelta });
       },
       (status) => run.input.onEvent?.({ type: "model_retry", status }),
+      run.rounds === 0 ? run.input.firstRoundToolId : undefined,
     );
     if (response.usage) {
       try { run.input.onModelUsage?.(response.usage); } catch { /* 用量观察不能中断模型结果提交。 */ }

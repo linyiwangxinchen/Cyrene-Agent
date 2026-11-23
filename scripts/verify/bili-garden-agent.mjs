@@ -10,26 +10,26 @@ const require = createRequire(import.meta.url),
   { createWebServer } = require("../../dist/server/server/index.js");
 const data = await mkdtemp(path.join(os.tmpdir(), "cyrene-garden-agent-")),
   requests = [];
+const responses = process.argv.includes("--responses");
+const messagesOf = body => body.messages ?? body.input;
+const toolName = tool => tool.function?.name ?? tool.name;
 const model = createServer(async (req, res) => {
   let text = "";
   for await (const c of req) text += c;
   const body = JSON.parse(text);
   requests.push(body);
-  const names = body.tools?.map((t) => t.function.name) ?? [],
-    toolMessages = body.messages.filter((m) => m.role === "tool");
-  const guard = JSON.stringify(body.messages).includes("本轮是评论守护");
+  const names = body.tools?.map(toolName) ?? [],
+    toolMessages = messagesOf(body).filter(m => m.role === "tool" || m.type === "function_call_output");
+  const guard = JSON.stringify(body).includes("本轮是评论守护");
+  const recovery = names.length === 1 && names[0].endsWith("_propose_interaction");
   let name, args;
-  if (toolMessages.length === 0) {
+  if (recovery && !toolMessages.length) {
+    name = names[0];
+    args = { text: "我是昔涟，我在呀。你想聊哪一段？" };
+  } else if (!recovery && toolMessages.length === 0) {
     name = names.find((n) => n.endsWith("_read_video"));
     args = { bvid: guard ? "BV17x411w7KC" : "BV1JcnW6pEFT" };
-  } else if (guard && toolMessages.length === 1) {
-    name = names.find((n) => n.endsWith("_propose_interaction"));
-    args = { kind: "reply", bvid: "BV17x411w7KC", rpid: "100", reason: "回应白名单用户的直接提问",
-      text: "我是昔涟，我在呀。这条视频暂时没有可读字幕，你想聊哪一段？" };
-  } else if (guard && toolMessages.length === 2) {
-    name = names.find((n) => n.endsWith("_finish_report"));
-    args = { items: [], summary: "已回复原评论并说明无法读取视频" };
-  } else if (toolMessages.length === 1) {
+  } else if (!recovery && !guard && toolMessages.length === 1) {
     name = names.find((n) => n.endsWith("_finish_report"));
     args = {
       items: [
@@ -47,6 +47,25 @@ const model = createServer(async (req, res) => {
     };
   }
   res.writeHead(200, { "Content-Type": "text/event-stream" });
+  if (responses) {
+    assert.equal(req.url, "/v1/responses");
+    const content = "春天的一点小发现，留给你。";
+    const id = String(requests.length);
+    const item = name
+      ? { type: "function_call", id: "fc_" + id, call_id: "call_" + id, name, arguments: JSON.stringify(args), status: "completed" }
+      : { type: "message", id: "msg_" + id, role: "assistant", status: "completed", content: [{ type: "output_text", text: content, annotations: [] }] };
+    const response = { id: "resp_" + id, model: body.model, created_at: 1, status: "completed", output: [item],
+      usage: { input_tokens: 100, output_tokens: 12, input_tokens_details: { cached_tokens: 80 }, output_tokens_details: { reasoning_tokens: 0 } } };
+    const event = (type, fields) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`);
+    event("response.created", { response: { id: response.id, model: response.model, created_at: 1 } });
+    event("response.output_item.added", { output_index: 0, item: { ...item, status: "in_progress", ...(name ? { arguments: "" } : { content: [] }) } });
+    if (name) event("response.function_call_arguments.delta", { item_id: item.id, output_index: 0, delta: item.arguments });
+    else event("response.output_text.delta", { item_id: item.id, output_index: 0, content_index: 0, delta: content });
+    event("response.output_item.done", { output_index: 0, item });
+    event("response.completed", { response });
+    res.end();
+    return;
+  }
   const chunk = (delta, finish_reason = null) =>
     res.write(
       `data: ${JSON.stringify({ id: "fixture", model: body.model, choices: [{ index: 0, delta, finish_reason }] })}\n\n`,
@@ -119,7 +138,7 @@ await writeFile(
           provider: "ChatGPT（OpenAI）",
           apiKey: "fixture-local-only",
           baseUrl: `http://127.0.0.1:${model.address().port}/v1`,
-          explicitTransport: "openai",
+          explicitTransport: responses ? "responses" : "openai",
           model: "fixture-model",
           models: ["fixture-model"],
         },
@@ -191,8 +210,11 @@ try {
   await handle.startChannels();
   const enabled = await invoke("plugins:set-enabled", id, true);
   assert.equal(enabled.ok, true, JSON.stringify(enabled));
-  const call = (command, args = {}) =>
-    invoke(`plugin:${id}:garden`, command, args);
+  const call = async (command, args = {}) => {
+    const response = await invoke("plugins:panel:invoke", id, "garden", [command, args]);
+    assert.ok(response.ok, JSON.stringify(response));
+    return response.data;
+  };
   const started = await call("run", { bvid: "BV1JcnW6pEFT" });
   assert.equal(started.started, true);
   let snapshot;
@@ -207,13 +229,13 @@ try {
   assert.ok(snapshot.memories.some((m) => m.text === "喜欢阳台园艺"));
   assert.ok(
     requests.some((r) =>
-      JSON.stringify(r.messages).includes("GARDEN_CUSTOM_PERSONA_MARKER"),
+      JSON.stringify(r).includes("GARDEN_CUSTOM_PERSONA_MARKER"),
     ),
     "custom Chat persona missing",
   );
   assert.ok(
     requests.every(
-      (r) => !JSON.stringify(r.messages).includes("你是 Minecraft"),
+      (r) => !JSON.stringify(r).includes("你是 Minecraft"),
     ),
   );
   assert.ok(run.usage.input > 0);
@@ -235,7 +257,9 @@ try {
   assert.equal(snapshot.actions[0].status, "sent");
   assert.equal(snapshot.actions[0].rpid, "100");
   assert.equal(snapshot.actions[0].evidenceSource, "comment");
-  assert.ok(requests.some(request => JSON.stringify(request.messages).includes("没有可读字幕/语音")));
+  assert.ok(requests.some(r => r.tools?.length === 1 && toolName(r.tools[0]).endsWith("_propose_interaction")));
+  assert.match(snapshot.reports.find(r => r.runId === guardStarted.runId).summary, /已发送 1 条/);
+  assert.ok(requests.some(request => JSON.stringify(messagesOf(request)).includes("没有可读字幕/语音")));
   const beforeDuplicate = requests.length;
   assert.equal((await call("guard")).started, false);
   assert.equal(requests.length, beforeDuplicate);

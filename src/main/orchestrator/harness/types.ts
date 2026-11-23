@@ -272,6 +272,8 @@ export interface HarnessInput {
   initialState?: AgentState;
   /** 普通工具列表（从 registry 获取） */
   tools: ToolDefinition[];
+  /** Headless goals may request an available tool on their first model turn. */
+  firstRoundToolId?: string;
   /**
    * 按需加载的 registry 工具 ID：只在目录中列名，完整规格需模型调用 tool_search 后才随请求发送。
    * 只取与 tools 的交集，不能扩大权限；缺省或为空时行为与未引入延迟完全一致。
