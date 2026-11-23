@@ -7,7 +7,7 @@ const root = path.resolve(
 );
 /** Copy only distributable sources, never environments, tests or local data. */
 export async function stageBundledPlugins(destination) {
-  for (const id of ["bili-garden"]) {
+  for (const id of ["bili-garden", "tieba-garden"]) {
     const source = path.join(root, "extensions", id);
     const manifest = JSON.parse(
       await readFile(path.join(source, "manifest.json"), "utf8"),

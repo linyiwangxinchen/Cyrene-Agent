@@ -510,6 +510,11 @@
           button("导出当天", reportExport({ day: r.day })),
         ),
       );
+    if (d.expressions?.length) {
+      box.append(h("h2", {}, "从视频学到的表达"), ...d.expressions.map(s => h("div",{class:"entry"},
+        h("strong",{},s.quote), h("p",{},s.scene), h("small",{},s.source),
+        button("忘记表达",safely(()=>action("expression-delete",{id:s.id},"已忘记这条表达"))))));
+    }
     box.append(h("div", { class: "section-head" }, h("h2", {}, "记住的小事")));
     box.append(
       d.memories.length
@@ -664,6 +669,7 @@
       "自动运行与时间",
       [
         ["autoRun", "开启自动发现", "checkbox"],
+        ["learnExpressions", "从视频和评论学说话，供私聊参考", "checkbox"],
         [
           "timezone",
           "时区",

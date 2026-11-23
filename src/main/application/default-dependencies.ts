@@ -171,7 +171,7 @@ import { configureNodeRequestProxy } from "../network/node-request-proxy";
 import { startCore } from "./core-bootstrap";
 import { startBackground } from "./background";
 import { normalizePluginObservation } from "../proactive/plugin-observation";
-import { recordCompanionEvent } from "../relationship/relationship-log";
+import { getRelationshipStore, recordCompanionEvent } from "../relationship/relationship-log";
 import { installUpdateShutdownFallback, type UpdateLifecycleLike } from "./electron-lifecycle";
 import type { ApplicationDependencies } from "./application";
 
@@ -631,7 +631,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           scheduleSummaryTurn: (input) => scheduleSummaryTurn(input),
           scheduleWikiTurn: (input) => scheduleWikiTurn(input),
           socialAtomStore: services.social.store,
-          buildPluginPromptContext: (input) => pluginPromptRegistry.build(input),
+          buildPluginPromptContext: (input, scope) => pluginPromptRegistry.build(input, input.privateCompanion && input.conversationId ? getRelationshipStore().blockedExpressions(input.conversationId, input.userText, scope) : undefined),
           publishPluginHostEvent: (event, payload) => pluginManager
             ? pluginManager.publishHostEvent(event, payload)
             : Promise.resolve(),

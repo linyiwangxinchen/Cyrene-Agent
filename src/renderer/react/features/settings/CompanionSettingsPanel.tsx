@@ -3,6 +3,24 @@ import { Alert, Button, Input, Modal, Select, Slider, Spin, Switch, Tabs, Tag } 
 import type { CompanionCommand, CompanionPermissions, CompanionSnapshot, RelationshipPreferences, CompanionFollowup, RepairCase, CompanionCommitment, CompanionLearnedPreference, CompanionTaskLesson } from "../../../../shared/companion";
 import "./companion-settings.css";
 
+import { desireValue, type DesireSample } from "../../../../shared/companion";
+
+function DesireHistory({ samples }: { samples: readonly DesireSample[] }) {
+  const [selected, setSelected] = useState<string>();
+  const ids = [...new Set(samples.map(s => s.conversationId))].reverse();
+  const id = selected && ids.includes(selected) ? selected : ids[0];
+  const recent = samples.filter(s => s.conversationId === id).slice(-12);
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => { const timer = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(timer); }, []);
+  const value = desireValue(recent.at(-1), now);
+  return <details><summary>近期亲密状态</summary>
+    {ids.length > 0 && <Select aria-label="查看会话的亲密状态" value={id} onChange={setSelected} options={ids.map(value => ({ value, label:value }))}/>}
+    <p>当前性致 <meter value={value} min={0} max={100}/> {value}/100</p>
+    {recent.slice().reverse().map(s => <p key={s.turnId}>{new Date(s.at).toLocaleString()} · {({warm:"亲密互动",rest:"休息",stop:"收住话题",interest:"表达想念"})[s.reason]} <meter min={0} max={100} value={s.value}/> {s.value}/100</p>)}
+    {!recent.length && <p>尚无亲密互动记录</p>}
+  </details>;
+}
+
 const stages = { new: "初识", familiar: "熟悉", close: "亲密", long_term: "长期陪伴" };
 const bondChapters = { prologue: "序章", first_steps: "初步熟悉", shared_routines: "共同日常", shared_projects: "共同项目", long_term: "长期羁绊" };
 const bondMilestones = { "bond.prologue": "序章", "bond.first_steps": "初步熟悉", "bond.shared_routines": "共同日常", "bond.shared_projects": "共同项目", "bond.long_term": "长期羁绊" };
@@ -35,7 +53,7 @@ const confirmationCopy = {
   reset_bond_progress: { title: "重置羁绊进度", detail: "羁绊章节、进度和奖励记录会恢复到序章；关系偏好、工具授权和聊天记录不变。" },
   clear_history: { title: "删除关系记录", detail: "删除所选关系记录及其派生线索。原始聊天与其他记忆仍保留。" },
   delete_record: { title: "删除关系记录", detail: "删除所选关系记录及其派生线索。原始聊天与其他记忆仍保留。" },
-  forget_learned_preference: { title: "忘记聊天偏好", detail: "昔涟会忘掉这段聊天里的这项偏好。" },
+  forget_learned_preference: { title: "忘记聊天偏好", detail: "昔涟会移除这项已记住的聊天偏好。" },
   forget_task_method: { title: "忘记做事经验", detail: "昔涟会清除这项方法在对应工作区积累的经验。" },
 };
 type ConfirmCommand = Extract<Command, { type: keyof typeof confirmationCopy }>;
@@ -60,7 +78,7 @@ export function CompanionSettingsPanel() {
   function accept(value: CompanionSnapshot) {
     setSnapshot(value);
     const r = value.relationship;
-    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion", learnConversationStyle: r.learnConversationStyle ?? true, selfieFrequency: r.selfieFrequency ?? "normal" });
+    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, desireEnabled: r.desireEnabled ?? false, desireInitiative: r.desireInitiative ?? false, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion", learnConversationStyle: r.learnConversationStyle ?? true, learnPrivateExpressions: !!r.learnPrivateExpressions, selfieFrequency: r.selfieFrequency ?? "normal" });
     setPermissions({ ...value.permissions });
   }
   useEffect(() => {
@@ -155,9 +173,15 @@ export function CompanionSettingsPanel() {
           <label>关系契约<Select aria-label="关系契约" value={draft.relationshipMode} onChange={value => field("relationshipMode", value)} options={[{ value: "assistant", label: "事务助手：清晰、可执行" }, { value: "friend", label: "朋友：平等、自然" }, { value: "companion", label: "陪伴者：事务与日常兼顾" }, { value: "partner", label: "亲密伴侣：以边界和同意为前提" }]} /></label>
           <label className="cy-companion__wide">相处程度 · {Math.round(draft.closeness * 100)} / 100<Slider aria-label="相处程度" min={0} max={100} value={Math.round(draft.closeness * 100)} onChange={value => field("closeness", value / 100)} /><span>由你选择，不因聊天次数或离开时间自动增减；不自动授予工具权限。</span></label>
           {snapshot.bondProgress && <div className="cy-companion__wide cy-companion__bond-progress"><strong>羁绊进度 · {bondChapters[snapshot.bondProgress.chapter]}</strong><span>{snapshot.bondProgress.score} 点；只会因明确的共同经历增加，不会因为沉默下降。</span><div role="progressbar" aria-label="羁绊进度" aria-valuemin={0} aria-valuemax={600} aria-valuenow={Math.min(600, snapshot.bondProgress.score)} style={{ height: 8, borderRadius: 999, background: "var(--rb-border-subtle, #ece8ec)", overflow: "hidden" }}><span style={{ display: "block", height: "100%", width: `${Math.min(100, snapshot.bondProgress.score / 6)}%`, background: "var(--rb-accent, #ff5b8a)" }} /></div><span>已解锁：{snapshot.bondProgress.unlockedMilestones.map(item => bondMilestones[item as keyof typeof bondMilestones] ?? item).join("、")}</span>{snapshot.bondProgress.recentAwards.length > 0 && <span>最近奖励：{snapshot.bondProgress.recentAwards.slice(-3).reverse().map(award => `+${award.delta} ${award.summary}`).join("；")}</span>}<Button size="small" danger disabled={busy} onClick={() => setConfirm({ type: "reset_bond_progress" })}>重置羁绊进度</Button></div>}
+          {draft.relationshipMode === "partner" && <div>
+            <label className="cy-companion__switch">伴侣性欲状态<Switch aria-label="伴侣性欲状态" disabled={!draft.affection} checked={!!draft.desireEnabled} onChange={v=>field("desireEnabled",v)} /></label>
+            {draft.affection && draft.desireEnabled && <><label className="cy-companion__switch">允许在私聊时主动调情<Switch aria-label="主动调情" checked={!!draft.desireInitiative} onChange={v=>field("desireInitiative",v)} /></label>
+            <DesireHistory samples={snapshot?.desireHistory ?? []} /></>}
+          </div>}
           <label className="cy-companion__switch">自然的亲昵表达<Switch aria-label="自然的亲昵表达" checked={draft.affection} onChange={value => field("affection", value)} /></label>
           <label className="cy-companion__switch">暂停关系模拟及主动关怀<Switch aria-label="暂停关系模拟及主动关怀" checked={draft.paused} onChange={value => field("paused", value)} /></label>
           <label className="cy-companion__switch">记录本轮关系线索<Switch aria-label="记录本轮关系线索" checked={draft.recordHistory} onChange={value => field("recordHistory", value)} /></label>
+          <label className="cy-companion__switch">跨对话学习说话习惯<Switch checked={!!draft.learnPrivateExpressions} onChange={v=>field("learnPrivateExpressions",v)} /></label>
           <label className="cy-companion__switch">记住聊天偏好<Switch aria-label="记住聊天偏好" checked={draft.learnConversationStyle ?? true} onChange={value => field("learnConversationStyle", value)} /></label>
           <label className="cy-companion__switch">虚构角色小记<Switch aria-label="虚构角色小记" checked={draft.innerLifeEnabled} onChange={value => field("innerLifeEnabled", value)} /></label>
           <label className="cy-companion__switch">主动关怀<Switch aria-label="主动关怀" checked={draft.proactiveLifeEnabled} onChange={value => field("proactiveLifeEnabled", value)} /></label>
@@ -169,7 +193,7 @@ export function CompanionSettingsPanel() {
           <div className="cy-companion__actions cy-companion__wide"><Button type="primary" loading={busy} onClick={() => void command({ type: "preferences", patch: { ...draft, sharedGoals: lines(draft.sharedGoals.join("\n")), milestones: lines(draft.milestones.join("\n")), boundaries: lines(draft.boundaries.join("\n")), tasteNotes: lines(draft.tasteNotes.join("\n")) } })}>保存相处偏好</Button><Button danger disabled={busy} onClick={() => setConfirm({ type: "reset_relationship" })}>重置关系</Button></div>
           <section className="cy-companion__wide" aria-labelledby="cy-companion-learned-preferences">
             <h3 id="cy-companion-learned-preferences">已记住的聊天偏好</h3>
-            <p>昔涟会把你对聊天方式的反馈记在那段私聊里。关闭“记住聊天偏好”并保存后，她会停止学习和使用这些偏好。暂停关系模拟或关闭关系记录时也一样。</p>
+            <p>开启“跨对话学习说话习惯”后，昔涟也会在你新开的私聊中沿用常用说法、接话语气和新反馈。下面显示偏好的来源会话。关闭“记住聊天偏好”并保存后，她会停止学习和使用这些偏好。暂停关系模拟或关闭关系记录时也一样。</p>
             {snapshot.learnedPreferences?.length ? snapshot.learnedPreferences.map(item => {
               const session = sessionName(item.conversationId);
               const label = learnedPreferenceLabels[item.topic];

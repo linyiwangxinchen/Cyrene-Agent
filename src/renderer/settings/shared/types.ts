@@ -200,6 +200,7 @@ export interface ObsidianVaultConfig {
 
 export interface MemoryPanelApi {
   getData: () => Promise<MemoryPanelPayload>;
+  getGraph: () => Promise<import("../../../shared/memory-graph").MemoryGraph>;
   getSummaryMemory: () => Promise<MemorySummaryPayload | null>;
   listWikiPages: (request?: import("../../../shared/wiki-memory-types").WikiPageListRequest) => Promise<import("../../../shared/wiki-memory-types").WikiPageListResult>;
   searchWiki: (request: import("../../../shared/wiki-memory-types").WikiSearchRequest) => Promise<import("../../../shared/wiki-memory-types").WikiPageListResult>;

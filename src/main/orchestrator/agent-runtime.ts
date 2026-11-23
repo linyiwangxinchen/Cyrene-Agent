@@ -106,7 +106,7 @@ export interface AgentRuntimeDeps {
   buildSummaryMemoryContext?: (conversationId: string) => Promise<{ stablePrompt: string; runtimeContext: string }>;
   scheduleSummaryTurn?: (input: Parameters<typeof scheduleSummaryTurn>[0]) => void;
   scheduleWikiTurn?: (input: Parameters<typeof scheduleWikiTurn>[0]) => void;
-  buildPluginPromptContext: (input: PluginPromptBuildInput) => Promise<string>;
+  buildPluginPromptContext: (input: PluginPromptBuildInput, speechScope?: string) => Promise<string>;
   publishPluginHostEvent: <T>(event: string, payload: T) => Promise<void>;
   /** 工具完成事件发布入口；缺省不发布（早期装配与测试场景）。 */
   publishToolFinished?: (event: ToolFinishedInput) => void;
@@ -124,6 +124,7 @@ export interface AgentRunFinishedContext {
   runId?: string;
   assistantEntryId?: string;
   privateRelationshipContext?: boolean;
+  speechScope?: string;
   userTurnId?: string;
   companionFeedback?: CompanionFeedbackInput;
 }
@@ -355,7 +356,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         return (await rawDeps.chatsStore.getWorkspaceBinding(conversationId));
       },
       buildSummaryMemoryContext: rawDeps.buildSummaryMemoryContext,
-      buildPluginPromptContext: (input) => rawDeps.buildPluginPromptContext(input),
+      buildPluginPromptContext: (input, scope) => scope ? rawDeps.buildPluginPromptContext(input, scope) : rawDeps.buildPluginPromptContext(input),
       // 权威轨迹上下文（CTA Phase 1）：桌面端与 bridge 共用同一 userData 根下的单例 store
       buildModelContext: (conversationId, retainTokens) => buildModelContext({
         store: transcriptStore,
@@ -431,6 +432,8 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         context.channel as ChannelId | undefined,
         context.conversationId,
         { runId: context.runId, source: context.source, mode: context.mode,
+          speechScope: context.speechScope,
+          companionTurnId: context.speechScope && (terminalStatus === undefined || terminalStatus === "success") && (context.mode === "chat" || (context.source === "channel" && ["wechat","qq"].includes(context.channel ?? ""))) && context.privateRelationshipContext !== false ? context.userTurnId : undefined,
           privateRelationshipContext: context.privateRelationshipContext,
           assistantEntryId: context.assistantEntryId, userTurnId: context.userTurnId,
           ...(companionFeedback ? { companionFeedback } : {}),

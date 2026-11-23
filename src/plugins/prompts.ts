@@ -22,8 +22,17 @@ interface PromptEntry {
 export interface PluginPromptRegistry {
   register(ownerId: string, provider: PluginPromptProvider, signal: AbortSignal): void;
   unregister(ownerId: string, providerId: string): boolean;
-  build(input: PluginPromptBuildInput): Promise<string>;
+  build(input: PluginPromptBuildInput, blockedExpressions?: readonly string[]): Promise<string>;
+  listExpressions(): import("../shared/memory-graph").ExpressionSample[];
   clear(): void;
+}
+
+function conversationCue(text: string): string | undefined {
+  if (/认真|急救|救命|去世|生病|难受|崩溃/u.test(text)) return;
+  if (/太好了|通过了|搞定了|成功了|终于.+了|好开心/u.test(text)) return "庆祝";
+  if (/笑死|哈哈|好好笑|绷不住|太搞笑/u.test(text)) return "接梗";
+  if (/没想到|居然|竟然|意想不到/u.test(text)) return "惊讶";
+  if (/有点紧张|给我打气|怕搞砸|为我加油/u.test(text)) return "鼓励";
 }
 
 function fullProviderId(ownerId: string, providerId: string): string {
@@ -36,7 +45,11 @@ async function resolveProvider(entry: PromptEntry, input: PluginPromptBuildInput
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
     const content = await Promise.race([
-      Promise.resolve(entry.provider.provide({ ...input, signal: entry.signal })),
+      Promise.resolve(entry.provider.provide({
+        ...input,
+        ...(entry.provider.privateCompanionOnly && input.privateCompanion && { conversationCue: conversationCue(input.userText) }),
+        signal: entry.signal,
+      })),
       new Promise<never>((_, reject) => {
         timeoutHandle = setTimeout(() => {
           reject(new Error(`提示词 Provider 超时（${PLUGIN_PROMPT_PROVIDER_TIMEOUT_MS}ms）`));
@@ -103,10 +116,11 @@ export function createPluginPromptRegistry(): PluginPromptRegistry {
       return entries.delete(fullProviderId(ownerId, providerId));
     },
 
-    async build(input) {
+    async build(input, blockedExpressions = []) {
       // 先拍快照再并行执行：结果仍按注册顺序拼接，运行中增删不会改变本轮内容。
       const snapshot = [...entries.values()].filter((entry) => {
         if (entry.signal.aborted) return false;
+        if (entry.provider.privateCompanionOnly && (input.source !== "conversation" || !input.privateCompanion)) return false;
         // 场景匹配：未声明 sources 的 Provider 只参与既有场景（向后兼容）。
         if (!(entry.provider.sources ?? LEGACY_PROMPT_SOURCES).includes(input.source)) return false;
         // moments-post 没有会话模式：是否生效仅由 sources 决定，绕过 modes 过滤（评审 ①）。
@@ -120,6 +134,7 @@ export function createPluginPromptRegistry(): PluginPromptRegistry {
       for (let index = 0; index < snapshot.length; index += 1) {
         const content = contents[index];
         if (!content) continue;
+        if (snapshot[index].provider.privateCompanionOnly && blockedExpressions.some(word => content.includes(word))) continue;
         const fullId = fullProviderId(snapshot[index].ownerId, snapshot[index].provider.id);
         const separator = blocks.length > 0 ? "\n\n---\n\n" : "";
         const header = `[插件上下文：${fullId}]\n`;
@@ -139,6 +154,21 @@ export function createPluginPromptRegistry(): PluginPromptRegistry {
       return blocks.join("");
     },
 
+    listExpressions() {
+      const samples: import("../shared/memory-graph").ExpressionSample[] = [];
+      for (const {ownerId, provider, signal} of entries.values()) {
+        if (signal.aborted || !provider.listExpressions || !["bili-garden","tieba-garden"].includes(ownerId)) continue;
+        try {
+          for (const row of provider.listExpressions().slice(0,500)) {
+            if (typeof row.quote !== "string" || typeof row.scene !== "string" || !Number.isFinite(row.at)) continue;
+            const url = new URL(row.source);
+            if (url.protocol !== "https:" || !["www.bilibili.com","tieba.baidu.com"].includes(url.hostname)) continue;
+            samples.push({...row, id:ownerId + ":" + row.id, quote:row.quote.slice(0,64), scene:row.scene.slice(0,100)});
+          }
+        } catch { /* Inactive/unavailable sources contribute no nodes. */ }
+      }
+      return samples;
+    },
     clear() {
       entries.clear();
     },

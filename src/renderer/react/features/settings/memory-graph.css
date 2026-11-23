@@ -1,0 +1,64 @@
+.cy-memory-graph header,
+.cy-memory-graph-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.cy-memory-graph header {
+  justify-content: space-between;
+}
+.cy-memory-graph-controls .ant-input {
+  flex: 1;
+  min-width: 10rem;
+}
+.cy-memory-graph svg {
+  width: 100%;
+  max-height: 24rem;
+  touch-action: none;
+  cursor: grab;
+}
+.cy-memory-graph svg g {
+  cursor: pointer;
+}
+.cy-memory-graph svg line {
+  pointer-events: none;
+}
+.cy-memory-graph svg text {
+  font-size: 11px;
+  fill: currentColor;
+}
+.cy-memory-graph-results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  max-height: 15rem;
+  overflow: auto;
+  padding: 0.6rem 0;
+}
+.cy-memory-graph button:not(.ant-btn) {
+  color: inherit;
+  background: transparent;
+  border: 1px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-radius: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+}
+.cy-memory-graph button[aria-pressed="true"] {
+  border-color: currentColor;
+}
+.cy-memory-graph aside {
+  border-top: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  padding: 0.6rem 0;
+}
+.cy-memory-graph aside p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.cy-memory-graph aside button {
+  margin: 0.2rem;
+}
+.cy-memory-graph h3,
+.cy-memory-graph h4 {
+  margin: 0.4rem 0;
+}

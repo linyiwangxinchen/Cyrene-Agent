@@ -896,6 +896,7 @@ export function registerAgUiIpc(
       ? classifyTaskMethodRequest(taskText) : undefined;
     built = await perf.track("build_options", () => buildOptionsFn!({
       ...safeInput,
+      speechScope: ordinaryPrivateChat ? "owner" : undefined,
       mode,
       skipCurrentUserMood: background || Boolean(session.purpose) || !input.currentUser,
       ...(privateRelationshipContext !== undefined ? { privateRelationshipContext } : {}),
@@ -1363,6 +1364,7 @@ export function registerAgUiIpc(
             }
             const effects = await perf.track("on_run_finished", async () => onFinished(lastResult, latestUserText, {
               source: "desktop",
+              speechScope: companionFeedback ? "owner" : undefined,
               mode,
               conversationId: sessionId,
               runId,

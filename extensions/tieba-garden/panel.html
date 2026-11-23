@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="utf-8" /><title>昔涟逛贴吧</title>
+  <style>
+    body {
+      font: 15px/1.6 system-ui;
+      color: CanvasText;
+      background: Canvas;
+      max-width: 48rem;
+      margin: auto;
+      padding: 1rem;
+    }
+    input:not([type]),
+    textarea {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 0.5rem;
+    }
+    button {
+      padding: 0.4rem 0.8rem;
+      margin: 0.3rem;
+    }
+    label,
+    output {
+      display: block;
+      margin: 0.5rem 0;
+    }
+    section {
+      margin: 1.5rem 0;
+    }
+    p {
+      white-space: pre-wrap;
+    }
+  </style>
+  <h2>常逛的吧</h2>
+  <label>吧名<input id="bar" maxlength="50" /></label
+  ><label><input type="checkbox" id="auto" />每四小时逛一次</label
+  ><label><input type="checkbox" id="replies" />也读前三个楼层的楼中楼</label
+  ><label><input type="checkbox" id="learn" />学习表达并用于私聊</label
+  ><button id="save">保存设置</button
+  ><button id="browse">逛一逛</button>
+  <div id="threads"></div>
+  <section>
+    <h2>读帖子</h2>
+    <label>帖子链接<input id="url" /></label
+    ><label
+      >楼层摘录（可选，可附上楼层和上下文）<textarea
+        id="excerpt"
+        rows="4"
+      ></textarea></label
+    ><button id="read">阅读</button>
+    <p id="reading"></p>
+  </section>
+  <h2>学到的表达</h2>
+  <div id="samples"></div>
+  <output id="status" role="status"></output>
+  <script src="/.cyrene/panel-bridge.js"></script>
+  <script src="panel.js"></script>
+</html>

@@ -124,6 +124,13 @@ export async function installSharedBridge(): Promise<void> {
   const moments = (window as any).moments;
   const createPost = moments.createPost;
   moments.createPost = (input: import("../../shared/moments-types").MomentCreatePostInput) => publishWebMoment(input, createPost);
+  (window as any).chatStore.openInReactChatWindow = async (sessionId: string) => {
+    const existing = await ipcRenderer.invoke(IPC.CHATS_GET, sessionId);
+    if (!existing) throw new Error("原对话已删除");
+    const url = new URL(window.location.href);
+    url.searchParams.set("sessionId", sessionId);
+    window.location.assign(url.href);
+  };
   const api = (window as any).chat;
   api.ingestDroppedFiles = async (files: File[]) => {
     const entries = await Promise.all(files.map(async file => ({ path: await uploadFile(file), mime: file.type })));

@@ -15,7 +15,7 @@ import { useTranslation } from "../../i18n";
 const PAGE_SIZE = 30;
 type TagFilter = WikiTag | "all";
 
-export function WikiKnowledgePanel() {
+export function WikiKnowledgePanel({initialPageId}: {initialPageId?: string} = {}) {
   const { t } = useTranslation();
   const [tag, setTag] = useState<TagFilter>("all");
   const [searchText, setSearchText] = useState("");
@@ -24,7 +24,7 @@ export function WikiKnowledgePanel() {
   const [pages, setPages] = useState<WikiPageSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [conflicts, setConflicts] = useState<WikiConflict[]>([]);
-  const [selectedPageId, setSelectedPageId] = useState<string | null>(null);
+  const [selectedPageId, setSelectedPageId] = useState<string | null>(initialPageId ?? null);
   const [detail, setDetail] = useState<WikiPageDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);

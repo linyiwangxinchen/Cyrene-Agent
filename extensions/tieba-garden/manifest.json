@@ -1,0 +1,13 @@
+{
+  "apiVersion": 1,
+  "id": "tieba-garden",
+  "name": "昔涟逛贴吧",
+  "version": "0.1.0",
+  "description": "从常逛的吧发现帖子，读楼层并学习私聊表达。",
+  "author": "Cyrene community",
+  "entry": "index.mjs",
+  "settingsPanel": "panel.html",
+  "settingsSection": "plugins",
+  "defaultEnabled": false,
+  "deps": ["llm"]
+}

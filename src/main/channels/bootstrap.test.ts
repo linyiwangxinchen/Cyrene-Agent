@@ -406,6 +406,7 @@ describe("createChannelsSubsystem lifecycle", () => {
       {
         source: "channel",
         privateRelationshipContext: scope !== "group",
+        speechScope: scope === "wechat-private" ? expect.stringMatching(/^peer:[a-f0-9]{64}$/) : undefined,
         runId: "channel-run",
         mode: "chat",
         conversationId: "channel-session",

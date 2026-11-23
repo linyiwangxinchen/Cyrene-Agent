@@ -150,6 +150,7 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
   });
 
   // Memory panel
+  ipc.handle(IPC.MEMORY_PANEL_GET_GRAPH, async () => (await import("./graph-view.js")).loadMemoryGraph());
   ipc.handle(IPC.MEMORY_PANEL_GET_DATA, () => loadMemoryPanelData());
   ipc.handle(IPC.MEMORY_PANEL_GET_SUMMARY, async () => {
     if (!isSummaryMemoryEnabled()) return null;

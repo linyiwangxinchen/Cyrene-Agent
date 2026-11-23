@@ -9,6 +9,8 @@ import { formatDateTime } from "../../../settings/shared/format";
 import { useTranslation } from "../../i18n";
 import { SettingsInput, SettingsSwitch } from "../../components/ui/SettingsControls";
 import { Card } from "../../components/ui/Card";
+import { lazy, Suspense } from "react";
+const MemoryGraphPanel = lazy(() => import("./MemoryGraphPanel"));
 import { WikiKnowledgePanel } from "./WikiKnowledgePanel";
 
 type L0 = MemoryPanelPayload["l0"];
@@ -18,6 +20,8 @@ type Notice = { type: "success" | "error" | "info"; text: string };
 export function MemorySettingsPanel() {
   const { t } = useTranslation();
   const [data, setData] = useState<MemoryPanelPayload | null>(null);
+  const [graphOpen, setGraphOpen] = useState(false);
+  const [wikiTarget, setWikiTarget] = useState<string>();
   const [vault, setVault] = useState<ObsidianVaultConfig | null>(null);
   const [draftL0, setDraftL0] = useState<L0 | null>(null);
   const [draftL1, setDraftL1] = useState<L1 | null>(null);
@@ -169,7 +173,9 @@ export function MemorySettingsPanel() {
       <div className="cy-settings-section__heading"><h2 data-settings-search-id="settingsPage.memory.modeTitle"><Brain size={18} />{t("settingsPage.memory.modeTitle")}</h2><p>{t("settingsPage.memory.modeDescription")}</p></div>
       <Card><div className="cy-settings-row cy-cyrene-radio-row"><div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.memory.modeLabel">{t("settingsPage.memory.modeLabel")}</strong><span>{t(memoryMode === "off" ? "settingsPage.memory.modeOffHint" : memoryMode === "summary" ? "settingsPage.memory.modeSummaryHint" : memoryMode === "wiki" ? "settingsPage.memory.modeWikiHint" : "settingsPage.memory.modeVectorHint")}</span></div><Radio.Group value={memoryMode} disabled={modeLoading || modeSaving} optionType="button" buttonStyle="solid" onChange={(event) => void changeMemoryMode(event.target.value as ModelSettings["memoryMode"])}><Radio.Button value="vector">{t("settingsPage.memory.vectorMode")}</Radio.Button><Radio.Button value="summary">{t("settingsPage.memory.summaryMode")}</Radio.Button><Radio.Button value="wiki">{t("settingsPage.memory.wikiMode")}</Radio.Button><Radio.Button value="off">{t("settingsPage.memory.off")}</Radio.Button></Radio.Group></div></Card>
     </section>
-    {!modeLoading && memoryMode === "wiki" && <WikiKnowledgePanel />}
+    <Button aria-expanded={graphOpen} onClick={()=>setGraphOpen(!graphOpen)}>{graphOpen ? "收起记忆图谱" : "打开记忆图谱"}</Button>
+    {graphOpen && <Suspense fallback={<Spin />}><MemoryGraphPanel key={memoryMode} onWiki={id=>{setWikiTarget(id);setGraphOpen(false);}} /></Suspense>}
+    {!modeLoading && memoryMode === "wiki" && <WikiKnowledgePanel initialPageId={wikiTarget} key={wikiTarget} />}
     {memoryMode !== "wiki" && (loading ? <div className="cy-settings-loading"><Spin /></div> : !data ? null : <>
       {!modeLoading && memoryMode === "summary" && <section className="cy-settings-section">
         <div className="cy-settings-section__heading"><h2 data-settings-search-id="settingsPage.memory.summaryTitle"><Brain size={18} />{t("settingsPage.memory.summaryTitle")}</h2><p>{t("settingsPage.memory.summaryDescription")}</p></div>

@@ -97,7 +97,7 @@ import { syncVolcanoSearchMcp } from "../../main/settings/general-settings-lifec
 import { registerHeadlessVoice } from "./voice";
 import { configureHeadlessRequestProxy } from "./network-proxy";
 import { normalizePluginObservation } from "../../main/proactive/plugin-observation";
-import { recordCompanionEvent } from "../../main/relationship/relationship-log";
+import { getRelationshipStore, recordCompanionEvent } from "../../main/relationship/relationship-log";
 
 export async function startHeadlessCore() {
   await configureHeadlessRequestProxy();
@@ -208,7 +208,7 @@ export async function startHeadlessCore() {
     citaService: cita, socialContextScheduler: social.scheduler, chatsStore,
     buildSummaryMemoryContext: id => loadSummaryMemoryContext({ conversationId: id, userDataRoot: root, getSessionRecord: chatsStore.getSessionRecord }),
     scheduleSummaryTurn, scheduleWikiTurn, socialAtomStore: social.store,
-    buildPluginPromptContext: input => pluginPromptRegistry.build(input),
+    buildPluginPromptContext: (input, scope) => pluginPromptRegistry.build(input, input.privateCompanion && input.conversationId ? getRelationshipStore().blockedExpressions(input.conversationId, input.userText, scope) : undefined),
     publishPluginHostEvent: (event, payload) => plugins ? plugins.publishHostEvent(event, payload) : Promise.resolve(),
     publishToolFinished: event => lifecycle.publishToolFinished(event), transcriptCompactor,
   });

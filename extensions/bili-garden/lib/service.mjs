@@ -111,6 +111,7 @@ export class GardenService {
       videos: this.store.list("video", 150),
       reports: this.store.list("report", 40),
       memories: this.store.list("memory", 60),
+      expressions: this.store.list("expression", 500),
       actions: this.store.actions(100),
       questions: this.store.list("question", 30),
       events: this.store.list("event", 35),
@@ -483,6 +484,9 @@ export class GardenService {
         if (!e) throw new Error("还没有读取字幕");
         return e;
       }
+      case "expression-delete":
+        this.store.remove("expression", String(args.id));
+        return {ok:true};
       case "memory-delete":
         this.store.remove("memory", String(args.id));
         return { ok: true };

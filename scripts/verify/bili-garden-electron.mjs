@@ -30,6 +30,7 @@ try {
     onDispose: (fn) => cleanups.push(fn),
     registerIpc: (name, fn) => ipc.set(name, fn),
     registerTool: () => {},
+    registerPromptProvider: () => {},
   });
   await ipc.get("garden")("config", { interests: "Electron 真实运行时" });
   const state = await ipc.get("garden")("snapshot");

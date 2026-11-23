@@ -51,9 +51,12 @@ export interface RelationshipState {
   paused: boolean;
   recordHistory: boolean;
   learnConversationStyle?: boolean;
+  learnPrivateExpressions?: boolean;
   learnTaskMethods?: boolean;
   style: CompanionStyle;
   affection: boolean;
+  desireEnabled?: boolean;
+  desireInitiative?: boolean;
   innerLifeEnabled: boolean;
   proactiveLifeEnabled: boolean;
   /** 昔涟在合适的时刻主动发自拍的频率；缺省按 normal。 */
@@ -147,7 +150,20 @@ export interface CompanionTaskLesson {
   updatedAt: number;
 }
 
+export function desireValue(last: DesireSample | undefined, now: number): number {
+  if (!last) return 18;
+  return Math.round(18 + (last.value - 18) * Math.pow(0.5, Math.max(0, now - last.at) / (8 * 3600000)));
+}
+export interface DesireSample {
+  conversationId: string;
+  turnId: string;
+  at: number;
+  value: number;
+  reason: "warm" | "rest" | "stop" | "interest";
+}
+
 export interface CompanionSnapshot {
+  desireHistory?: readonly DesireSample[];
   revision: number;
   relationship: RelationshipState;
   affect: AffectState;
@@ -162,7 +178,7 @@ export interface CompanionSnapshot {
   taskLessons?: CompanionTaskLesson[];
 }
 export type RelationshipPreferences = Pick<RelationshipState,
-  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "learnConversationStyle" | "learnTaskMethods" | "style" | "affection" | "innerLifeEnabled" | "proactiveLifeEnabled" | "relationshipMode" | "selfieFrequency">;
+  "userLabel" | "sharedGoals" | "milestones" | "boundaries" | "tasteNotes" | "closeness" | "paused" | "recordHistory" | "learnConversationStyle" | "learnPrivateExpressions" | "learnTaskMethods" | "style" | "affection" | "desireEnabled" | "desireInitiative" | "innerLifeEnabled" | "proactiveLifeEnabled" | "relationshipMode" | "selfieFrequency">;
 export type CompanionCommand = { expectedRevision: number } & (
   | { type: "preferences"; patch: Partial<RelationshipPreferences> }
   | { type: "permissions"; patch: Partial<CompanionPermissions> }

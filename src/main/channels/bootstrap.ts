@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import type { CustomEvent, ToolCallArgsEvent, ToolCallStartEvent } from "@ag-ui/core";
 import type { GeneratedImageAttachment } from "../../shared/generated-image";
@@ -177,6 +177,7 @@ export function createChannelsSubsystem(
         // 读取关系设置失败时仍照常回复。
       }
     }
+    const speechScope = companionFeedback && msg.senderId ? "peer:"+createHash("sha256").update(JSON.stringify([msg.channel,msg.senderId])).digest("hex") : undefined;
     const channelModelSettings = boundSession
       ? resolveSessionModelSettings(loadModelSettings(), boundSession)
       : resolveModelSettingsProfile(loadModelSettings());
@@ -203,7 +204,8 @@ export function createChannelsSubsystem(
       // 渠道绑定只共享文字上下文，不继承桌面对话的工作区权限。
       workspaceBindingSessionId: null,
       privateRelationshipContext: msg.chatType !== "group",
-      skipLearnedCompanionStyle: !useLearnedCompanionStyle,
+      skipLearnedCompanionStyle: !speechScope,
+      speechScope,
       attachments: attachmentInputs.attachments,
       imageAttachments: attachmentInputs.imageAttachments,
       channel: msg.channel,
@@ -320,6 +322,7 @@ export function createChannelsSubsystem(
         if (generatedImages.size > 0) channelResult.attachments = [...generatedImages.values()];
         const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, {
           source: "channel",
+          speechScope,
           privateRelationshipContext: msg.chatType !== "group",
           runId,
           mode,

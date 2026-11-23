@@ -5,6 +5,7 @@ export const DEFAULTS = Object.freeze({
   modelProfileId: "",
   timezone: "Asia/Shanghai",
   autoRun: false,
+  learnExpressions: false,
   runsPerDay: 6,
   gapMinutes: 60,
   perRound: 3,

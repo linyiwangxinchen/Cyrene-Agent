@@ -134,7 +134,7 @@ export interface BuildOptionsDeps {
   noteXilianSelfieRequested?: (conversationId: string) => void;
   /** 用户明确请求自拍时，构建与当前生活事件绑定的图片上下文。 */
   buildXilianSelfieContext?: (userText: string) => string;
-  buildRelationshipContext: (conversationId?: string, privateContext?: boolean, currentUserText?: string, useLearnedStyle?: boolean, includeTaskLedger?: boolean) => Promise<string>;
+  buildRelationshipContext: (conversationId?: string, privateContext?: boolean, currentUserText?: string, useLearnedStyle?: boolean, includeTaskLedger?: boolean, speechScope?: string) => Promise<string>;
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
   buildModePrompt?: (mode: ConversationMode) => string;
   /** 工具规则与目录 system prompt（进入 harness stablePrefix）。仅含自动生成的工具目录。 */
@@ -210,12 +210,13 @@ export interface BuildOptionsDeps {
   getWorkspaceBinding?: (conversationId: string) => ({ workspaceRoot: string; displayName: string; boundAt: number } | undefined) | Promise<{ workspaceRoot: string; displayName: string; boundAt: number } | undefined>;
   /** 构建已启用插件贡献的每轮动态提示词；失败时调用方应降级为空内容。 */
   buildPluginPromptContext?: (input: {
+    privateCompanion?: true;
     source: "conversation" | "plugin-agent";
     mode: ConversationMode;
     userText: string;
     conversationId?: string;
     channel?: string;
-  }) => Promise<string>;
+  }, speechScope?: string) => Promise<string>;
   /** Summary memory: fixed paths/rules belong to stable prompt; file bodies belong to runtime tail. */
   buildSummaryMemoryContext?: (conversationId: string) => Promise<{
     stablePrompt: string;
@@ -228,6 +229,7 @@ export type BuildOptionsInput = AguiRunInput & {
   signal?: AbortSignal;
   skipCurrentUserMood?: boolean;
   skipLearnedCompanionStyle?: boolean;
+  speechScope?: string;
   /**
    * Turn identities for memory extraction when the run is not a pure Chat run
    * (a WeChat private chat with tools runs as Work). They do not name the
@@ -822,7 +824,7 @@ export async function buildAgentRunOptions(
   try {
     const useLearnedStyle = Boolean(currentUserMoodText) && !input.skipLearnedCompanionStyle;
     // Chat 是聊天，不是待办：助手承诺账本只给 Work/Code/Learn。
-    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, privateContext, currentUserMoodText, useLearnedStyle, !companionChat));
+    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext(conversationId, privateContext, currentUserMoodText, useLearnedStyle, !companionChat, ...(input.speechScope ? [input.speechScope] as const : [])));
   } catch (err) {
     console.warn("[Cyrene] relationship context build failed:", err);
   }
@@ -944,10 +946,11 @@ export async function buildAgentRunOptions(
     pluginPromptContext = await deps.buildPluginPromptContext?.({
       source: input.promptSource ?? "conversation",
       mode: resolvedMode,
+      ...(currentUserMoodText && !input.skipLearnedCompanionStyle && !input.transcriptRewind && { privateCompanion: true as const }),
       userText: latestUserText,
       conversationId,
       channel: input.promptChannel ?? input.channel,
-    }) ?? "";
+    }, ...(input.speechScope ? [input.speechScope] as const : [])) ?? "";
   } catch (error) {
     console.warn("[plugins] 构建插件提示词上下文失败，已跳过", error);
   }
@@ -1371,6 +1374,8 @@ export async function onAgentRunFinished(
   channel?: ChannelId,
   conversationId?: string,
   finishedContext?: {
+    companionTurnId?: string;
+    speechScope?: string;
     runId?: string;
     source?: "desktop" | "channel";
     privateRelationshipContext?: boolean;
@@ -1445,6 +1450,7 @@ export async function onAgentRunFinished(
 
   await perf.track("record_relationship_turn", async () => {
     await deps.recordRelationshipTurn({
+      ...(finishedContext?.companionTurnId && { companionTurnId: finishedContext.companionTurnId, speechScope: finishedContext.speechScope }),
       userText: sideEffectUserText,
       assistantText: chatContent,
       cyreneFeeling: deps.runtimeState.feeling ?? "平静",

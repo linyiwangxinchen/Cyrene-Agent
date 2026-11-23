@@ -584,6 +584,10 @@ export type PluginPromptSource = "conversation" | "scheduler" | "moments-post" |
 
 /** 各场景共有的构建输入：本轮用户文本与可选的会话归属。 */
 interface PluginPromptBuildInputCommon {
+  /** Host-verified private conversational turn. Absent for all other contexts. */
+  privateCompanion?: true;
+  /** Conversational situation inferred from this message for private speech samples. */
+  conversationCue?: string;
   userText: string;
   conversationId?: string;
   channel?: string;
@@ -639,6 +643,10 @@ export type PluginPromptProviderInput = PluginPromptBuildInput & {
 };
 
 export interface PluginPromptProvider {
+  /** Only receive turns from a private companion chat. */
+  privateCompanionOnly?: boolean;
+  /** Public, locally held examples for the owner's memory graph. */
+  listExpressions?(): ReadonlyArray<{id: string; quote: string; scene: string; source: string; at: number}>;
   /** 当前插件内唯一；框架会自动补全 plugin:<插件id>: 前缀。 */
   id: string;
   /** 缺省表示全部会话模式。 */

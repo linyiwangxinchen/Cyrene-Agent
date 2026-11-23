@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { relevantExpression } from "./lib/expressions.mjs";
 import { GardenService } from "./lib/service.mjs";
 
 let service;
@@ -17,6 +18,9 @@ export async function register(ctx) {
     },
   );
   service = activeService;
+  ctx.registerPromptProvider({ id: "expressions", sources: ["conversation"], privateCompanionOnly: true,
+    listExpressions: () => activeService.store.config().learnExpressions ? activeService.store.list("expression", 500) : [],
+    provide: ({ userText, conversationCue }) => activeService.store.config().learnExpressions ? relevantExpression(activeService.store.list("expression", 500), userText, conversationCue) : "" });
   ctx.onDispose(() => activeService.close());
   ctx.registerIpc("garden", (command, args) => service.dispatch(command, args));
   ctx.registerTool({

@@ -31,7 +31,13 @@ export interface CompanionFeedbackInput {
   revision: number
 }
 
+import { collectPrivateExpressions, expressionCorrection, privateExpressionHint, speechObservations, rememberSpeech, isSpeechObservation, type SpeechObservation } from "./private-expressions";
+import { addDesireSample, desireAvailable, desireContext } from "./partner-desire";
+import type { DesireSample } from "../../shared/companion";
+
 export interface RelationshipTurnInput {
+  companionTurnId?: string;
+  speechScope?: string;
   userText: string
   assistantText: string
   cyreneFeeling: string
@@ -45,6 +51,7 @@ export interface RelationshipTurnInput {
 }
 
 export interface RelationshipLogEntry extends Omit<RelationshipTurnInput, "companionFeedback"> {
+  learnedExpressions?: boolean;
   id: string
   date: string
   createdAt: number
@@ -64,6 +71,7 @@ export interface RelationshipDailySummary {
 export type RelationshipPreferencesPatch = Partial<RelationshipPreferences>
 
 interface CompanionFeedbackRecord {
+  speechScope?: string;
   entryId: string
   conversationId: string
   userTurnId: string
@@ -86,6 +94,8 @@ interface TaskMethodObservation {
 type TaskMethodObservationInput = Omit<TaskMethodObservation, "at"> & { revision: number };
 
 interface RelationshipLogData {
+  speech: SpeechObservation[];
+  desireHistory?: DesireSample[];
   entries: RelationshipLogEntry[]
   dailySummaries: RelationshipDailySummary[]
   relationshipState: RelationshipState
@@ -107,6 +117,7 @@ interface RelationshipLogData {
 }
 
 const EMPTY_DATA: RelationshipLogData = {
+  speech: [],
   entries: [],
   dailySummaries: [],
   revision: 1,
@@ -140,10 +151,10 @@ const LEARNED_STYLE: Record<CompanionLearningTopic, string> = {
   support: "对方倾诉时先听完，再按对方的需要给建议。",
 };
 
-function learnedPreferences(records: readonly CompanionFeedbackRecord[]): CompanionLearnedPreference[] {
+function learnedPreferences(records: readonly CompanionFeedbackRecord[], share = false): CompanionLearnedPreference[] {
   const states = new Map<string, { pending: CompanionLearningPreference; active?: CompanionLearnedPreference }>();
-  for (const { conversationId, topic, at, explicit, preference } of records) {
-    const key = JSON.stringify([conversationId, topic]);
+  for (const { conversationId, topic, at, explicit, preference, speechScope } of records) {
+    const key = JSON.stringify([share && speechScope ? speechScope : conversationId, topic]);
     const previous = states.get(key);
     const confirmed = explicit || previous?.pending === preference;
     states.set(key, {
@@ -317,7 +328,7 @@ function normalizeData(value: unknown): RelationshipLogData {
   const bondProgress = normalizeBondProgress(raw.bondProgress);
   // Validate migrated/persisted values as well as incoming IPC patches. Do not
   // silently reset damaged user data or accidentally disable a saved restriction.
-  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "tasteNotes", "closeness", "paused", "recordHistory", "learnConversationStyle", "learnTaskMethods", "style", "affection", "innerLifeEnabled", "proactiveLifeEnabled", "relationshipMode", "selfieFrequency"]
+  validatePatch(Object.fromEntries(["userLabel", "sharedGoals", "milestones", "boundaries", "tasteNotes", "closeness", "paused", "recordHistory", "learnConversationStyle", "learnPrivateExpressions", "learnTaskMethods", "style", "affection", "desireEnabled", "desireInitiative", "innerLifeEnabled", "proactiveLifeEnabled", "relationshipMode", "selfieFrequency"]
     .filter(key => (relationship as unknown as Record<string, unknown>)[key] !== undefined)
     .map(key => [key, (relationship as unknown as Record<string, unknown>)[key]])));
   const permissions = { ...EMPTY_DATA.permissions, ...raw.permissions };
@@ -328,10 +339,12 @@ function normalizeData(value: unknown): RelationshipLogData {
   }
   if ((raw.revision !== undefined && (!Number.isSafeInteger(raw.revision) || raw.revision < 1))
     || (raw.learningRevision !== undefined && (!Number.isSafeInteger(raw.learningRevision) || raw.learningRevision < 1))
+    || (raw.speech !== undefined && (!Array.isArray(raw.speech) || !raw.speech.every(isSpeechObservation)))
     || (raw.companionFeedback !== undefined && (!Array.isArray(raw.companionFeedback) || !raw.companionFeedback.every(validCompanionFeedback)))
     || (raw.taskLearningRevision !== undefined && (!Number.isSafeInteger(raw.taskLearningRevision) || raw.taskLearningRevision < 1))
     || (raw.taskObservations !== undefined && (!Array.isArray(raw.taskObservations)
       || !raw.taskObservations.every(item => Number.isFinite(item?.at) && validTaskObservation(item))))
+    || (raw.desireHistory !== undefined && (!Array.isArray(raw.desireHistory) || raw.desireHistory.some(s => !s || typeof s.conversationId !== "string" || typeof s.turnId !== "string" || !Number.isFinite(s.at) || !Number.isInteger(s.value) || s.value < 0 || s.value > 100 || !["warm","interest","stop","rest"].includes(s.reason))))
     || !Number.isFinite(affect.lastTransitionAt)
     || (raw.lastDiaryDay !== undefined && typeof raw.lastDiaryDay !== "string")
     || [raw.entries, raw.dailySummaries, raw.records].some(items => items !== undefined && !Array.isArray(items))) {
@@ -375,6 +388,7 @@ function normalizeData(value: unknown): RelationshipLogData {
     followups: normalizeFollowups(raw.followups),
     repairCases,
     commitments,
+    speech: raw.speech ?? (raw.entries ?? []).flatMap(entry => speechObservations(entry)),
     entries: Array.isArray(raw.entries) ? raw.entries.slice(-MAX_ENTRIES) : [],
     dailySummaries: Array.isArray(raw.dailySummaries) ? raw.dailySummaries.slice(-MAX_DAILY_SUMMARIES) : [],
     records: Array.isArray(raw.records) ? raw.records.slice(-500) : [],
@@ -401,7 +415,7 @@ function validatePatch(patch: unknown): RelationshipPreferencesPatch {
     } else if (key === "closeness") {
       if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 1) throw new Error("相处程度必须在 0 到 1 之间");
       result[key] = value;
-    } else if (["paused", "recordHistory", "learnConversationStyle", "learnTaskMethods", "affection", "innerLifeEnabled", "proactiveLifeEnabled"].includes(key)) {
+    } else if (["paused", "recordHistory", "learnConversationStyle", "learnPrivateExpressions", "learnTaskMethods", "affection", "desireEnabled", "desireInitiative", "innerLifeEnabled", "proactiveLifeEnabled"].includes(key)) {
       if (typeof value !== "boolean") throw new Error(`${key} 必须是开关值`);
       result[key] = value;
     } else if (key === "style") {
@@ -506,7 +520,7 @@ export class RelationshipLogStore {
   async snapshot(): Promise<CompanionSnapshot> {
     const data = this.repository.read();
     if (refreshCommitmentStatuses(data, Date.now())) { data.revision++; this.repository.write(data); }
-    return { revision: data.revision, relationship: data.relationshipState, affect: decayAffectState(data.affectState), bondProgress: data.bondProgress, permissions: data.permissions, records: data.records.slice(-100).reverse(), followups: data.followups, repairCases: data.repairCases.slice(-50).reverse(), commitments: data.commitments.slice(-100).reverse(), learnedPreferences: learnedPreferences(data.companionFeedback), taskLessons: summarizeTaskLessons(data.taskObservations) };
+    return { ...(desireAvailable(data.relationshipState) && { desireHistory: data.desireHistory ?? [] }), revision: data.revision, relationship: data.relationshipState, affect: decayAffectState(data.affectState), bondProgress: data.bondProgress, permissions: data.permissions, records: data.records.slice(-100).reverse(), followups: data.followups, repairCases: data.repairCases.slice(-50).reverse(), commitments: data.commitments.slice(-100).reverse(), learnedPreferences: learnedPreferences(data.companionFeedback, data.relationshipState.learnPrivateExpressions), taskLessons: summarizeTaskLessons(data.taskObservations) };
   }
 
   /**
@@ -526,7 +540,9 @@ export class RelationshipLogStore {
   }
   async forgetConversation(conversationId: string): Promise<void> {
     const data = this.repository.read();
+    data.speech = data.speech.filter(item => item.conversationId !== conversationId);
     data.entries = data.entries.filter(item => item.conversationId !== conversationId);
+    data.desireHistory = data.desireHistory?.filter(item => item.conversationId !== conversationId);
     data.records = data.records.filter(item => item.conversationId !== conversationId);
     data.followups = data.followups.filter(item => item.conversationId !== conversationId);
     data.commitments = data.commitments.filter(item => item.conversationId !== conversationId);
@@ -543,6 +559,9 @@ export class RelationshipLogStore {
   }
   retainCompanionFeedbackTurns(conversationId: string, retainedUserTurnIds: ReadonlySet<string>): void {
     const data = this.repository.read();
+    data.speech = data.speech.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.turnId));
+    data.entries = data.entries.filter(item => item.conversationId !== conversationId || !item.companionTurnId || retainedUserTurnIds.has(item.companionTurnId));
+    data.desireHistory = data.desireHistory?.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.turnId));
     data.companionFeedback = data.companionFeedback.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.userTurnId));
     data.taskObservations = data.taskObservations.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.userTurnId));
     // A completion for a truncated turn could still be running its side effects.
@@ -550,6 +569,21 @@ export class RelationshipLogStore {
     data.taskLearningRevision++;
     data.revision++;
     this.repository.write(data);
+  }
+  expressionEvidence() {
+    const data = this.repository.read();
+    if (!data.relationshipState.recordHistory || data.relationshipState.paused) return [];
+    return data.entries.filter(e => e.companionTurnId && e.conversationId);
+  }
+  blockedExpressions(conversationId: string, current: string, scope = "owner") {
+    const data = this.repository.read();
+    const banned = data.speech.filter(row => row.kind === "block" && row.scope === scope
+      && (data.relationshipState.learnPrivateExpressions || row.conversationId === conversationId));
+    return [...new Set([...banned.map(row => row.quote), ...expressionCorrection(current)])];
+  }
+  privateExpressions() {
+    const data = this.repository.read();
+    return data.relationshipState.learnPrivateExpressions && data.relationshipState.recordHistory && !data.relationshipState.paused ? collectPrivateExpressions(data.speech).samples : [];
   }
   async exportData(): Promise<string> {
     return JSON.stringify({ format: "cyrene.relationship.v1", exportedAt: Date.now(), ...this.repository.read() }, null, 2);
@@ -582,10 +616,11 @@ export class RelationshipLogStore {
     if (command.type === "preferences") {
       const beforePreferences = data.relationshipState;
       const patch = validatePatch(command.patch);
+      if (patch.desireEnabled === false || patch.recordHistory === false) data.desireHistory = [];
       data.relationshipState = { ...data.relationshipState, ...patch, updatedAt: now, version: data.relationshipState.version + 1 };
       const learningAvailabilityChanged = beforePreferences.paused !== data.relationshipState.paused
         || beforePreferences.recordHistory !== data.relationshipState.recordHistory;
-      if (learningAvailabilityChanged || beforePreferences.learnConversationStyle !== data.relationshipState.learnConversationStyle) {
+      if (learningAvailabilityChanged || beforePreferences.learnPrivateExpressions !== data.relationshipState.learnPrivateExpressions || beforePreferences.learnConversationStyle !== data.relationshipState.learnConversationStyle) {
         data.learningRevision++;
       }
       if (learningAvailabilityChanged || beforePreferences.learnTaskMethods !== data.relationshipState.learnTaskMethods) {
@@ -719,7 +754,8 @@ export class RelationshipLogStore {
     } else if (command.type === "forget_learned_preference") {
       if (typeof command.conversationId !== "string" || !command.conversationId.trim()
         || !COMPANION_LEARNING_TOPICS.includes(command.topic)) throw new Error("聊天偏好无效");
-      data.companionFeedback = data.companionFeedback.filter(item => item.conversationId !== command.conversationId || item.topic !== command.topic);
+      const scope = data.relationshipState.learnPrivateExpressions && data.companionFeedback.slice().reverse().find(item => item.conversationId === command.conversationId && item.topic === command.topic)?.speechScope;
+      data.companionFeedback = data.companionFeedback.filter(item => item.topic !== command.topic || (scope ? item.speechScope !== scope : item.conversationId !== command.conversationId));
       data.learningRevision++;
     } else if (command.type === "forget_task_method") {
       if (!validTaskMethod(command)) throw new Error("任务经验无效");
@@ -727,6 +763,9 @@ export class RelationshipLogStore {
       data.taskLearningRevision++;
     } else if (command.type === "delete_record") {
       if (typeof command.id !== "string") throw new Error("记录编号无效");
+      data.speech = data.speech.filter(item => item.id !== command.id);
+      const removed = data.entries.find(item => item.id === command.id);
+      if (removed?.companionTurnId) data.desireHistory = data.desireHistory?.filter(s => s.conversationId !== removed.conversationId || s.turnId !== removed.companionTurnId);
       data.records = data.records.filter(item => item.id !== command.id);
       data.entries = data.entries.filter(item => item.id !== command.id);
       data.companionFeedback = data.companionFeedback.filter(item => item.entryId !== command.id);
@@ -740,6 +779,8 @@ export class RelationshipLogStore {
       data.seenCompanionEventIds = [];
       data.records.push({ id: randomUUID(), kind: "bond", at: now, text: "用户重置了羁绊进度" });
     } else if (command.type === "clear_history" || command.type === "reset_relationship") {
+      data.speech = [];
+      data.desireHistory = [];
       data.entries = []; data.dailySummaries = []; data.records = []; data.followups = []; data.repairCases = []; data.commitments = [];
       data.companionFeedback = [];
       data.taskObservations = [];
@@ -790,11 +831,15 @@ export class RelationshipLogStore {
     if (eventKey && data.seenEventKeys.includes(eventKey)) return null
     if (eventKey) data.seenEventKeys = [...data.seenEventKeys, eventKey].slice(-10000)
     const now = Date.now()
+    if (input.companionTurnId && input.conversationId && desireAvailable(data.relationshipState)) {
+      addDesireSample(data.desireHistory ??= [], input.conversationId, input.companionTurnId, userText, now);
+    }
     const userMood = detectUserMood(userText)
     const cue = deriveSignal(userText, userMood)
     const { companionFeedback, ...turn } = input;
     const entry: RelationshipLogEntry = {
       ...turn,
+      ...(input.companionTurnId && data.relationshipState.learnPrivateExpressions && { learnedExpressions: true }),
       userText: compact(userText, 500),
       assistantText: compact(assistantText, 500),
       id: `rel-${now}-${Math.random().toString(36).slice(2, 8)}`,
@@ -806,6 +851,15 @@ export class RelationshipLogStore {
       nextCareCue: cue.nextCareCue,
     }
 
+    const revisionMatches = !companionFeedback || companionFeedback.revision === data.learningRevision;
+    if (entry.companionTurnId && revisionMatches) {
+      const text = companionFeedback?.text ?? userText;
+      const previous = /(?:这么|这样)(?:说|叫|开头|收尾)/u.test(text)
+        ? data.entries.slice().reverse().find(e => e.conversationId === entry.conversationId && e.speechScope === entry.speechScope && e.companionTurnId)
+        : undefined;
+      const known = previous && { reply: previous.assistantText, words: collectPrivateExpressions(data.speech.filter(row => row.scope === (entry.speechScope ?? "owner"))).samples.map(s => s.quote) };
+      rememberSpeech(data.speech, speechObservations(entry, text, known));
+    }
     data.entries.push(entry)
     data.entries = data.entries.slice(-MAX_ENTRIES)
     if (input.conversationId && companionFeedback?.userTurnId && assistantText && data.relationshipState.learnConversationStyle !== false
@@ -814,7 +868,7 @@ export class RelationshipLogStore {
       const observations = classifyCompanionFeedback(companionFeedback.text);
       if (observations.length) {
         for (const observation of observations) data.companionFeedback.push({
-          ...observation, entryId: entry.id, conversationId: input.conversationId, userTurnId: companionFeedback.userTurnId, at: now,
+          ...observation, speechScope: entry.learnedExpressions ? entry.speechScope ?? (entry.channel === "desktop" || entry.channel === "web" ? "owner" : "session:"+entry.conversationId) : undefined, entryId: entry.id, conversationId: input.conversationId, userTurnId: companionFeedback.userTurnId, at: now,
         });
         data.companionFeedback = data.companionFeedback.slice(-MAX_COMPANION_FEEDBACK);
         data.revision++;
@@ -876,7 +930,7 @@ export class RelationshipLogStore {
     return entry
   }
 
-  async buildContext(conversationId?: string, privateContext = true, currentUserText?: string, useLearnedStyle = false, includeTaskLedger = true): Promise<string> {
+  async buildContext(conversationId?: string, privateContext = true, currentUserText?: string, useLearnedStyle = false, includeTaskLedger = true, speechScope = "owner"): Promise<string> {
     if (!privateContext) return "";
     const data = this.repository.read();
     if (refreshCommitmentStatuses(data, Date.now())) { data.revision++; this.repository.write(data); }
@@ -905,6 +959,15 @@ export class RelationshipLogStore {
       partner: "按对方选的伴侣式相处。开心时可以互相逗两句，难过时可以把话听完，日常也能直接答一句。闹别扭时就说这件具体的事，听清对方的意思，再继续聊。",
     }[relationshipMode];
     lines.push(relationshipDescription, styleDescription);
+    if (conversationId && currentUserText && !includeTaskLedger) {
+      if (rel.learnPrivateExpressions && rel.recordHistory && useLearnedStyle) {
+        const learned = collectPrivateExpressions(data.speech.filter(row => row.scope === speechScope));
+        const expression = privateExpressionHint(learned.samples, currentUserText);
+        if (expression) lines.push(expression);
+      }
+      const hint = desireContext(rel, data.desireHistory ?? [], conversationId, currentUserText, Date.now());
+      if (hint) lines.push(hint);
+    }
     lines.push(rel.affection
       ? "话题和语气合适时，可以自然表达亲近。对方忙着、想安静或改了话题，就尊重这个选择。"
       : "对方喜欢体贴、平实的语气。用日常的关心，省去恋爱称呼和撒娇。");
@@ -917,9 +980,11 @@ export class RelationshipLogStore {
     if (replyHint) lines.push("【本轮语气参考】", "这是从这一条消息自动识别的线索，可能误判。以对方原话、原话说的时间和明确要求为准。只调整接话方式，省去给对方贴标签。", replyHint);
     if (useLearnedStyle && conversationId && rel.recordHistory && rel.learnConversationStyle !== false) {
       const currentTopics = new Set(classifyCompanionFeedback(currentUserText ?? "").map(item => item.topic));
-      const style = learnedPreferences(data.companionFeedback.filter(item => item.conversationId === conversationId))
+      const share = !!rel.learnPrivateExpressions && !includeTaskLedger;
+      const scopedFeedback = data.companionFeedback.filter(item => item.speechScope ? (share ? item.speechScope === speechScope : item.speechScope === speechScope && item.conversationId === conversationId) : item.conversationId === conversationId);
+      const style = learnedPreferences(scopedFeedback, share)
         .filter(item => !currentTopics.has(item.topic)).map(item => LEARNED_STYLE[item.topic]);
-      if (style.length) lines.push("【这段私聊的表达习惯】", "仅在合适时沿用。按对方这一轮明确的要求和相处边界接话。", ...style);
+      if (style.length) lines.push(share ? "【你们平常聊天的表达习惯】" : "【这段私聊的表达习惯】", "仅在合适时沿用。按对方这一轮明确的要求和相处边界接话。", ...style);
     }
     if (rel.sharedGoals.length) lines.push(`聊到相关事情时可以参考这些共同目标，进度按已知事实说：${JSON.stringify(rel.sharedGoals)}`);
     if (rel.milestones.length) lines.push(`只在时机或话题合适时提起这些由对方指定的日子：${JSON.stringify(rel.milestones)}`);
