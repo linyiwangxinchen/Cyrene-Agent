@@ -176,7 +176,9 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
     const maxRounds = positiveInteger(options.maxRounds, DEFAULT_MAX_ROUNDS, "maxRounds", 1_000);
     const maxWallMs = positiveInteger(options.maxWallMs, DEFAULT_MAX_WALL_MS, "maxWallMs", 24 * 60 * 60_000);
     const tools = validateAndMapTools(deps.pluginId, options.tools);
-    const gardenGuard = deps.source === "builtin" && deps.pluginId === "bili-garden" && options.purpose === "bili-guard";
+    const builtinGarden = deps.source === "builtin" && deps.pluginId === "bili-garden";
+    const gardenGuard = builtinGarden && options.purpose === "bili-guard";
+    const gardenReport = builtinGarden && (gardenGuard || options.purpose === "bili-discover");
     const replyId = "bili-garden_propose_interaction";
     const replyTool = gardenGuard ? tools.find(tool => tool.id === replyId) : undefined;
     const prepareDraft = replyTool && options.tools.find(tool => tool.id === replyId)?.prepareDraft;
@@ -272,7 +274,7 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
           // pause/denial. Headless goals cannot display a fresh approval card.
           const permission = await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description,
             args, risk: tool.risk ?? "safe", effect: resolveEffectKind(tool, args), runId,
-            ...(gardenGuard && (toolId === replyId || toolId === "bili-garden_finish_report")
+            ...((gardenGuard && toolId === replyId) || (gardenReport && toolId === "bili-garden_finish_report")
               ? { bypassCompanionApproval: "preset" as const } : {}),
             signal: signals.signal, bypassBasePolicy: true, allowPrompt: false });
           if (tool === replyTool && prepareDraft && (permission.allowed || permission.needsApproval)) {

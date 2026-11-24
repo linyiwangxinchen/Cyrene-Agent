@@ -298,6 +298,46 @@ test("真实工具循环契约注入昔涟人格、已存记忆与证据后提�
   assert.match(received.context, /喜欢园艺/);
   assert.ok(store.get("report", "run"));
 });
+test("首次只返回文字时，发现补跑只能搜索、阅读和交报告，空搜索可如实结算", async t => {
+  const { store } = setup(t);
+  let calls = 0;
+  const runner = new GardenRunner({ store, client: { search: async () => [] }, config: () => store.config(),
+    charter: async () => "", llm: { runGoal: async input => {
+      if (++calls === 2) {
+        assert.deepEqual(input.tools.map(t => t.name), ["search", "read_video", "finish_report"]);
+        assert.equal(input.firstRoundToolId, "bili-garden_search");
+        assert.equal(await input.checkTool("bili-garden_propose_interaction"), false);
+        const report = input.tools.find(t => t.name === "finish_report");
+        await assert.rejects(report.execute({ items: [], summary: "跳过" }), /尚未成功搜索或读取/);
+        await input.tools[0].execute({ keyword: "花园" });
+        await report.execute({ items: [], summary: "搜索花园没有匹配视频" });
+      }
+      return { terminal: { status: "success" }, text: "完成", rounds: 1, usage: { input: 10, output: 2 } };
+    } } });
+  const result = await runner.run({ id: "empty", day: "2026-11-24", kind: "discover" }, {}, new AbortController().signal);
+  assert.equal(result.report.summary, "搜索花园没有匹配视频");
+  assert.equal(result.usage.input, 20);
+  assert.equal(calls, 2);
+});
+
+test("显式禁止提交发现报告时显示权限原因，保留已读字幕并停止补交", async t => {
+  const { store } = setup(t);
+  let calls = 0;
+  const runner = new GardenRunner({ store, client: { info: async () => ({ bvid: BV, duration: 30 }),
+    subtitle: async () => ({ text: "花要晒太阳" }) }, config: () => store.config(), charter: async () => "",
+    llm: { runGoal: async input => {
+      calls++;
+      await input.tools.find(t => t.name === "read_video").execute({ bvid: BV });
+      input.onEvent({ kind: "tool_denied", toolName: "bili-garden_finish_report", reason: "已禁止此工具" });
+      return { terminal: { status: "success" } };
+    } } });
+  const run = store.startRun({ day: "2026-11-24", kind: "discover", source: "manual" });
+  await assert.rejects(runner.run(run, {}, new AbortController().signal), /已禁止此工具/);
+  assert.equal(calls, 1);
+  assert.equal(store.get("evidence", BV).text, "花要晒太阳");
+  assert.equal(store.list("report").length, 0);
+});
+
 test("模型只说完成而不提交报告时明确失败", async (t) => {
   const { store } = setup(t);
   const runner = new GardenRunner({

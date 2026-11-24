@@ -23,14 +23,18 @@ const model = createServer(async (req, res) => {
     toolMessages = messagesOf(body).filter(m => m.role === "tool" || m.type === "function_call_output");
   const guard = JSON.stringify(body).includes("本轮是评论守护");
   const recovery = names.length === 1 && names[0].endsWith("_propose_interaction");
+  const collectReport = names.length === 1 && names[0].endsWith("_finish_report");
   let name, args;
   if (recovery && !toolMessages.length) {
     name = names[0];
     args = { text: "我是昔涟，我在呀。你想聊哪一段？" };
-  } else if (!recovery && toolMessages.length === 0) {
+  } else if (!responses && !guard && !toolMessages.length) {
+    name = names.find(n => n.endsWith("_search"));
+    args = { keyword: "园艺" };
+  } else if (!collectReport && !recovery && (toolMessages.length === 0 || (!responses && !guard && toolMessages.length === 1))) {
     name = names.find((n) => n.endsWith("_read_video"));
     args = { bvid: guard ? "BV17x411w7KC" : "BV1JcnW6pEFT" };
-  } else if (!recovery && !guard && toolMessages.length === 1) {
+  } else if ((collectReport && !toolMessages.length) || (!collectReport && !responses && !recovery && !guard && toolMessages.length === 2)) {
     name = names.find((n) => n.endsWith("_finish_report"));
     args = {
       items: [
@@ -127,7 +131,7 @@ await writeFile(
 await writeFile(
   path.join(dir, "index.mjs"),
   `import { GardenService } from ${JSON.stringify(pathToFileURL(path.resolve("extensions/bili-garden/lib/service.mjs")).href)};
-export function register(ctx){const client={account:async()=>({loggedIn:true,uid:'123',name:'Fixture'}),info:async(bvid)=>({bvid,title:'养花',owner:'UP',duration:300}),subtitle:async(bvid)=>bvid==='BV17x411w7KC'?{bvid,text:'',segments:[]}:{bvid,text:'花需要合适的阳光',segments:[{from:12,text:'花需要合适的阳光'}]},
+export function register(ctx){const client={account:async()=>({loggedIn:true,uid:'123',name:'Fixture'}),search:async()=>[{bvid:'BV1JcnW6pEFT',title:'养花'}],info:async(bvid)=>({bvid,title:'养花',owner:'UP',duration:300}),subtitle:async(bvid)=>bvid==='BV17x411w7KC'?{bvid,text:'',segments:[]}:{bvid,text:'花需要合适的阳光',segments:[{from:12,text:'花需要合适的阳光'}]},
 call:async(name)=>{if(name==='bili_user_videos')return {videos:[]};if(name==='bili_guard_scan')return {at:[{bvid:'BV17x411w7KC',rpid:'100',uid:'456',root_id:0,text:'@昔涟 你在吗？'}],comments:[],at_cursor:{id:1,time:1},at_resume:null};if(name==='bili_reply')return {success:true,rpid:'200'};throw new Error('Unexpected fixture call: '+name)}};
 const runtime={status:()=>({installed:true}),stopWorker(){},async close(){}};
 const s=new GardenService(ctx,${JSON.stringify(path.resolve("extensions/bili-garden"))},{client,runtime,schedule:false});ctx.registerIpc('garden',(c,a)=>s.dispatch(c,a));ctx.onDispose(()=>s.close());}`,
@@ -224,7 +228,10 @@ try {
     assert.ok(response.ok, JSON.stringify(response));
     return response.data;
   };
-  const started = await call("run", { bvid: "BV1JcnW6pEFT" });
+  const controls = await invoke("companion:get");
+  await invoke("companion:update", { type: "permissions", expectedRevision: controls.revision,
+    patch: { preset: "full", confirmTools: confirmReply ? [id + "_propose_interaction"] : [] } });
+  const started = await call("run", responses ? { bvid: "BV1JcnW6pEFT" } : {});
   assert.equal(started.started, true);
   let snapshot;
   for (let i = 0; i < 200; i++) {
@@ -251,9 +258,8 @@ try {
   assert.ok(run.usage.cachedInput > 0);
   assert.equal(snapshot.profiles[0].id, "fixture");
   assert.ok(!JSON.stringify(snapshot.profiles).includes("fixture-local-only"));
-  const controls = await invoke("companion:get");
-  await invoke("companion:update", { type: "permissions", expectedRevision: controls.revision,
-    patch: { preset: "full", confirmTools: confirmReply ? [id + "_propose_interaction"] : [] } });
+  assert.equal(snapshot.reports[0].items[0].citations[0].text, "花需要合适的阳光");
+  assert.equal(requests.some(r => r.tools?.length === 1 && toolName(r.tools[0]).endsWith("_finish_report")), responses);
   await call("config", { guardOn: true, autoSend: true, guardWhitelist: ["456"], quietStart: "00:00", quietEnd: "00:00" });
   const guardStarted = await call("guard");
   assert.equal(guardStarted.started, true);
