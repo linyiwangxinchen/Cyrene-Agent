@@ -10,7 +10,7 @@ const CONFIG = { bar: "摄影" };
 const LISTING = '<a class="j_th_tit" href="/p/3">光圈</a>';
 const POST = '<title>光圈_百度贴吧</title><div class="content">试试对着天空拍。</div>';
 
-function setup() {
+function setup(postReply) {
   const encryptedFixture = new Map();
   const secrets = {
     get: async (key) => encryptedFixture.get(key),
@@ -26,14 +26,16 @@ function setup() {
     storage: { get: key => publicData.get(key), set: (key, value) => publicData.set(key, value) },
     deps: {
       secrets,
-      llm: { generateText: async messages => {
+      llm: { generateText: async (messages, { purpose }) => {
         modelInputs.push(messages);
+        if (purpose === "forum-reply-draft") return "我也想试试这样拍天空。";
         return JSON.stringify({ summary: "在练习拍天空。", evidence: ["天空"], expressions: [] });
       } },
     },
   };
   function start() {
     return createForum(ctx, {
+      postReply,
       now: () => 1000,
       page: async (path, _signal, cookie) => {
         requests.push({ path, cookie });
@@ -78,6 +80,91 @@ test("reading-session credentials stay in the secrets service and are absent fro
   assert.equal(fixture.requests[2].cookie, undefined);
   await restarted.invoke("read", { url: "/p/4", excerpt: "试试对着天空拍。" });
   assert.equal(fixture.requests.length, 3);
+});
+
+test("signed-in reads take nested replies from the mobile page without calling the desktop comment route", async () => {
+  const fixture = setup();
+  const mobile = POST + `<li class="j_post_list_item" data-info='{"pid":1234567890123456789,"floor_num":1}'>
+    <div class="content">试试对着天空拍。</div>
+    <div class="fr_list j_floor_panel" data-list-count="1"><ul class="flist">
+      <li class="j_list_item_floor" pid="12"><span class="floor_content">等云散了再拍。</span></li>
+    </ul></div>
+  </li>`;
+  fixture.respondWith(path => {
+    assert.equal(path, "/mo/q/m?kz=3&pn=1");
+    return mobile;
+  });
+  await fixture.forum.invoke("auth-save", { cookie: TEST_COOKIE });
+  await fixture.forum.invoke("save", { replies: true });
+  await fixture.forum.invoke("read", { url: "/p/3" });
+  const result = await fixture.start().invoke("read", { url: "/p/3" });
+  assert.equal(fixture.requests.length, 2);
+  assert.equal(result.reading.replyStatus, "");
+  assert.equal(result.reading.limited, false);
+  assert.deepEqual(result.reading.floors.filter(row => row.reply).map(row => [row.post, row.body]), [
+    ["1234567890123456789", "等云散了再拍。"],
+  ]);
+});
+
+test("drafting uses saved floors and only a deliberate send with posting enabled and a cookie reaches transport", async () => {
+  const sends = [];
+  const fixture = setup(async args => {
+    assert.equal(args.canPost(), true);
+    sends.push(args);
+    return { outcome: "published", url: args.url + "#post_content_42", postId: "42", message: "回复已发布。" };
+  });
+  const request = { url: "/p/3", content: "我也想试试这样拍天空。" };
+  await fixture.forum.invoke("auth-save", { cookie: TEST_COOKIE });
+  await fixture.forum.invoke("read", { url: request.url });
+  assert.equal((await fixture.forum.invoke("state")).config.allowPosting, false);
+  assert.deepEqual(await fixture.forum.invoke("draft-reply", request), { content: request.content });
+  assert.doesNotMatch(JSON.stringify(fixture.modelInputs), /fixture-cookie/u);
+  assert.match((await fixture.forum.invoke("post-reply", request)).message, /开启/u);
+  await fixture.forum.invoke("save", { allowPosting: true });
+  const restarted = fixture.start();
+  await restarted.invoke("auth-clear");
+  assert.match((await restarted.invoke("post-reply", request)).message, /Cookie/u);
+  await restarted.invoke("auth-save", { cookie: TEST_COOKIE });
+  await restarted.invoke("read", { url: "/p/7", excerpt: "导入的楼层" });
+  const imported = await restarted.invoke("post-reply", { ...request, url: "/p/7" });
+  assert.equal(imported.outcome, "rejected");
+  assert.match(imported.message, /先在插件里读/u);
+  assert.equal(sends.length, 0);
+  const result = await restarted.invoke("post-reply", request);
+  assert.equal(result.postId, "42");
+  assert.equal(sends.length, 1);
+  assert.equal(sends[0].content, request.content);
+});
+
+test("mobile continuation follows actual page metadata and does not duplicate embedded replies", async () => {
+  const fixture = setup();
+  const reply = (pid, text) => `<li class="j_list_item_floor" pid="${pid}"><span class="floor_content">${text}</span></li>`;
+  const firstReply = reply("11", "等云散了再拍。");
+  const main = `<li class="j_post_list_item" data-info='{"pid":12,"floor_num":1}'>
+    <div class="content">试试对着天空拍。</div>
+    <div class="fr_list j_floor_panel" data-list-count="11"><ul class="flist">${firstReply}</ul></div>
+  </li>`;
+  fixture.respondWith(path => {
+    if (path === "/mo/q/m?kz=3&pn=1") return main;
+    const page = Number(new URL("https://tieba.baidu.com" + path).searchParams.get("fpn"));
+    return JSON.stringify({
+      no: 0, data: {
+        page: { current_page: page, total_page: 2, total_num: 11, page_size: 10 },
+        total_num: page === 1 ? 10 : 1,
+        floor_html: page === 1 ? firstReply + reply("21", "太阳快出来了。") : reply("22", "收工喽。"),
+      },
+    });
+  });
+  await fixture.forum.invoke("auth-save", { cookie: TEST_COOKIE });
+  await fixture.forum.invoke("save", { replies: true });
+  const result = await fixture.forum.invoke("read", { url: "/p/3" });
+  assert.deepEqual(result.reading.floors.map(row => row.body), [
+    "试试对着天空拍。", "等云散了再拍。", "太阳快出来了。", "收工喽。",
+  ]);
+  assert.deepEqual(fixture.requests.map(row => row.path), [
+    "/mo/q/m?kz=3&pn=1", "/mo/q/flr?kz=3&pid=12&fpn=1&is_ajax=1&has_url_param=0",
+    "/mo/q/flr?kz=3&pid=12&fpn=2&is_ajax=1&has_url_param=0",
+  ]);
 });
 
 test("malformed cookie values are rejected without replacing stored credentials", async () => {

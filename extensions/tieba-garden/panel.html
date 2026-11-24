@@ -148,6 +148,10 @@
           <span><strong>一起读楼中楼</strong><small>补充楼层下的回复，保留接话的上下文。</small></span>
           <input type="checkbox" id="replies" />
         </label>
+        <label class="switch-row" for="allow-posting">
+          <span><strong>允许发布回复</strong><small>使用已保存的贴吧登录态，点击发送后公开回复帖子。</small></span>
+          <input type="checkbox" id="allow-posting" />
+        </label>
         <label class="switch-row" for="learn">
           <span><strong>学习表达并用于私聊</strong><small>保留有出处的用例，在聊到相关话题时参考。</small></span>
           <input type="checkbox" id="learn" />
@@ -164,6 +168,16 @@
       <h2 id="detail-title" tabindex="-1">楼层原文</h2>
       <button type="button" id="detail-close">关闭</button>
     </header>
+    <form id="reply-form" hidden>
+      <label for="reply-content">回复这篇帖子</label>
+      <textarea id="reply-content" rows="3" aria-describedby="reply-help" placeholder="输入 4 至 400 字的公开回复"></textarea>
+      <p id="reply-help" class="muted meta"></p>
+      <div class="actions form-actions">
+        <button type="button" id="reply-draft">昔涟拟回复</button>
+        <button type="submit" id="reply-send" class="primary" disabled>发送回复</button>
+      </div>
+      <p id="reply-feedback" class="meta" role="status"></p>
+    </form>
     <div id="detail-body"></div>
   </dialog>
   <dialog id="forget-dialog" aria-labelledby="forget-title">

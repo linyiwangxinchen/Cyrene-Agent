@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -31,6 +31,8 @@ rememberExpression(
 garden.close();
 const captured = [];
 const quote = "气泡锚点";
+const liveThreadUrl = "https://tieba.baidu.com/p/23456";
+const liveThreadTitle = "夜景摄影讨论";
 const gateway = createServer(async (req, res) => {
   const parts = [];
   for await (const chunk of req) parts.push(chunk);
@@ -250,6 +252,19 @@ try {
   });
   await waitFor(() => token, "auth");
   await handle.startChannels();
+  if (process.argv.includes("--ui")) {
+    const pluginData = path.join(dataDir, "plugin-data", "tieba-garden");
+    await mkdir(pluginData, { recursive: true });
+    await writeFile(path.join(pluginData, "reading.json"), JSON.stringify({
+      tid: "23456",
+      url: liveThreadUrl,
+      title: liveThreadTitle,
+      bar: "摄影",
+      at: Date.now(),
+      imported: false,
+      floors: [{ body: "试试等日落后半小时再拍。", post: "456", page: 1 }],
+    }));
+  }
   await invoke("plugins:set-enabled", "tieba-garden", true);
   const panel = async (cmd, args = {}) => {
     const reply = await invoke(
@@ -300,17 +315,26 @@ try {
       ]);
       const page = await context.newPage();
       const visits = [];
+      const replyActions = [];
+      const draftContent = "等日落后半小时的建议很实用。";
       await page.route("**/api/core/invoke", async (route) => {
         const { channel, args } = route.request().postDataJSON();
         if (
           channel !== "plugins:panel:invoke" ||
           args[0] !== "tieba-garden" ||
-          args[1] !== "forum" ||
-          args[2]?.[0] !== "visit"
+          args[1] !== "forum"
         ) {
           return route.continue();
         }
-        visits.push(args[2][1]);
+        const [command, input] = args[2];
+        if (command === "draft-reply" || command === "post-reply") {
+          replyActions.push([command, input]);
+          const data = command === "draft-reply" ? { content: draftContent }
+            : { outcome: "unknown", url: liveThreadUrl };
+          return route.fulfill({ json: { ok: true, data } });
+        }
+        if (command !== "visit") return route.continue();
+        visits.push(input);
         const visitState = await panel("state", { compact: true });
         if (!visitState.config.bars.length) {
           visitState.visits = [
@@ -334,14 +358,41 @@ try {
       const frame = page.frameLocator('iframe[src*="tieba-garden"]');
       await frame.getByRole("button", { name: "表达收藏", exact: true }).click();
       await frame.locator("#expressions").getByText(quote, { exact: false }).first().waitFor();
-      await frame.getByRole("button", { name: "巡游设置", exact: true }).click();
+      const settingsTab = frame.getByRole("button", { name: "巡游设置", exact: true });
+      const journalTab = frame.getByRole("button", { name: "阅读手记", exact: true });
+      const openFloors = (title) => frame.locator("#journal article").filter({ hasText: title })
+        .getByRole("button", { name: "看楼层原文", exact: true }).click();
+      const closeDetail = frame.getByRole("button", { name: "关闭", exact: true });
+      const replyField = frame.getByLabel("回复这篇帖子", { exact: true });
+      const sendReply = frame.getByRole("button", { name: "发送回复", exact: true });
+      await journalTab.click();
+      await openFloors("断线后的比喻");
+      await frame.locator("#detail-body").getByText("这次断线就叫气泡锚点吧", { exact: true }).waitFor();
+      assert.equal(await replyField.isVisible(), false);
+      await closeDetail.click();
+      await openFloors(liveThreadTitle);
+      await frame.getByRole("button", { name: "昔涟拟回复", exact: true }).click();
+      await frame.getByText("草稿已填入，修改后可发送。", { exact: true }).waitFor();
+      assert.equal(await replyField.inputValue(), draftContent);
+      assert.equal(await sendReply.isDisabled(), true);
+      assert.deepEqual(replyActions, [["draft-reply", { url: liveThreadUrl }]]);
+      await closeDetail.click();
+      await settingsTab.click();
       assert.equal(await frame.locator("#learn").isChecked(), true);
+      const allowPosting = frame.locator("#allow-posting");
+      assert.equal(await allowPosting.isChecked(), false);
       const cookieField = frame.getByLabel("贴吧 Cookie", { exact: true });
       assert.equal(await cookieField.getAttribute("type"), "password");
       await cookieField.fill(fixtureCookie.replace(/[_~]/g, character => "\\" + character));
       await frame.getByRole("button", { name: "保存 Cookie", exact: true }).click();
       await frame.locator("#auth-state").getByText("已保存 Cookie", { exact: true }).waitFor();
       assert.equal(await cookieField.inputValue(), "");
+      await journalTab.click();
+      await openFloors(liveThreadTitle);
+      assert.equal(await replyField.inputValue(), draftContent);
+      assert.equal(await sendReply.isDisabled(), true);
+      await closeDetail.click();
+      await settingsTab.click();
       const browseTab = frame.getByRole("button", { name: "逛贴吧", exact: true });
       const visitButton = frame.getByRole("button", { name: "逛一逛", exact: true });
       const bars = frame.getByLabel("常逛的吧", { exact: true });
@@ -359,19 +410,45 @@ try {
       assert.equal(await browseTab.getAttribute("aria-current"), "page");
       assert.equal(await bars.isVisible(), false);
       assert.deepEqual((await panel("state", { compact: true })).config.bars, []);
-      await frame.getByRole("button", { name: "巡游设置", exact: true }).click();
+      await settingsTab.click();
       await bars.fill("摄影");
       await frame.locator("#post-limit").fill("5");
+      await allowPosting.check();
       await frame.getByRole("button", { name: "保存设置", exact: true }).click();
       await frame.getByText("巡游设置已保存", { exact: true }).waitFor();
       const savedConfig = (await panel("state", { compact: true })).config;
       assert.deepEqual(savedConfig.bars, ["摄影"]);
       assert.equal(savedConfig.postsPerVisit, 5);
+      assert.equal(savedConfig.allowPosting, true);
       await visitButton.click();
       await waitFor(() => visits.length > 1, "Tieba visit request with a saved forum");
       assert.deepEqual(visits, [visitArgs, visitArgs]);
       assert.equal(await browseTab.getAttribute("aria-current"), "page");
-      await frame.getByRole("button", { name: "巡游设置", exact: true }).click();
+      await journalTab.click();
+      await openFloors(liveThreadTitle);
+      await replyField.fill("🙂🙂🙂");
+      assert.equal(await sendReply.isDisabled(), true);
+      await replyField.fill("好".repeat(401));
+      assert.equal(await sendReply.isDisabled(), true);
+      await replyField.fill("🙂".repeat(400));
+      assert.equal(await sendReply.isEnabled(), true);
+      const editedReply = "这个时间点很实用，下次试试。";
+      const enteredReply = " " + editedReply + " ";
+      await replyField.fill(enteredReply);
+      await sendReply.click();
+      await frame.getByText("发送结果未确认，请到原帖核对是否已发布。", { exact: true }).waitFor();
+      assert.equal(await replyField.inputValue(), enteredReply);
+      assert.equal(await sendReply.isDisabled(), true);
+      await closeDetail.click();
+      await openFloors(liveThreadTitle);
+      await sendReply.waitFor();
+      assert.equal(await sendReply.isDisabled(), true);
+      assert.deepEqual(replyActions, [
+        ["draft-reply", { url: liveThreadUrl }],
+        ["post-reply", { url: liveThreadUrl, content: editedReply }],
+      ]);
+      await closeDetail.click();
+      await settingsTab.click();
       await frame.getByRole("button", { name: "清除 Cookie", exact: true }).click();
       await frame.locator("#auth-state").getByText("公开访问", { exact: true }).waitFor();
       await frame.getByRole("button", { name: "阅读手记", exact: true }).click();
@@ -391,7 +468,7 @@ try {
         .getByRole("button", { name: new RegExp("表达 · " + quote) })
         .waitFor();
       console.log(
-        "PASS Chromium plugin iframe, masked Cookie management, Tieba visit choice and limits, graph sources and mobile search",
+        "PASS Chromium plugin iframe, masked Cookie management, Tieba visits and replies, graph sources and mobile search",
       );
     } finally {
       await browser.close();

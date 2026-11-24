@@ -10,6 +10,12 @@
     complete: "已完成", partial: "部分完成", empty: "没有新帖",
     failed: "本轮中断", cancelled: "已取消", running: "进行中",
   };
+  const replyOutcomes = {
+    published: "回复已发布。",
+    accepted: "贴吧已接收回复，公开显示状态待确认。",
+    rejected: "贴吧未接受回复。",
+    unknown: "发送结果未确认，请到原帖核对是否已发布。",
+  };
 
   let state;
   let activeSection = "browse";
@@ -22,6 +28,9 @@
   let settingsDirty = false;
   let previousStatus;
   let highlightTid;
+  let detailRequest;
+  let activeReply;
+  const threadReplies = new Map();
   const signatures = new Map();
 
   function h(tag, className, text) {
@@ -112,6 +121,7 @@
       el("bars").value = config.bars.join("\n");
       el("learn").checked = Boolean(config.learn);
       el("replies").checked = Boolean(config.replies);
+      el("allow-posting").checked = config.allowPosting === true;
       el("auto").checked = Boolean(config.auto);
       el("interval").value = config.intervalHours ?? 4;
       el("post-limit").value = config.postsPerVisit ?? 1;
@@ -174,6 +184,10 @@
 
   async function showDetail(item, url, title) {
     const dialog = el("detail");
+    const request = {};
+    detailRequest = request;
+    activeReply = undefined;
+    el("reply-form").hidden = true;
     el("detail-title").textContent = title;
     const body = el("detail-body");
     body.replaceChildren(h("p", "muted", "正在读取楼层原文…"));
@@ -183,10 +197,10 @@
     try {
       reading = item.floors ? item : await invoke("detail", { tid: item.tid });
     } catch (error) {
-      body.replaceChildren(h("p", "reason", error.message));
+      if (dialog.open && detailRequest === request) body.replaceChildren(h("p", "reason", error.message));
       return;
     }
-    if (!dialog.open || el("detail-title").textContent !== title) return;
+    if (!dialog.open || detailRequest !== request) return;
     body.replaceChildren();
     rowActions(body, sourceLink(url, "打开原帖"));
     const floors = h("ol", "floor-list");
@@ -208,6 +222,42 @@
       floors.append(row);
     });
     body.append(floors);
+    const replyUrl = !reading.imported && reading.floors.length && threadUrl("/p/" + reading.tid);
+    if (replyUrl) {
+      if (!threadReplies.has(replyUrl)) threadReplies.set(replyUrl, { url: replyUrl, content: "" });
+      activeReply = threadReplies.get(replyUrl);
+      el("reply-content").value = activeReply.content;
+      el("reply-form").hidden = false;
+      showReplyFeedback(activeReply);
+      updateControls();
+    }
+  }
+
+  function showReplyFeedback(reply) {
+    if (activeReply !== reply) return;
+    const feedback = el("reply-feedback");
+    feedback.replaceChildren();
+    if (reply.message) feedback.append(h("span", "", reply.message));
+    feedback.dataset.level = reply.error ? "error" : "info";
+    if (reply.link) feedback.append(reply.link);
+  }
+
+  function setReplyFeedback(reply, message, error = false, link) {
+    Object.assign(reply, { message, error, link });
+    showReplyFeedback(reply);
+  }
+
+  function finishReply(reply, result) {
+    const outcome = Object.hasOwn(replyOutcomes, result?.outcome) ? result.outcome : "unknown";
+    reply.uncertain = outcome === "unknown";
+    if (outcome === "published" || outcome === "accepted") {
+      reply.content = "";
+      if (activeReply === reply) el("reply-content").value = "";
+    }
+    const link = outcome === "published" ? sourceLink(result?.url, "查看回复") ?? sourceLink(reply.url, "打开原帖")
+      : outcome === "rejected" ? null : sourceLink(reply.url, "打开原帖");
+    const message = outcome === "unknown" ? replyOutcomes.unknown : result?.message || replyOutcomes[outcome];
+    setReplyFeedback(reply, message, outcome === "rejected" || reply.uncertain, link);
   }
 
   function readingEntry(item) {
@@ -317,6 +367,17 @@
     el("auth-check").disabled = !canEditAuth || !state.auth.hasCookie;
     el("auth-clear").disabled = !canEditAuth || !state.auth.hasCookie;
     for (const button of document.querySelectorAll("[data-requires-idle]")) button.disabled = busy;
+    if (activeReply) {
+      const length = Array.from(activeReply.content.trim()).length;
+      const postingEnabled = config.allowPosting === true;
+      const signedIn = Boolean(state.auth?.hasCookie);
+      el("reply-content").readOnly = busy || Boolean(activeReply.uncertain);
+      el("reply-draft").disabled = busy || Boolean(activeReply.uncertain);
+      el("reply-send").disabled = busy || !postingEnabled || !signedIn || activeReply.uncertain || length < 4 || length > 400;
+      el("reply-help").textContent = length > 400 ? "请将回复缩短到 400 字以内。"
+        : !postingEnabled ? "在巡游设置中允许发布回复后即可发送。"
+        : signedIn ? "" : "保存贴吧 Cookie 后即可发送。";
+    }
   }
 
   function showAuth(auth) {
@@ -398,7 +459,7 @@
     return refreshPromise;
   }
 
-  async function act(command, args, waiting, onResult = render, feedback = notice) {
+  async function act(command, args, waiting, onResult = render, feedback = notice, compact = true) {
     if (actionBusy) return false;
     if (refreshPromise) await refreshPromise;
     if (actionBusy) return false;
@@ -406,7 +467,7 @@
     updateControls();
     feedback(waiting);
     try {
-      const result = await invoke(command, { ...args, compact: true });
+      const result = await invoke(command, compact ? { ...args, compact: true } : args);
       onResult(result);
       return true;
     } catch (error) {
@@ -475,6 +536,7 @@
       bar: bars[0] ?? "",
       bars,
       replies: el("replies").checked,
+      allowPosting: el("allow-posting").checked,
       auto: el("auto").checked,
       learn: el("learn").checked,
       intervalHours: el("interval").valueAsNumber,
@@ -535,6 +597,37 @@
     void act("visit", { background: true }, "正在开始巡游…");
   });
   el("detail-close").addEventListener("click", () => el("detail").close());
+  el("detail").addEventListener("close", () => {
+    if (!el("detail").open) activeReply = undefined;
+  });
+  el("reply-content").addEventListener("input", event => {
+    if (!activeReply) return;
+    activeReply.content = event.target.value;
+    updateControls();
+  });
+  el("reply-draft").addEventListener("click", () => {
+    const reply = activeReply;
+    if (!reply || el("reply-draft").disabled) return;
+    void act("draft-reply", { url: reply.url }, "昔涟正在拟稿…", result => {
+      if (typeof result?.content !== "string") throw new Error("昔涟未返回回复草稿。");
+      reply.content = result.content;
+      if (activeReply === reply) {
+        const field = el("reply-content");
+        field.value = reply.content;
+        field.focus();
+      }
+      setReplyFeedback(reply, "草稿已填入，修改后可发送。");
+    }, (message, error) => setReplyFeedback(reply, message, error), false);
+  });
+  el("reply-form").addEventListener("submit", event => {
+    event.preventDefault();
+    const reply = activeReply;
+    if (!reply || el("reply-send").disabled) return;
+    void act("post-reply", { url: reply.url, content: reply.content.trim() }, "正在发送回复…",
+      result => finishReply(reply, result),
+      (message, error) => error ? finishReply(reply, { outcome: "unknown" }) : setReplyFeedback(reply, message),
+      false);
+  });
   el("forget-dialog").addEventListener("close", event => {
     if (event.target.returnValue === "forget" && pendingForget) {
       act("forget", { id: pendingForget }, "正在移除表达…", next => {

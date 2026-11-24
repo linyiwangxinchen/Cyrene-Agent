@@ -3,6 +3,8 @@ import { authenticatedPage, initialJar } from "./authenticated-page.mjs";
 import { normalizeCookie } from "./session.mjs";
 
 export const TIEBA = "https://tieba.baidu.com";
+const POST_ID = /^\d{1,20}$/;
+const MOBILE_REPLY_PATH = /^\/mo\/q\/flr\?kz=\d{1,20}&pid=\d{1,20}&fpn=[1-9]\d{0,3}&is_ajax=1&has_url_param=0$/;
 
 export function threadId(value) {
   const url = new URL(String(value), TIEBA);
@@ -64,12 +66,8 @@ function blocks(html, matchOpen, tag, limit) {
   return result;
 }
 
-function mobileFloors(html) {
-  const content = (tag) => {
-    const classes = attribute(tag, "class")?.split(/\s+/);
-    if (classes?.includes("content") && !classes.includes("top_bar")) return { post: "" };
-  };
-  const items = blocks(html, (tag) => {
+function mobileItems(html) {
+  return blocks(html, (tag) => {
     if (!attribute(tag, "class")?.split(/\s+/).includes("j_post_list_item")) return;
     const info = attribute(tag, "data-info");
     if (!info) return { post: "" };
@@ -77,13 +75,21 @@ function mobileFloors(html) {
       // Preserve the original digits when Tieba sends the post ID as a JSON number.
       const data = JSON.parse(decodeEntities(info), (key, value, context) =>
         key === "pid" && typeof value === "number" ? context.source : value);
-      const post = typeof data?.pid === "string" && /^\d{1,20}$/.test(data.pid) ? data.pid : "";
+      const post = typeof data?.pid === "string" && POST_ID.test(data.pid) ? data.pid : "";
       const floor = Number(data?.floor_num);
       return Number.isSafeInteger(floor) && floor > 0 ? { post, floor } : { post };
     } catch {
       return { post: "" };
     }
   }, "li", 40);
+}
+
+function mobileFloors(html) {
+  const content = (tag) => {
+    const classes = attribute(tag, "class")?.split(/\s+/);
+    if (classes?.includes("content") && !classes.includes("top_bar")) return { post: "" };
+  };
+  const items = mobileItems(html);
   if (!items.length) return blocks(html, content, "div", 40);
   return items.flatMap(({ body, ...fields }) =>
     blocks(body, content, "div", 1).map((row) => ({ ...row, ...fields })));
@@ -106,6 +112,75 @@ export function repliesFromHtml(html, parent) {
   }, "span", 12)
     .map(({ body }) => ({ post: parent, body: text(body).slice(0, 500), reply: true }))
     .filter((row) => row.body);
+}
+
+function mobileReplyRows(html, post, limit) {
+  const replies = [];
+  const seen = new Set();
+  for (const { replyId, body } of blocks(html, (tag) => {
+    if (!attribute(tag, "class")?.split(/\s+/).includes("j_list_item_floor")) return;
+    const id = attribute(tag, "pid") ?? "";
+    return POST_ID.test(id) ? { replyId: id } : {};
+  }, "li", 40)) {
+    if (replyId && seen.has(replyId)) continue;
+    const [content] = blocks(body, (tag) => {
+      if (attribute(tag, "class")?.split(/\s+/).includes("floor_content")) return {};
+    }, "span", 1);
+    const quote = content ? text(content.body).slice(0, 500) : "";
+    if (!quote) continue;
+    if (replyId) seen.add(replyId);
+    replies.push({ post, body: quote, reply: true, ...(replyId && { replyId }) });
+    if (replies.length === limit) break;
+  }
+  return replies;
+}
+
+export function mobileRepliesFromHtml(html, parents) {
+  const requested = new Set(parents);
+  const replies = [];
+  const counts = new Map();
+  for (const { post, body } of mobileItems(html)) {
+    if (!requested.has(post) || !post) continue;
+    const [panel] = blocks(body, (tag) => {
+      if (!attribute(tag, "class")?.split(/\s+/).includes("j_floor_panel")) return;
+      const count = attribute(tag, "data-list-count") ?? "";
+      return /^\d{1,10}$/.test(count) ? { count: Number(count) } : {};
+    }, "div", 1);
+    if (!panel) continue;
+    if (panel.count !== undefined) counts.set(post, panel.count);
+    if (replies.length < 40) replies.push(...mobileReplyRows(panel.body, post, 40 - replies.length));
+  }
+  return { replies, counts };
+}
+
+export function mobileReplyPagePath(tid, post, page = 1) {
+  const path = "/mo/q/flr?kz=" + tid + "&pid=" + post + "&fpn=" + page + "&is_ajax=1&has_url_param=0";
+  if (!MOBILE_REPLY_PATH.test(path)) throw new TiebaPageError("贴吧楼中楼读取入口无效");
+  return path;
+}
+
+export function repliesFromMobilePage(payload, post) {
+  if (typeof payload !== "string") throw new TiebaPageError("贴吧楼中楼返回格式无法识别");
+  if (verificationPage(payload)) throw verificationError();
+  let result;
+  try { result = JSON.parse(payload); }
+  catch { throw new TiebaPageError("贴吧楼中楼返回格式无法识别"); }
+  if ([401, 403, 429, "401", "403", "429"].includes(result?.no) ||
+    [result?.msg, result?.error, result?.errmsg].some(message =>
+      typeof message === "string" && /百度安全验证|访问验证|验证码/.test(message))) {
+    throw verificationError();
+  }
+  if (result?.no !== 0 && result?.no !== "0") throw new TiebaPageError("贴吧楼中楼读取失败");
+  const { page: pagination, floor_html: html } = result.data ?? {};
+  const { current_page: page, total_page: totalPages, total_num: total } = pagination ?? {};
+  if (!/^[1-9]\d{0,3}$/.test(page) || !/^\d{1,10}$/.test(totalPages) ||
+    !/^\d{1,10}$/.test(total) || typeof html !== "string") {
+    throw new TiebaPageError("贴吧楼中楼返回格式无法识别");
+  }
+  return {
+    replies: mobileReplyRows(html, post, 40),
+    page: Number(page), total: Number(total), totalPages: Number(totalPages),
+  };
 }
 
 export function threadsFromHtml(html, bar) {
@@ -146,11 +221,11 @@ function checkStatus(status) {
 }
 
 async function visitorPage(url, signal) {
-  const response = await fetch(url, {
+  const response = await fetch(url.href, {
     method: "GET",
     signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]),
     redirect: "manual",
-    headers: { Accept: "text/html, application/xhtml+xml" },
+    headers: { Accept: url.pathname === "/mo/q/flr" ? "application/json" : "text/html, application/xhtml+xml" },
   });
   if (!response.ok) await response.body?.cancel();
   checkStatus(response.status);
@@ -165,6 +240,15 @@ async function visitorPage(url, signal) {
   return { buffer: Buffer.concat(chunks), declared: response.headers.get("content-type") };
 }
 
+function verificationPage(html) {
+  return /<title\b[^>]*>[^<]*(?:百度安全验证|访问验证)/i.test(html) ||
+    /\bBIOC_OPTIONS\b/.test(html.slice(0, 5000));
+}
+
+function verificationError() {
+  return new TiebaPageError("贴吧要求安全验证。可在浏览器打开原帖后导入摘录。", true);
+}
+
 function decodePage({ buffer, declared }) {
   if (!buffer.length) throw new TiebaPageError("贴吧返回空白页面");
   if (buffer.length > 4_000_000) throw new TiebaPageError("贴吧页面过大");
@@ -172,10 +256,7 @@ function decodePage({ buffer, declared }) {
     (declared ?? "") + " " + buffer.subarray(0, 2000).toString("latin1"),
   ) ? "gb18030" : "utf-8";
   const html = new TextDecoder(encoding).decode(buffer);
-  if (/<title\b[^>]*>[^<]*(?:百度安全验证|访问验证)/i.test(html) ||
-    /\bBIOC_OPTIONS\b/.test(html.slice(0, 5000))) {
-    throw new TiebaPageError("贴吧要求安全验证。可在浏览器打开原帖后导入摘录。", true);
-  }
+  if (verificationPage(html)) throw verificationError();
   return html;
 }
 
@@ -228,12 +309,13 @@ export async function publicPage(path, signal, cookie, readAuthenticated) {
   const knownPage = /^\/f\?kw=[^&#]+$/.test(path)
     || /^\/p\/\d{1,20}(?:\?pn=\d{1,4})?$/.test(path)
     || /^\/mo\/q\/m\?(?:kw=[^&#]+&pn=0|kz=\d{1,20}&pn=\d{1,4})$/.test(path)
+    || MOBILE_REPLY_PATH.test(path)
     || /^\/p\/comment\?tid=\d{1,20}&pid=\d{1,20}&pn=1$/.test(path);
   if (url.origin !== TIEBA || !knownPage) throw new TiebaPageError("贴吧读取入口无效");
   try {
     const page = cookie
       ? await (readAuthenticated ?? createAuthenticatedReader().read)(url, signal, normalizeCookie(cookie))
-      : await visitorPage(url.href, signal);
+      : await visitorPage(url, signal);
     if (cookie) checkStatus(page.status);
     return decodePage(page);
   } catch (error) {

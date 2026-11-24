@@ -167,7 +167,12 @@ test("empty favorites fall back to starter topics and rotate them after an unusa
 test("read preserves evidence and re-analyzes without revisiting the site", async () => {
   let calls = 0;
   const plugin = fixture({
-    fetch: path => path.includes("comment") ? '<span class="lzl_content_main">上来喝茶</span>' : note,
+    fetch: path => path.startsWith("/mo/q/flr?") ? JSON.stringify({
+      no: 0, data: {
+        page: { current_page: 1, total_page: 1, total_num: 1, page_size: 10 },
+        total_num: 1, floor_html: '<li class="j_list_item_floor" pid="74"><span class="floor_content">上来喝茶</span></li>',
+      },
+    }) : note,
     generate: async messages => {
       calls++;
       if (calls === 1) throw new Error("HTTP 403");
@@ -188,7 +193,7 @@ test("read preserves evidence and re-analyzes without revisiting the site", asyn
   assert.equal(second.reading.summary, "这句招呼很有意思。");
   assert.equal(second.reading.evidence[0].source, "https://tieba.baidu.com/p/20?pn=2#post_content_34");
   assert.equal(second.reading.evidence.length, 1);
-  assert.deepEqual(plugin.requests, ["/p/20?pn=2", "/p/comment?tid=20&pid=34&pn=1"]);
+  assert.deepEqual(plugin.requests, ["/p/20?pn=2", "/mo/q/flr?kz=20&pid=34&fpn=1&is_ajax=1&has_url_param=0"]);
 });
 
 test("a verification page stops round requests while imported excerpts remain available", async () => {
