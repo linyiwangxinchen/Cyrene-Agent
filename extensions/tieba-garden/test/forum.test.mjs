@@ -26,6 +26,49 @@ test("parsed floors and nested replies retain their origin", () => {
   ])
     assert.throws(() => threadId(url));
 });
+
+test("mobile floors exclude the top bar and retain text without post IDs", () => {
+  const html = `
+    <div class="top_bar content">导航</div>
+    <div class="content lz">首楼 <b>正文</b><br>第二行</div>
+    <div class='content'>回复<div><img src="picture"></div>继续 &amp; 结束</div>
+    <div class="content">&nbsp;</div>
+    <div class="pb_prompt_content is_prompt_show">立即下载客户端</div>
+  `;
+  assert.deepEqual(floorsFromHtml(html), []);
+  assert.deepEqual(floorsFromHtml(html, true), [
+    { post: "", body: "首楼 正文\n第二行" },
+    { post: "", body: "回复\n继续 & 结束" },
+  ]);
+  assert.deepEqual(
+    floorsFromHtml(html + '<div id="post_content_34">带 ID 的正文</div>', true),
+    [{ post: "34", body: "带 ID 的正文" }],
+  );
+});
+
+test("mobile floors use the enclosing main post's ID and floor number", () => {
+  const html = `
+    <ul>
+      <li data-info="{&quot;pid&quot;:12345678901234567890,&quot;floor_num&quot;:11}" class="list_item j_post_list_item">
+        <div class="list_item_wrapper"><div class="content" lz="1">第一个主楼层</div></div>
+        <ul><li pid="42" class="j_list_item_floor">楼中楼</li></ul>
+      </li>
+      <li class="list_item j_post_list_item" data-info="{&quot;floor_num&quot;:12}">
+        <div class="content">只有楼层号</div>
+        <ul><li pid="44" class="j_list_item_floor">楼中楼</li></ul>
+      </li>
+      <li class="list_item j_post_list_item" data-info="{">
+        <div class="content">无法读取楼层元数据</div>
+      </li>
+    </ul>
+  `;
+  assert.deepEqual(floorsFromHtml(html, true), [
+    { post: "12345678901234567890", floor: 11, body: "第一个主楼层" },
+    { post: "", floor: 12, body: "只有楼层号" },
+    { post: "", body: "无法读取楼层元数据" },
+  ]);
+});
+
 test("Bilibili saves verifiable quotations and retrieves a relevant scene", () => {
   const store = { put: (_type, _id, item) => item };
   assert.throws(() =>

@@ -262,7 +262,7 @@ try {
     return reply.data;
   };
   await panel("save", { bar: "摄影", learn: true });
-  const fixtureCookie = "BDUSS=web_tieba_fixture_session; STOKEN=web_tieba_fixture_token";
+  const fixtureCookie = "__bid_n=web_tieba_fixture_browser; BDUSS=web_tieba_fixture~session; ab_sr=web_tieba_fixture=";
   assert.equal((await panel("auth-save", { cookie: fixtureCookie })).auth.hasCookie, true);
   const secretsDir = path.join(dataDir, "plugin-data", "tieba-garden", "secrets");
   const secretFiles = await readdir(secretsDir);
@@ -310,7 +310,7 @@ try {
       assert.equal(await frame.locator("#learn").isChecked(), true);
       const cookieField = frame.getByLabel("贴吧 Cookie", { exact: true });
       assert.equal(await cookieField.getAttribute("type"), "password");
-      await cookieField.fill(fixtureCookie);
+      await cookieField.fill(fixtureCookie.replace(/[_~]/g, character => "\\" + character));
       await frame.getByRole("button", { name: "保存 Cookie", exact: true }).click();
       await frame.locator("#auth-state").getByText("已保存 Cookie", { exact: true }).waitFor();
       assert.equal(await cookieField.inputValue(), "");

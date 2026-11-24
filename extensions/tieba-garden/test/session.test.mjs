@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createForum } from "../lib/forum.mjs";
 import { publicPage } from "../lib/public-pages.mjs";
+import { normalizeCookie } from "../lib/session.mjs";
 
 const TEST_COOKIE = "SID=fixture-cookie; theme=clean;";
 const CONFIG = { bar: "摄影" };
 const LISTING = '<a class="j_th_tit" href="/p/3">光圈</a>';
-const POST = '<h1 class="core_title_txt">光圈</h1><div id="post_content_1">试试对着天空拍。</div>';
+const POST = '<title>光圈_百度贴吧</title><div class="content">试试对着天空拍。</div>';
 
 function setup() {
   const encryptedFixture = new Map();
@@ -18,7 +19,7 @@ function setup() {
   const publicData = new Map([["config", CONFIG]]);
   const requests = [];
   const modelInputs = [];
-  let response = async path => path.startsWith("/f") ? LISTING : POST;
+  let response = async path => /[?]kw=/.test(path) ? LISTING : POST;
   const ctx = {
     signal: new AbortController().signal,
     storage: { get: key => publicData.get(key), set: (key, value) => publicData.set(key, value) },
@@ -55,11 +56,18 @@ test("reading-session credentials stay in the secrets service and are absent fro
   const checked = await restarted.invoke("auth-check");
   assert.equal(checked.auth.check.status, "accessible");
   assert.match(checked.auth.check.message, /页面可读性/);
-  assert.deepEqual(fixture.requests[0], { path: "/f?kw=" + encodeURIComponent("摄影"), cookie: "SID=fixture-cookie; theme=clean" });
+  assert.deepEqual(fixture.requests[0], {
+    path: "/mo/q/m?kw=" + encodeURIComponent("摄影") + "&pn=0",
+    cookie: "SID=fixture-cookie; theme=clean",
+  });
 
+  await restarted.invoke("save", { replies: true });
   const read = await restarted.invoke("read", { url: "/p/3" });
   assert.equal(read.reading.analysisStatus, "complete");
-  assert.equal(fixture.requests[1].cookie, "SID=fixture-cookie; theme=clean");
+  assert.equal(read.reading.evidence[0].source, "https://tieba.baidu.com/p/3");
+  assert.match(read.reading.replyStatus, /未提供可定位的楼层 ID/);
+  assert.deepEqual(fixture.requests[1], { path: "/mo/q/m?kz=3&pn=1", cookie: "SID=fixture-cookie; theme=clean" });
+  assert.equal(fixture.requests.length, 2);
   assert.doesNotMatch(JSON.stringify([saved, checked, read, [ ...fixture.publicData ], fixture.modelInputs]), /fixture-cookie/u);
 
   const cleared = await restarted.invoke("auth-clear");
@@ -74,10 +82,22 @@ test("reading-session credentials stay in the secrets service and are absent fro
 test("malformed cookie values are rejected without replacing stored credentials", async () => {
   const fixture = setup();
   await fixture.forum.invoke("auth-save", { cookie: TEST_COOKIE });
-  for (const invalid of ["", "BDUSS=fake\r\nReferer: elsewhere", '{"cookie":"not a header"}', "SID=" + "x".repeat(8200), "x = not-valid", "SID=foo,bar"]) {
+  for (const invalid of ["", "BDUSS=fake\r\nReferer: elsewhere", '{"cookie":"not a header"}', "SID=" + "x".repeat(8200), "x = not-valid", "SID=foo,bar", "SID=foo\\bar"]) {
     await assert.rejects(fixture.forum.invoke("auth-save", { cookie: invalid }), /Cookie/u);
   }
   assert.deepEqual([...fixture.encryptedFixture.values()], ["SID=fixture-cookie; theme=clean"]);
+});
+
+test("browser Cookie values survive formatted-text escaping and authenticated requests", async () => {
+  const raw = "BAIDUID_BFESS=fixture:FG=1; __bid_n=fixture-browser; BDUSS=fixture~auth; BDUSS_BFESS=fixture~auth; ab_sr=fixture==";
+  const copied = raw.replace(/[_~]/g, character => "\\" + character);
+  assert.equal(normalizeCookie(raw), raw);
+  const fixture = setup();
+  const state = await fixture.forum.invoke("auth-save", { cookie: "Cookie: " + copied });
+  assert.equal(state.auth.hasCookie, true);
+  assert.deepEqual([...fixture.encryptedFixture.values()], [raw]);
+  await fixture.start().invoke("auth-check");
+  assert.equal(fixture.requests[0].cookie, raw);
 });
 
 test("cookie edits serialize with active first-party requests", async () => {
@@ -103,11 +123,12 @@ test("HTTP access limits stop credential forwarding and are reported as inconclu
     return new Response(null, { status: 302, headers: { Location: "https://other.example/auth" } });
   };
   const signal = new AbortController().signal;
-  await assert.rejects(publicPage("/f?kw=foo", signal, TEST_COOKIE), { pauseVisit: true });
+  await assert.rejects(publicPage("/mo/q/m?kw=foo&pn=0", signal, TEST_COOKIE), { pauseVisit: true });
+  await assert.rejects(publicPage("/mo/q/m?kz=3&pn=1&other=invalid", signal, TEST_COOKIE), /入口/u);
   await assert.rejects(publicPage("/%2f%2fother.example", signal, TEST_COOKIE), /入口/u);
   await assert.rejects(publicPage("/p/3/../../download", signal, TEST_COOKIE), /入口/u);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, "https://tieba.baidu.com/f?kw=foo");
+  assert.equal(calls[0].url, "https://tieba.baidu.com/mo/q/m?kw=foo&pn=0");
   assert.equal(calls[0].init.method, "GET");
   assert.equal(calls[0].init.redirect, "manual");
   assert.equal(calls[0].init.headers.Cookie, TEST_COOKIE);

@@ -36,6 +36,11 @@ function readingUrl(tid, page) {
   return TIEBA + "/p/" + tid + (page > 1 ? "?pn=" + page : "");
 }
 
+function barPage(bar, authenticated) {
+  const query = "kw=" + encodeURIComponent(bar);
+  return authenticated ? "/mo/q/m?" + query + "&pn=0" : "/f?" + query;
+}
+
 function legacyReading(reading) {
   if (!reading || !/^\d{1,20}$/.test(reading.tid ?? "") || !Array.isArray(reading.floors)) return undefined;
   return {
@@ -53,7 +58,6 @@ function recoveryVisits(visits, now) {
 export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
   const config = () => configFrom(ctx.storage.get("config"));
   const session = createReadSession(ctx.deps.secrets);
-  const readPage = async path => page(path, ctx.signal, await session.requestCookie());
   const loaded = ctx.storage.get("forum");
   const oldReading = legacyReading(ctx.storage.get("reading"));
   let data = {
@@ -103,9 +107,10 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
 
   async function discover(bar) {
     if (!bar) throw new Error("请先填写常逛的吧");
-    const html = await readPage("/f?kw=" + encodeURIComponent(bar));
+    const cookie = await session.requestCookie();
+    const html = await page(barPage(bar, Boolean(cookie)), ctx.signal, cookie);
     const items = threadsFromHtml(html, bar);
-    if (!items.length) throw new TiebaPageError("这个吧的公开页面未返回可读帖子，可打开原帖或导入楼层摘录。");
+    if (!items.length) throw new TiebaPageError("这个吧的页面未返回可读帖子，可打开原帖或导入楼层摘录。");
     const read = new Set(data.seen);
     return items.map(item => ({ ...item, read: read.has(item.id) }));
   }
@@ -154,23 +159,29 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
     const bar = barName(args.bar) || old?.bar || "";
     let title = typeof args.title === "string" ? args.title.trim().slice(0, 160) : "";
     status = "正在读帖 · " + (title || tid);
+    const cookie = imported ? undefined : await session.requestCookie();
     let floors;
     if (imported) {
       floors = [{ post: "", body: imported, page: pageNumber }];
     } else {
-      const html = await readPage("/p/" + tid + (pageNumber > 1 ? "?pn=" + pageNumber : ""));
+      const path = cookie
+        ? "/mo/q/m?kz=" + tid + "&pn=" + pageNumber
+        : "/p/" + tid + (pageNumber > 1 ? "?pn=" + pageNumber : "");
+      const html = await page(path, ctx.signal, cookie);
       title = threadTitle(html) || title;
-      floors = floorsFromHtml(html).map(floor => ({ ...floor, page: pageNumber }));
+      floors = floorsFromHtml(html, Boolean(cookie)).map(floor => ({ ...floor, page: pageNumber }));
     }
-    if (!floors.length) throw new Error("没有读到公开楼层。可在浏览器查看原帖后导入摘录。");
+    if (!floors.length) throw new Error("没有读到帖子楼层。可在浏览器查看原帖后导入摘录。");
 
     let replyStatus = "";
     let limited = false;
     const refreshedReplies = new Set();
     if (!imported && config().replies) {
-      for (const floor of floors.slice(0, 2)) {
+      const parents = floors.filter(floor => floor.post).slice(0, 2);
+      if (!parents.length) replyStatus = "楼中楼 · 当前页面未提供可定位的楼层 ID";
+      for (const floor of parents) {
         try {
-          const html = await readPage("/p/comment?tid=" + tid + "&pid=" + floor.post + "&pn=1");
+          const html = await page("/p/comment?tid=" + tid + "&pid=" + floor.post + "&pn=1", ctx.signal, cookie);
           floors.push(...repliesFromHtml(html, floor.post).map(reply => ({ ...reply, page: pageNumber })));
           refreshedReplies.add(floor.post);
         } catch (error) {
@@ -304,7 +315,7 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
     const target = bar || config().bar || "贴吧";
     let status, message;
     try {
-      const html = await page("/f?kw=" + encodeURIComponent(target), ctx.signal, cookie);
+      const html = await page(barPage(target, true), ctx.signal, cookie);
       const readable = threadsFromHtml(html, target).length > 0;
       status = readable ? "accessible" : "unreadable";
       message = readable
@@ -314,7 +325,7 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
       if (ctx.signal.aborted) throw error;
       status = error instanceof TiebaPageError && error.pauseVisit ? "blocked" : "error";
       message = status === "blocked"
-        ? "贴吧限制了这次请求。检查无法判断 Cookie 是否仍有效。"
+        ? "检查无法判断 Cookie 是否仍有效。" + formatError(error)
         : "暂时无法读取贴吧，请稍后再检查。";
     }
     session.recordCheck({ status, message, at: now(), bar: target });

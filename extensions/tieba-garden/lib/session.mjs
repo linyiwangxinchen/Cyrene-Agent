@@ -6,7 +6,8 @@ export function normalizeCookie(value) {
   if (typeof value !== "string" || value.length > COOKIE_LIMIT || /[\x00-\x1F\x7F]/u.test(value)) {
     throw new Error("请粘贴单行 Cookie 请求头，长度最多 8192 字符");
   }
-  const header = value.trim().replace(/^cookie: */i, "");
+  // Cookie headers copied from formatted text may escape underscores and tildes.
+  const header = value.trim().replace(/^cookie: */i, "").replace(/\\([_~])/gu, "$1");
   const pairs = header.split(";").map(part => part.trim());
   if (!pairs.at(-1)) pairs.pop();
   if (!pairs.length || !pairs.every(part => COOKIE_PAIR.test(part))) {

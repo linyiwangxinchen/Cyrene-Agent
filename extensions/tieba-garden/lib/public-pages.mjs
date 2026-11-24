@@ -13,19 +13,22 @@ const entities = new Map(Object.entries({
   hellip: "…", middot: "·", ldquo: "“", rdquo: "”",
 }));
 
+function decodeEntities(value) {
+  return value.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code) => {
+    if (code[0] !== "#") return entities.get(code.toLowerCase()) ?? entity;
+    const hex = code[1].toLowerCase() === "x";
+    const number = Number.parseInt(code.slice(hex ? 2 : 1), hex ? 16 : 10);
+    return number > 0 && number <= 0x10ffff && !(number >= 0xd800 && number <= 0xdfff)
+      ? String.fromCodePoint(number)
+      : entity;
+  });
+}
+
 function text(html) {
-  return html
+  return decodeEntities(html
     .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
     .replace(/<br\s*\/?>|<\/(?:div|p|li)>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (entity, code) => {
-      if (code[0] !== "#") return entities.get(code.toLowerCase()) ?? entity;
-      const hex = code[1].toLowerCase() === "x";
-      const value = Number.parseInt(code.slice(hex ? 2 : 1), hex ? 16 : 10);
-      return value > 0 && value <= 0x10ffff && !(value >= 0xd800 && value <= 0xdfff)
-        ? String.fromCodePoint(value)
-        : entity;
-    })
+    .replace(/<[^>]+>/g, ""))
     .replace(/\r\n?/g, "\n")
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
@@ -36,7 +39,7 @@ function attribute(tag, name) {
   return tag.match(new RegExp("\\s" + name + "\\s*=\\s*([\"'])(.*?)\\1", "i"))?.[2];
 }
 
-function blocks(html, openPattern, tag, limit) {
+function blocks(html, matchOpen, tag, limit) {
   const tags = new RegExp("<\\/?" + tag + "\\b(?:[^>\"']|\"[^\"]*\"|'[^']*')*>", "gi");
   const result = [];
   let current;
@@ -44,12 +47,12 @@ function blocks(html, openPattern, tag, limit) {
     const closing = match[0][1] === "/";
     if (!current) {
       if (closing) continue;
-      const open = match[0].match(openPattern);
-      if (open) current = { id: open[1], start: match.index + match[0].length, depth: 1 };
+      const fields = matchOpen(match[0]);
+      if (fields) current = { fields, start: match.index + match[0].length, depth: 1 };
     } else {
       current.depth += closing ? -1 : 1;
       if (current.depth > 0) continue;
-      result.push({ id: current.id, body: html.slice(current.start, match.index) });
+      result.push({ ...current.fields, body: html.slice(current.start, match.index) });
       if (result.length === limit) break;
       current = undefined;
     }
@@ -57,14 +60,46 @@ function blocks(html, openPattern, tag, limit) {
   return result;
 }
 
-export function floorsFromHtml(html) {
-  return blocks(html, /\sid\s*=\s*["']post_content_(\d+)["']/i, "div", 40)
-    .map(({ id, body }) => ({ post: id, body: text(body).slice(0, 800) }))
+function mobileFloors(html) {
+  const content = (tag) => {
+    const classes = attribute(tag, "class")?.split(/\s+/);
+    if (classes?.includes("content") && !classes.includes("top_bar")) return { post: "" };
+  };
+  const items = blocks(html, (tag) => {
+    if (!attribute(tag, "class")?.split(/\s+/).includes("j_post_list_item")) return;
+    const info = attribute(tag, "data-info");
+    if (!info) return { post: "" };
+    try {
+      // Preserve the original digits when Tieba sends the post ID as a JSON number.
+      const data = JSON.parse(decodeEntities(info), (key, value, context) =>
+        key === "pid" && typeof value === "number" ? context.source : value);
+      const post = typeof data?.pid === "string" && /^\d{1,20}$/.test(data.pid) ? data.pid : "";
+      const floor = Number(data?.floor_num);
+      return Number.isSafeInteger(floor) && floor > 0 ? { post, floor } : { post };
+    } catch {
+      return { post: "" };
+    }
+  }, "li", 40);
+  if (!items.length) return blocks(html, content, "div", 40);
+  return items.flatMap(({ body, ...fields }) =>
+    blocks(body, content, "div", 1).map((row) => ({ ...row, ...fields })));
+}
+
+export function floorsFromHtml(html, mobile = false) {
+  const desktop = blocks(html, (tag) => {
+    const post = tag.match(/\sid\s*=\s*["']post_content_(\d+)["']/i)?.[1];
+    if (post) return { post };
+  }, "div", 40);
+  const floors = desktop.length || !mobile ? desktop : mobileFloors(html);
+  return floors
+    .map(({ body, ...fields }) => ({ ...fields, body: text(body).slice(0, 800) }))
     .filter((row) => row.body);
 }
 
 export function repliesFromHtml(html, parent) {
-  return blocks(html, /\sclass\s*=\s*["'][^"']*\blzl_content_main\b[^"']*["']/i, "span", 12)
+  return blocks(html, (tag) => {
+    if (/\sclass\s*=\s*["'][^"']*\blzl_content_main\b[^"']*["']/i.test(tag)) return {};
+  }, "span", 12)
     .map(({ body }) => ({ post: parent, body: text(body).slice(0, 500), reply: true }))
     .filter((row) => row.body);
 }
@@ -104,6 +139,7 @@ export async function publicPage(path, signal, cookie) {
   const url = new URL(TIEBA + path);
   const knownPage = /^\/f\?kw=[^&#]+$/.test(path)
     || /^\/p\/\d{1,20}(?:\?pn=\d{1,4})?$/.test(path)
+    || /^\/mo\/q\/m\?(?:kw=[^&#]+&pn=0|kz=\d{1,20}&pn=\d{1,4})$/.test(path)
     || /^\/p\/comment\?tid=\d{1,20}&pid=\d{1,20}&pn=1$/.test(path);
   if (url.origin !== TIEBA || !knownPage) throw new TiebaPageError("贴吧读取入口无效");
   try {
