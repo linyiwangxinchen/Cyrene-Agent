@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createAuthenticatedReader, floorsFromHtml, publicPage, repliesFromHtml, threadId, threadTitle, threadsFromHtml, TiebaPageError, TIEBA } from "./public-pages.mjs";
 import { writeReadingNote } from "./notes.mjs";
 import { createReadSession } from "./session.mjs";
+import { chooseVisitBars } from "./visit-interests.mjs";
 
 const HOUR = 3_600_000;
 const READING_LIMIT = 36;
@@ -24,7 +25,7 @@ function configFrom(raw) {
     ...DEFAULT_CONFIG, bars, bar: bars[0] ?? "",
     learn: raw?.learn === true, auto: raw?.auto === true, replies: raw?.replies === true,
     intervalHours: clamp(raw?.intervalHours, 1, 24, DEFAULT_CONFIG.intervalHours),
-    postsPerVisit: clamp(raw?.postsPerVisit, 1, 3, DEFAULT_CONFIG.postsPerVisit),
+    postsPerVisit: clamp(raw?.postsPerVisit, 1, 5, DEFAULT_CONFIG.postsPerVisit),
   };
 }
 
@@ -227,10 +228,11 @@ export function createForum(ctx, { page, now = Date.now } = {}) {
   async function visit(trigger, target) {
     const cfg = config();
     const savedBars = target ? [target] : cfg.bars;
-    if (!savedBars.length) throw new Error("请先填写常逛的吧");
-    const index = target ? 0 : data.visitsStarted % savedBars.length;
-    const visitsStarted = target ? data.visitsStarted : data.visitsStarted + 1;
-    const bars = [...savedBars.slice(index), ...savedBars.slice(0, index)];
+    const priorVisits = data.visits;
+    const previousCount = data.visitsStarted;
+    const index = !target && savedBars.length ? previousCount % savedBars.length : 0;
+    const visitsStarted = target ? previousCount : previousCount + 1;
+    const rotations = [...savedBars.slice(index), ...savedBars.slice(0, index)];
     const record = { id: randomUUID(), at: now(), trigger, bars: [], status: "running", read: [], errors: [], discovered: 0, skipped: 0 };
     const update = patch => {
       const row = { ...record, ...patch };
@@ -239,9 +241,30 @@ export function createForum(ctx, { page, now = Date.now } = {}) {
     const seen = new Set(data.seen);
     const knownCandidates = new Set();
     let stop = false;
-    status = "正在逛吧";
+    status = target ? "正在逛吧" : "正在挑想逛的吧";
     update();
     try {
+      const choices = target ? [] : await chooseVisitBars(ctx.deps.llm, {
+        favorites: savedBars, readings: data.readings, visits: priorVisits, signal: ctx.signal,
+      });
+      if (trigger === "auto" && !config().auto) return;
+      const picked = choices[0];
+      let bars = rotations;
+      let minimumListings = 1;
+      if (picked) {
+        record.chosenBar = picked.bar;
+        record.choiceReason = picked.reason;
+        if (rotations.length) {
+          const [favorite, ...remaining] = rotations;
+          // Each favorite leads one cycle and follows the personal pick on the other.
+          const preferChoice = index % 2 !== Math.floor(previousCount / rotations.length) % 2;
+          const firstBars = preferChoice ? [picked.bar, favorite] : [favorite, picked.bar];
+          bars = [...firstBars, ...remaining];
+          minimumListings = firstBars.length;
+        } else {
+          bars = choices.map(choice => choice.bar);
+        }
+      }
       const candidates = [];
       for (const bar of bars) {
         if (trigger === "auto" && !config().auto) { stop = true; break; }
@@ -254,12 +277,12 @@ export function createForum(ctx, { page, now = Date.now } = {}) {
           record.discovered += items.length;
           record.skipped += items.filter(item => seen.has(item.id)).length;
           candidates.push(items.filter(item => !seen.has(item.id)));
-          if (candidates.reduce((count, rows) => count + rows.length, 0) >= cfg.postsPerVisit) break;
         } catch (error) {
           if (ctx.signal.aborted) throw error;
           record.errors.push(bar + "吧 · " + formatError(error));
           if (error instanceof TiebaPageError && error.pauseVisit) { stop = true; break; }
         }
+        if (record.bars.length >= minimumListings && candidates.reduce((count, rows) => count + rows.length, 0) >= cfg.postsPerVisit) break;
       }
       let attempted = 0;
       while (!stop && candidates.some(items => items.length) && record.read.length < cfg.postsPerVisit && attempted < cfg.postsPerVisit + 2) {
@@ -297,7 +320,7 @@ export function createForum(ctx, { page, now = Date.now } = {}) {
   }
 
   function nextVisitAt(cfg = config()) {
-    if (cfg.auto && cfg.bars.length) return data.lastVisit === undefined ? undefined : data.lastVisit + cfg.intervalHours * HOUR;
+    if (cfg.auto && data.lastVisit !== undefined) return data.lastVisit + cfg.intervalHours * HOUR;
     return undefined;
   }
 
@@ -339,7 +362,7 @@ export function createForum(ctx, { page, now = Date.now } = {}) {
     learnedExpressions: () => config().learn ? data.samples : [],
     backgroundTick() {
       const cfg = config();
-      if (!active && !manualDiscovery && !ctx.signal.aborted && cfg.auto && cfg.bars.length &&
+      if (!active && !manualDiscovery && !ctx.signal.aborted && cfg.auto &&
         (nextVisitAt(cfg) ?? 0) <= now()) void start(() => visit("auto"), true).catch(() => {});
     },
     async invoke(cmd, value) {
@@ -372,7 +395,6 @@ export function createForum(ctx, { page, now = Date.now } = {}) {
         finally { manualDiscovery = false; }
       } else if (cmd === "visit") {
         const target = selectedBar(args.bar);
-        if (!target && !config().bars.length) throw new Error("请先填写常逛的吧");
         return start(() => visit("manual", target), args.background !== false, args.compact === true);
       } else if (cmd === "read") {
         threadId(args.url);

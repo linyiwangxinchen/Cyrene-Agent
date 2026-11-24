@@ -122,7 +122,7 @@
     if (select.dataset.bars === key) return;
     select.dataset.bars = key;
     select.replaceChildren(...config.bars.map(bar => new Option(barLabel(bar), bar)));
-    if (!config.bars.length) select.append(new Option("请先添加常逛的吧", ""));
+    if (!config.bars.length) select.append(new Option("还没有常逛的吧", ""));
     if (config.bars.includes(previous)) select.value = previous;
     if (discovery?.bar !== select.value) {
       discovery = undefined;
@@ -141,7 +141,9 @@
   }
 
   function showDiscovery() {
-    const message = discovery ? discovery.empty ?? "这个吧暂时没有可读的帖子。" : "选择常逛的吧，查看候选帖子。";
+    const message = discovery
+      ? discovery.empty ?? "这个吧暂时没有可读的帖子。"
+      : configsFrom(state).bars.length ? "选择常逛的吧，查看候选帖子。" : "点「逛一逛」，让昔涟自己挑吧。";
     const readings = state?.history ?? (state?.reading ? [state.reading] : []);
     const displayed = (discovery?.rows ?? []).map(row => {
       const hasNote = readings.some(record => record.tid === row.id);
@@ -266,6 +268,10 @@
       "读了 " + (visit.read?.length ?? 0) + " 篇",
       visit.skipped ? "跳过 " + visit.skipped + " 篇" : "",
     ].filter(Boolean).join(" · ")));
+    if (visit.chosenBar) {
+      const choice = ["昔涟想逛 " + barLabel(visit.chosenBar), visit.choiceReason].filter(Boolean).join(" · ");
+      row.append(h("p", "muted", choice));
+    }
     for (const error of visit.errors ?? []) row.append(h("p", "reason", error));
     const stored = state.history ?? (state.reading ? [state.reading] : []);
     const firstReading = visit.read?.find(id => stored.some(item => item.tid === id));
@@ -300,7 +306,7 @@
     el("garden").setAttribute("aria-busy", String(!state || busy));
     el("refresh").disabled = actionBusy;
     el("visit").textContent = state?.busy ? "正在处理…" : "逛一逛";
-    el("visit").disabled = !state || busy || !config.bars.length;
+    el("visit").disabled = !state || busy;
     el("discover-bar").disabled = !config.bars.length;
     el("discover").disabled = !state || busy || !config.bars.length;
     el("save").disabled = !state || busy;
@@ -524,7 +530,10 @@
     });
   });
   el("refresh").addEventListener("click", () => refresh(true));
-  el("visit").addEventListener("click", () => act("visit", { background: true }, "正在开始巡游…"));
+  el("visit").addEventListener("click", () => {
+    go("browse");
+    void act("visit", { background: true }, "正在开始巡游…");
+  });
   el("detail-close").addEventListener("click", () => el("detail").close());
   el("forget-dialog").addEventListener("close", event => {
     if (event.target.returnValue === "forget" && pendingForget) {

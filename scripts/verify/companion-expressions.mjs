@@ -261,7 +261,7 @@ try {
     assert.ok(reply.ok, JSON.stringify(reply));
     return reply.data;
   };
-  await panel("save", { bar: "摄影", learn: true });
+  await panel("save", { learn: true });
   const fixtureCookie = "__bid_n=web_tieba_fixture_browser; BDUSS=web_tieba_fixture~session; ab_sr=web_tieba_fixture=";
   assert.equal((await panel("auth-save", { cookie: fixtureCookie })).auth.hasCookie, true);
   const secretsDir = path.join(dataDir, "plugin-data", "tieba-garden", "secrets");
@@ -299,6 +299,34 @@ try {
         { name: cookie.slice(0, i), value: cookie.slice(i + 1), url: base },
       ]);
       const page = await context.newPage();
+      const visits = [];
+      await page.route("**/api/core/invoke", async (route) => {
+        const { channel, args } = route.request().postDataJSON();
+        if (
+          channel !== "plugins:panel:invoke" ||
+          args[0] !== "tieba-garden" ||
+          args[1] !== "forum" ||
+          args[2]?.[0] !== "visit"
+        ) {
+          return route.continue();
+        }
+        visits.push(args[2][1]);
+        const visitState = await panel("state", { compact: true });
+        if (!visitState.config.bars.length) {
+          visitState.visits = [
+            {
+              id: "autonomous-visit-fixture",
+              at: Date.now(),
+              trigger: "manual",
+              bars: ["摄影", "音乐"],
+              status: "empty",
+              chosenBar: "音乐",
+              choiceReason: "想找一首歌",
+            },
+          ];
+        }
+        return route.fulfill({ json: { ok: true, data: visitState } });
+      });
       await page.goto(base);
       page.setDefaultTimeout(12000);
       await page.getByRole("button", { name: "设置", exact: true }).click();
@@ -314,6 +342,36 @@ try {
       await frame.getByRole("button", { name: "保存 Cookie", exact: true }).click();
       await frame.locator("#auth-state").getByText("已保存 Cookie", { exact: true }).waitFor();
       assert.equal(await cookieField.inputValue(), "");
+      const browseTab = frame.getByRole("button", { name: "逛贴吧", exact: true });
+      const visitButton = frame.getByRole("button", { name: "逛一逛", exact: true });
+      const bars = frame.getByLabel("常逛的吧", { exact: true });
+      const visitArgs = { background: true, compact: true };
+      assert.equal(await bars.inputValue(), "");
+      await browseTab.click();
+      await Promise.all([
+        frame
+          .locator("#visits")
+          .getByText("昔涟想逛 音乐吧 · 想找一首歌", { exact: true })
+          .waitFor(),
+        visitButton.click(),
+      ]);
+      assert.deepEqual(visits, [visitArgs]);
+      assert.equal(await browseTab.getAttribute("aria-current"), "page");
+      assert.equal(await bars.isVisible(), false);
+      assert.deepEqual((await panel("state", { compact: true })).config.bars, []);
+      await frame.getByRole("button", { name: "巡游设置", exact: true }).click();
+      await bars.fill("摄影");
+      await frame.locator("#post-limit").fill("5");
+      await frame.getByRole("button", { name: "保存设置", exact: true }).click();
+      await frame.getByText("巡游设置已保存", { exact: true }).waitFor();
+      const savedConfig = (await panel("state", { compact: true })).config;
+      assert.deepEqual(savedConfig.bars, ["摄影"]);
+      assert.equal(savedConfig.postsPerVisit, 5);
+      await visitButton.click();
+      await waitFor(() => visits.length > 1, "Tieba visit request with a saved forum");
+      assert.deepEqual(visits, [visitArgs, visitArgs]);
+      assert.equal(await browseTab.getAttribute("aria-current"), "page");
+      await frame.getByRole("button", { name: "巡游设置", exact: true }).click();
       await frame.getByRole("button", { name: "清除 Cookie", exact: true }).click();
       await frame.locator("#auth-state").getByText("公开访问", { exact: true }).waitFor();
       await frame.getByRole("button", { name: "阅读手记", exact: true }).click();
@@ -333,7 +391,7 @@ try {
         .getByRole("button", { name: new RegExp("表达 · " + quote) })
         .waitFor();
       console.log(
-        "PASS Chromium plugin iframe, masked Cookie management, graph sources and mobile search",
+        "PASS Chromium plugin iframe, masked Cookie management, Tieba visit choice and limits, graph sources and mobile search",
       );
     } finally {
       await browser.close();

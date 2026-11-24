@@ -25,6 +25,8 @@ function fixture({ state = {}, fetch, generate, clock = { at: 1000 } } = {}) {
 
 const note = '<h1 class="core_title_txt">读书和茶</h1><div id="post_content_34">慢慢来<div>先读完这本</div>再看看。</div>';
 const listing = ids => ids.map(id => '<a class="j_th_tit" href="/p/' + id + '">帖子 ' + id + '</a>').join("");
+const requestedBar = path => new URL(path, "https://tieba.baidu.com").searchParams.get("kw");
+const modelNote = JSON.stringify({ summary: "读完这本书再看看。", evidence: ["慢慢来"], expressions: [] });
 
 test("manual visit stores one completed post, skips previously seen posts and rotates after restart", async () => {
   const clock = { at: 1000 };
@@ -44,6 +46,122 @@ test("manual visit stores one completed post, skips previously seen posts and ro
   assert.deepEqual(third.visits[0].read, ["11"]);
   assert.equal(third.visits[0].skipped, 1);
   assert.equal(third.nextVisitAt, clock.at + 7_200_000);
+});
+
+test("mixed visits check the rotating favorite and a distinct model pick with a shared post limit of one", async () => {
+  const picks = [];
+  const plugin = fixture({
+    fetch: path => {
+      const bar = requestedBar(path);
+      return bar ? listing({ 摄影: [10, 11], 历史: [20, 21], 手帐: [30, 31] }[bar]) : note;
+    },
+    generate: async (messages, { purpose }) => {
+      if (purpose !== "forum-visit-choice") return modelNote;
+      picks.push(JSON.parse(messages[1].content));
+      return JSON.stringify({
+        bars: ["摄影吧", "https://other.example", "手帐"],
+        reasons: { 手帐: "想看看大家怎样记录日常。" },
+      });
+    },
+  });
+  await plugin.invoke("save", { bars: ["摄影", "历史"] });
+  const first = await plugin.invoke("visit", { background: false });
+  assert.deepEqual(first.visits[0].bars, ["摄影", "手帐"]);
+  assert.deepEqual(first.visits[0].read, ["10"]);
+  assert.equal(first.visits[0].chosenBar, "手帐");
+  assert.equal(first.visits[0].choiceReason, "想看看大家怎样记录日常。");
+  const second = await plugin.restart().invoke("visit", { background: false });
+  assert.deepEqual(second.visits[0].bars, ["手帐", "历史"]);
+  assert.deepEqual(second.visits[0].read, ["30"]);
+  assert.equal(second.reading.bar, "手帐");
+  assert.deepEqual(second.config.bars, ["摄影", "历史"]);
+  assert.deepEqual(picks.map(pick => pick.favorites), [["摄影", "历史"], ["摄影", "历史"]]);
+  const pinned = await plugin.restart().invoke("visit", { bar: "历史", background: false });
+  assert.deepEqual(pinned.visits[0].bars, ["历史"]);
+  assert.deepEqual(pinned.visits[0].read, ["20"]);
+  assert.equal(pinned.visits[0].chosenBar, undefined);
+  assert.equal(picks.length, 2);
+  assert.deepEqual(plugin.requests.filter(path => requestedBar(path)).map(requestedBar), ["摄影", "手帐", "手帐", "历史", "历史"]);
+});
+
+test("a visit can read five posts across the favorite and the model pick", async () => {
+  const plugin = fixture({
+    fetch: path => {
+      const bar = requestedBar(path);
+      if (!bar) return note;
+      return listing(bar === "读书" ? [10, 11, 12, 13, 14] : [20, 21, 22, 23, 24]);
+    },
+    generate: async (_messages, { purpose }) => purpose === "forum-visit-choice"
+      ? JSON.stringify({ bars: ["诗词"] }) : modelNote,
+  });
+  const configured = await plugin.invoke("save", { bars: ["读书"], postsPerVisit: 10 });
+  assert.equal(configured.config.postsPerVisit, 5);
+  const complete = await plugin.invoke("visit", { background: false });
+  assert.deepEqual(complete.visits[0].bars, ["读书", "诗词"]);
+  assert.deepEqual(complete.visits[0].read, ["10", "20", "11", "21", "12"]);
+  assert.equal(plugin.requests.length, 7);
+});
+
+test("automatic visit without favorites uses real reading notes, falls through model choices and schedules the next visit", async () => {
+  const clock = { at: 1000 };
+  const prompts = [];
+  const plugin = fixture({
+    clock,
+    fetch: path => {
+      const bar = requestedBar(path);
+      if (bar === "自然观察") return "<html></html>";
+      return bar ? listing([32]) : note;
+    },
+    generate: async (messages, { purpose }) => {
+      if (purpose !== "forum-visit-choice") return modelNote;
+      prompts.push(messages);
+      return JSON.stringify({ bars: ["自然观察", "手帐"], reasons: { 自然观察: "想看看大家记录了哪些植物。" } });
+    },
+  });
+  await plugin.invoke("read", { url: "/p/31", bar: "读书" });
+  await plugin.invoke("read", { url: "/p/33", title: "导入的信息", bar: "导入吧", excerpt: "慢慢来" });
+  await plugin.invoke("save", { auto: true, intervalHours: 2 });
+  const restarted = plugin.restart();
+  restarted.backgroundTick();
+  let snapshot = await restarted.invoke("state");
+  for (let attempt = 0; snapshot.busy && attempt < 20; attempt++) {
+    await new Promise(resolve => setImmediate(resolve));
+    snapshot = await restarted.invoke("state");
+  }
+  assert.equal(snapshot.busy, false);
+  assert.deepEqual(snapshot.config.bars, []);
+  const visit = snapshot.visits[0];
+  assert.equal(visit.trigger, "auto");
+  assert.equal(visit.chosenBar, "自然观察");
+  assert.equal(visit.choiceReason, "想看看大家记录了哪些植物。");
+  assert.deepEqual(visit.bars, ["自然观察", "手帐"]);
+  assert.deepEqual(visit.read, ["32"]);
+  assert.equal(visit.status, "partial");
+  assert.equal(snapshot.reading.bar, "手帐");
+  assert.equal(snapshot.nextVisitAt, clock.at + 7_200_000);
+  assert.deepEqual(JSON.parse(prompts[0][1].content), {
+    favorites: [], recent: [], notes: [{ title: "读书和茶", bar: "读书", summary: "读完这本书再看看。" }],
+  });
+  restarted.backgroundTick();
+  assert.equal((await restarted.invoke("state")).busy, false);
+  assert.equal(prompts.length, 1);
+});
+
+test("empty favorites fall back to starter topics and rotate them after an unusable model response", async () => {
+  const plugin = fixture({
+    fetch: path => {
+      const bar = requestedBar(path);
+      return bar ? listing(bar === "读书" ? [41] : [42]) : note;
+    },
+    generate: async (_messages, { purpose }) => purpose === "forum-visit-choice" ? "please browse another website" : modelNote,
+  });
+  const first = await plugin.invoke("visit", { background: false });
+  assert.deepEqual(first.visits[0].bars, ["读书"]);
+  assert.deepEqual(first.visits[0].read, ["41"]);
+  const second = await plugin.restart().invoke("visit", { background: false });
+  assert.deepEqual(second.visits[0].bars, ["轻音乐"]);
+  assert.deepEqual(second.visits[0].read, ["42"]);
+  assert.deepEqual(second.config.bars, []);
 });
 
 test("read preserves evidence and re-analyzes without revisiting the site", async () => {
