@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -40,14 +40,16 @@ const gateway = createServer(async (req, res) => {
     "阅读论坛对话",
   );
   const answer = extract
-    ? JSON.stringify([
-        {
+    ? JSON.stringify({
+        summary: "摘录里用一个比喻形容网络断线。",
+        evidence: [quote],
+        expressions: [{
           quote,
           scene: "网络断线修复",
           cue: "庆祝",
           delivery: "先接住对方的好消息，再轻轻开一句玩笑",
-        },
-      ])
+        }],
+      })
     : JSON.stringify(body.input ?? body.messages).includes(
           "plugin:tieba-garden:expressions",
         )
@@ -260,10 +262,26 @@ try {
     return reply.data;
   };
   await panel("save", { bar: "摄影", learn: true });
+  const fixtureCookie = "BDUSS=web_tieba_fixture_session; STOKEN=web_tieba_fixture_token";
+  assert.equal((await panel("auth-save", { cookie: fixtureCookie })).auth.hasCookie, true);
+  const secretsDir = path.join(dataDir, "plugin-data", "tieba-garden", "secrets");
+  const secretFiles = await readdir(secretsDir);
+  assert.equal(secretFiles.length, 1);
+  assert.match(secretFiles[0], /\.enc$/);
+  assert.ok(!(await readFile(path.join(secretsDir, secretFiles[0]))).includes(fixtureCookie));
+  await invoke("plugins:set-enabled", "tieba-garden", false);
+  await invoke("plugins:set-enabled", "tieba-garden", true);
+  assert.equal((await panel("state", { compact: true })).auth.hasCookie, true);
   const state = await panel("read", {
     url: "https://tieba.baidu.com/p/12345",
+    title: "断线后的比喻",
     excerpt: "这次断线就叫气泡锚点吧",
   });
+  assert.ok(!JSON.stringify(state).includes("web_tieba_fixture"));
+  assert.ok(!JSON.stringify(captured).includes("web_tieba_fixture"));
+  assert.equal((await panel("auth-clear")).auth.hasCookie, false);
+  assert.deepEqual(await readdir(secretsDir), []);
+  console.log("PASS Web imports, persists and clears Tieba Cookie using encrypted host storage");
   assert.equal(state.samples[0].quote, quote);
   const graph = () => invoke("memory-panel:get-graph");
   assert.ok((await graph()).nodes.some((n) => n.label === quote));
@@ -286,8 +304,20 @@ try {
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await page.getByRole("button", { name: "功能插件", exact: true }).click();
       const frame = page.frameLocator('iframe[src*="tieba-garden"]');
-      await frame.getByText(quote, { exact: false }).first().waitFor();
+      await frame.getByRole("button", { name: "表达收藏", exact: true }).click();
+      await frame.locator("#expressions").getByText(quote, { exact: false }).first().waitFor();
+      await frame.getByRole("button", { name: "巡游设置", exact: true }).click();
       assert.equal(await frame.locator("#learn").isChecked(), true);
+      const cookieField = frame.getByLabel("贴吧 Cookie", { exact: true });
+      assert.equal(await cookieField.getAttribute("type"), "password");
+      await cookieField.fill(fixtureCookie);
+      await frame.getByRole("button", { name: "保存 Cookie", exact: true }).click();
+      await frame.locator("#auth-state").getByText("已保存 Cookie", { exact: true }).waitFor();
+      assert.equal(await cookieField.inputValue(), "");
+      await frame.getByRole("button", { name: "清除 Cookie", exact: true }).click();
+      await frame.locator("#auth-state").getByText("公开访问", { exact: true }).waitFor();
+      await frame.getByRole("button", { name: "阅读手记", exact: true }).click();
+      await frame.locator("#journal").getByText("断线后的比喻", { exact: true }).first().waitFor();
       await page.getByRole("button", { name: "记忆", exact: true }).click();
       await page.getByRole("button", { name: "打开记忆图谱" }).click();
       await page.getByRole("button", { name: "表达 · " + quote }).click();
@@ -303,14 +333,19 @@ try {
         .getByRole("button", { name: new RegExp("表达 · " + quote) })
         .waitFor();
       console.log(
-        "PASS Chromium plugin iframe, graph sources, mobile timeline and search",
+        "PASS Chromium plugin iframe, masked Cookie management, graph sources and mobile search",
       );
     } finally {
       await browser.close();
     }
   }
   await ask("chat", "网络断线修复", true);
+  await ask("chat", "你最近在贴吧看了什么？", false);
+  assert.match(JSON.stringify(captured.at(-1)), /plugin:tieba-garden:readings/);
+  assert.match(JSON.stringify(captured.at(-1)), /断线后的比喻/);
+  assert.match(JSON.stringify(captured.at(-1)), /用户导入摘录/);
   await ask("chat", "种花怎么选花盆", false);
+  assert.doesNotMatch(JSON.stringify(captured.at(-1)), /plugin:tieba-garden:readings/);
   await ask("chat", "我的考试通过了", true);
   assert.match(JSON.stringify(captured.at(-1)), /先接住对方的好消息/);
   await invoke("plugins:set-enabled", "bili-garden", true);
@@ -368,7 +403,7 @@ try {
   );
 } finally {
   socket?.terminate();
-  await handle.close();
+  if (handle.server.listening) await handle.close();
   gateway.closeAllConnections();
   await new Promise((resolve) => gateway.close(resolve));
 }

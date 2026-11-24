@@ -1,59 +1,182 @@
 <!doctype html>
 <html lang="zh-CN">
-  <meta charset="utf-8" /><title>昔涟逛贴吧</title>
-  <style>
-    body {
-      font: 15px/1.6 system-ui;
-      color: CanvasText;
-      background: Canvas;
-      max-width: 48rem;
-      margin: auto;
-      padding: 1rem;
-    }
-    input:not([type]),
-    textarea {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 0.5rem;
-    }
-    button {
-      padding: 0.4rem 0.8rem;
-      margin: 0.3rem;
-    }
-    label,
-    output {
-      display: block;
-      margin: 0.5rem 0;
-    }
-    section {
-      margin: 1.5rem 0;
-    }
-    p {
-      white-space: pre-wrap;
-    }
-  </style>
-  <h2>常逛的吧</h2>
-  <label>吧名<input id="bar" maxlength="50" /></label
-  ><label><input type="checkbox" id="auto" />每四小时逛一次</label
-  ><label><input type="checkbox" id="replies" />也读前三个楼层的楼中楼</label
-  ><label><input type="checkbox" id="learn" />学习表达并用于私聊</label
-  ><button id="save">保存设置</button
-  ><button id="browse">逛一逛</button>
-  <div id="threads"></div>
-  <section>
-    <h2>读帖子</h2>
-    <label>帖子链接<input id="url" /></label
-    ><label
-      >楼层摘录（可选，可附上楼层和上下文）<textarea
-        id="excerpt"
-        rows="4"
-      ></textarea></label
-    ><button id="read">阅读</button>
-    <p id="reading"></p>
-  </section>
-  <h2>学到的表达</h2>
-  <div id="samples"></div>
-  <output id="status" role="status"></output>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="panel.css" />
+  <title>昔涟逛贴吧</title>
+</head>
+<body>
+  <main id="garden" aria-busy="true">
+    <header class="hero">
+      <div class="hero-content">
+        <h1>昔涟逛贴吧</h1>
+      </div>
+      <div class="actions hero-actions">
+        <button type="button" id="refresh" disabled>刷新</button>
+        <button type="button" id="visit" class="primary" disabled>逛一逛</button>
+      </div>
+    </header>
+
+    <dl class="overview" aria-label="贴吧概况">
+      <div><dt>读过的帖子</dt><dd id="read-count">—</dd></div>
+      <div><dt>收藏的表达</dt><dd id="sample-count">—</dd></div>
+      <div><dt>下次自动巡游</dt><dd id="schedule-summary">读取中…</dd></div>
+    </dl>
+    <div id="notice" class="notice" role="status" aria-live="polite"></div>
+
+    <nav class="tabs" aria-label="贴吧小花园">
+      <button type="button" data-section="browse" aria-controls="browse" aria-current="page">逛贴吧</button>
+      <button type="button" data-section="journal" aria-controls="journal">阅读手记</button>
+      <button type="button" data-section="expressions" aria-controls="expressions">表达收藏</button>
+      <button type="button" data-section="settings" aria-controls="settings">巡游设置</button>
+    </nav>
+
+    <section id="browse" aria-labelledby="browse-heading">
+      <div class="two-columns">
+        <section class="card">
+          <div class="section-heading">
+            <div>
+              <h2 id="browse-heading" tabindex="-1">看看吧里有什么</h2>
+              <p class="muted">「逛一逛」会自动找新帖，也可以先看列表再挑。</p>
+            </div>
+          </div>
+          <div class="actions">
+            <label class="grow">
+              <select id="discover-bar" aria-label="选择贴吧" disabled><option value="">请先添加常逛的吧</option></select>
+            </label>
+            <button type="button" id="discover" disabled>查看帖子</button>
+            <button type="button" class="text-button" data-go="settings">管理常逛的吧</button>
+          </div>
+          <div id="threads" class="entries" aria-live="polite"></div>
+        </section>
+
+        <section class="card" aria-labelledby="manual-heading">
+          <div class="section-heading"><h2 id="manual-heading">读指定的帖子</h2></div>
+          <form id="read-form">
+            <label for="thread-url">贴吧帖子链接</label>
+            <input id="thread-url" type="url" required maxlength="500" placeholder="https://tieba.baidu.com/p/…" />
+            <details id="import" class="fold">
+              <summary>导入楼层摘录</summary>
+              <p id="excerpt-help" class="muted">遇到贴吧访问验证时，可粘贴你在浏览器里看到的正文和楼层。</p>
+              <label class="sr-only" for="excerpt">楼层摘录</label>
+              <textarea id="excerpt" rows="4" maxlength="10000" aria-describedby="excerpt-help" placeholder="可附上楼层和上下文"></textarea>
+            </details>
+            <div id="read-error" class="read-error" hidden>
+              <p id="read-error-text" class="reason"></p>
+              <div id="read-recovery" class="actions"></div>
+            </div>
+            <div class="actions form-actions">
+              <button type="submit" id="read" class="primary" disabled>读这篇</button>
+            </div>
+          </form>
+        </section>
+      </div>
+
+      <section class="card spacer" aria-labelledby="visits-heading">
+        <div class="section-heading"><h2 id="visits-heading">巡游记录</h2></div>
+        <div id="visits" class="entries"></div>
+        <button type="button" id="more-visits" class="more" hidden>查看更多巡游记录</button>
+      </section>
+    </section>
+
+    <section id="journal" class="card" aria-labelledby="journal-heading" hidden>
+      <div class="section-heading">
+        <div>
+          <h2 id="journal-heading" tabindex="-1">阅读手记</h2>
+          <p class="muted">回看这篇讲了什么、昔涟记下了哪句，以及对应的楼层。</p>
+        </div>
+      </div>
+      <div id="readings" class="entries"></div>
+      <button type="button" id="more-readings" class="more" hidden>查看更多阅读手记</button>
+    </section>
+
+    <section id="expressions" class="card" aria-labelledby="expressions-heading" hidden>
+      <div class="section-heading">
+        <div>
+          <h2 id="expressions-heading" tabindex="-1">表达收藏</h2>
+          <p class="muted" id="learning-help">读取学习设置中…</p>
+        </div>
+      </div>
+      <div id="samples" class="sample-grid"></div>
+      <button type="button" id="more-samples" class="more" hidden>查看更多表达</button>
+    </section>
+
+    <section id="settings" class="card settings" aria-labelledby="settings-heading" hidden>
+      <div class="section-heading"><h2 id="settings-heading" tabindex="-1">巡游设置</h2></div>
+      <section class="auth-card" aria-labelledby="auth-heading">
+        <div class="section-heading">
+          <div>
+            <h3 id="auth-heading">贴吧登录态</h3>
+            <p id="auth-help" class="muted">使用你在 tieba.baidu.com 登录时的 Cookie。粘贴 Cookie 请求头的内容，用于读取帖子和回复。</p>
+          </div>
+          <span id="auth-state" class="chip">读取中…</span>
+        </div>
+        <form id="auth-form" autocomplete="off" hidden>
+          <label for="auth-cookie">贴吧 Cookie</label>
+          <input id="auth-cookie" type="password" autocomplete="new-password" autocapitalize="none" spellcheck="false" required maxlength="8192" aria-describedby="auth-help" placeholder="粘贴 Cookie 请求头的内容" />
+          <details class="fold">
+            <summary>在哪里找到 Cookie</summary>
+            <p class="muted">在浏览器登录贴吧，打开开发者工具的「网络」并刷新页面。选中发往 tieba.baidu.com 的页面请求，在「请求标头」中复制 Cookie 的值。</p>
+          </details>
+          <div class="actions form-actions">
+            <button type="submit" id="auth-save" disabled>保存 Cookie</button>
+            <button type="button" id="auth-check" disabled>检查连接</button>
+            <button type="button" id="auth-clear" class="text-button" disabled>清除 Cookie</button>
+          </div>
+        </form>
+        <p id="auth-result" class="meta auth-result" role="status"></p>
+        <p id="auth-message" class="meta auth-message" role="status"></p>
+      </section>
+      <form id="settings-form">
+        <div class="setting">
+          <label for="bars">常逛的吧</label>
+          <textarea id="bars" rows="3" maxlength="420" aria-describedby="bars-help" placeholder="例如，原神&#10;音乐"></textarea>
+          <p id="bars-help" class="muted">每行一个吧名，最多 8 个。</p>
+        </div>
+
+        <label class="switch-row" for="auto">
+          <span><strong>自动逛贴吧</strong><small>服务运行时，按时间间隔自动挑新帖。</small></span>
+          <input type="checkbox" id="auto" />
+        </label>
+        <div class="settings-grid">
+          <label for="interval"><span>巡游间隔（小时）</span><input id="interval" type="number" min="1" max="24" step="1" required value="4" /></label>
+          <label for="post-limit"><span>每轮最多读几篇</span><input id="post-limit" type="number" min="1" max="3" step="1" required value="1" /></label>
+        </div>
+
+        <label class="switch-row" for="replies">
+          <span><strong>一起读楼中楼</strong><small>补充楼层下的回复，保留接话的上下文。</small></span>
+          <input type="checkbox" id="replies" />
+        </label>
+        <label class="switch-row" for="learn">
+          <span><strong>学习表达并用于私聊</strong><small>保留有出处的用例，在聊到相关话题时参考。</small></span>
+          <input type="checkbox" id="learn" />
+        </label>
+        <div class="actions form-actions">
+          <button id="save" class="primary" type="submit" disabled>保存设置</button>
+          <p id="settings-message" class="muted" role="status"></p>
+        </div>
+      </form>
+    </section>
+  </main>
+  <dialog id="detail" aria-labelledby="detail-title">
+    <header class="dialog-header">
+      <h2 id="detail-title" tabindex="-1">楼层原文</h2>
+      <button type="button" id="detail-close">关闭</button>
+    </header>
+    <div id="detail-body"></div>
+  </dialog>
+  <dialog id="forget-dialog" aria-labelledby="forget-title">
+    <header class="dialog-header">
+      <h2 id="forget-title">忘记这句表达？</h2>
+    </header>
+    <p id="forget-quote" class="quote"></p>
+    <form method="dialog" class="actions form-actions">
+      <button value="cancel">保留</button>
+      <button value="forget" class="danger">忘记表达</button>
+    </form>
+  </dialog>
   <script src="/.cyrene/panel-bridge.js"></script>
-  <script src="panel.js"></script>
+  <script src="panel.js" defer></script>
+</body>
 </html>

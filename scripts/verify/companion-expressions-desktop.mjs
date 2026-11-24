@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron } from "playwright";
@@ -93,11 +93,20 @@ export async function verifyDesktop(profile, captured) {
         window.pluginPanel.invoke("tieba-garden", "forum", args);
       const cfg = await panel("save", { learn: true, bar: "摄影" });
       if (!cfg.ok) throw Error(cfg.error);
+      const auth = await panel("auth-save", {
+        cookie: "BDUSS=desktop_tieba_fixture_session; STOKEN=desktop_tieba_fixture_token",
+      });
+      if (!auth.ok || !auth.data.auth?.hasCookie || JSON.stringify(auth).includes("desktop_tieba_fixture")) {
+        throw Error(auth.error || "桌面贴吧登录态保存失败");
+      }
       const read = await panel("read", {
         url: "https://tieba.baidu.com/p/54321",
         excerpt: "断网了，气泡锚点",
       });
       if (!read.ok) throw Error(read.error);
+      if (read.data.reading?.analysisStatus !== "complete") {
+        throw Error(read.data.reading?.analysisError || "桌面读帖手记未生成");
+      }
       const graph = await window.memoryPanel.getGraph();
       const session = await window.chatStore.create({
         mode: "chat",
@@ -131,6 +140,17 @@ export async function verifyDesktop(profile, captured) {
       };
     });
     assert.deepEqual(check, { source: true, terminal: "RUN_FINISHED" });
+    const secretsDir = path.join(paths.userData, "plugin-data", "tieba-garden", "secrets");
+    const secretFiles = await readdir(secretsDir);
+    assert.equal(secretFiles.length, 1);
+    assert.match(secretFiles[0], /\.enc$/);
+    assert.ok(!(await readFile(path.join(secretsDir, secretFiles[0]))).includes("desktop_tieba_fixture"));
+    assert.ok(await page.evaluate(async () => {
+      const result = await window.pluginPanel.invoke("tieba-garden", "forum", ["auth-clear"]);
+      return result.ok && result.data.auth?.hasCookie === false;
+    }));
+    assert.deepEqual(await readdir(secretsDir), []);
+    assert.ok(!JSON.stringify(captured).includes("desktop_tieba_fixture"));
     const body = captured.find((b) =>
       JSON.stringify(b).includes("DESKTOP_GATEWAY_CHECK"),
     );
