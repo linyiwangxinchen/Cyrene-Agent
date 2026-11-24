@@ -4,6 +4,7 @@ import type { XilianWorldView } from "../../../../shared/xilian-world";
 import { useTranslation } from "../../i18n";
 import "./amphoreus-world-panel.css";
 import type { SettingsSearchItem } from "./settings-search-index";
+import { DailyRecapsPanel } from "./DailyRecapsPanel";
 import { AmphoreusHistory } from "./AmphoreusHistory";
 import { AmphoreusMap } from "./AmphoreusMap";
 import { AmphoreusPersonalLife } from "./AmphoreusPersonalLife";
@@ -159,6 +160,7 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
         { key: "places", label: label("places"), children: <AmphoreusMap world={world} locations={view.locations} onHistory={(id) => openHistory("", id)} /> },
         { key: "chronicle", label: label("chronicle"), children: <AmphoreusHistory world={world} locations={view.locations} residentId={historyResident} locationId={historyLocation} since={historySince} onResident={setHistoryResident} onLocation={setHistoryLocation} onSince={() => setHistorySince(undefined)} /> },
         { key: "diary", label: label("diary"), children: <>
+          {activeTab === "diary" && <DailyRecapsPanel />}
           <p>{label("diaryHint")}</p><div className="cy-amphoreus__events">
             {view.state.currentActivity && <article><Tag color="blue">{label("now")}</Tag><h3>{view.state.currentActivity.activityTitle}</h3><p>{view.state.currentActivity.summary}</p>{view.state.nextPlannedEvent && <small>{label("next")} {view.state.nextPlannedEvent.activityTitle}</small>}</article>}
             {view.diary.map((entry) => <article key={entry.id}><small>{entry.dateKey} · {entry.eventId.startsWith("amphoreus:") ? label("continuation") : label("archive")}</small><h3>{entry.title}</h3><p>{entry.text}</p></article>)}

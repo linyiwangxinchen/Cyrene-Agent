@@ -36,9 +36,7 @@ export class MemoryJudge {
     try {
       const config = loadMemoryModelConfig()
       if (!config.apiKey) {
-        console.error("[PMRS/Judge] LLM 调用失败: missing api key")
-        console.log("[PMRS/Judge] 本轮无值得记录的信息")
-        return { candidates: [], entities: [] }
+        throw new Error("缺少记忆模型 API Key")
       }
 
       const systemPrompt = [
@@ -175,8 +173,7 @@ export class MemoryJudge {
       return { candidates: filtered, entities: result.entities }
     } catch (error) {
       console.error("[PMRS/Judge] LLM 调用失败:", error)
-      console.log("[PMRS/Judge] 本轮无值得记录的信息")
-      return { candidates: [], entities: [] }
+      throw error
     }
   }
 

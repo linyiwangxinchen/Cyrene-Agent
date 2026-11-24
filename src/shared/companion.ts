@@ -208,7 +208,15 @@ export type CompanionWorldSuggestion = Pick<PersonalAction, "id" | "title" | "st
 
 export type CompanionWorldSuggestionResult = { action: CompanionWorldSuggestion } | { reason: "unavailable" };
 
+export interface DailyRecap {
+  date: string;
+  status: "collecting" | "pending" | "written" | "retry" | "unconfigured";
+  text?: string;
+  sources: { kind: "chat" | "expression" | "world"; text: string }[];
+}
+
 export interface CompanionApi {
+  getDailyRecaps(): Promise<DailyRecap[]>;
   get(): Promise<CompanionSnapshot>;
   getWorld(): Promise<XilianWorldView>;
   configureWorld(options: { narrativeEnabled: boolean; retryNarrative?: boolean }): Promise<void>;

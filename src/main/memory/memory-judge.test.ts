@@ -25,6 +25,14 @@ vi.mock("./memory-llm-shared", () => ({
 import { MemoryJudge } from "./memory-judge";
 
 describe("MemoryJudge B-tier output contract", () => {
+  test("propagates extraction failures to the scheduler and accepts an empty successful result", async () => {
+    const { invokeMemoryStructuredOutput } = await import("./memory-llm-client");
+    vi.mocked(invokeMemoryStructuredOutput).mockRejectedValueOnce(new Error("HTTP 403"));
+    const judge = new MemoryJudge();
+    await expect(judge.judge("你好", "你好呀", "retry")).rejects.toThrow("403");
+    await expect(judge.judge("你好", "你好呀", "empty")).resolves.toEqual({ candidates: [], entities: [] });
+  });
+
   beforeEach(() => {
     mocks.structuredOptions = undefined;
   });

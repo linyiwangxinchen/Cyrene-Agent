@@ -33,6 +33,7 @@ export const IPC = {
   MEMORY_GOVERNANCE_CHANGE: "memory-governance:change",
   MEMORY_GOVERNANCE_EXPORT: "memory-governance:export",
   COMPANION_GET: "companion:get",
+  COMPANION_DAILY_RECAPS: "companion:daily-recaps",
   COMPANION_WORLD_GET: "companion:world:get",
   COMPANION_WORLD_CONFIGURE: "companion:world:configure",
   COMPANION_WORLD_HISTORY: "companion:world:history",

@@ -30,9 +30,10 @@ function suggestionView({ id, title, status, startsAt, endsAt, outcome, reason }
 export function registerCompanionIpc(
   ipc: IpcScope,
   store: RelationshipLogStore = getRelationshipStore(),
-  world?: Pick<ProactiveLifecycle, "getWorldSnapshot" | "queryWorldTimeline" | "getWorldView" | "setWorldNarrativeEnabled" | "retryWorldNarrative">,
+  world?: Pick<ProactiveLifecycle, "getDailyRecaps" | "getWorldSnapshot" | "queryWorldTimeline" | "getWorldView" | "setWorldNarrativeEnabled" | "retryWorldNarrative">,
 ): void {
   ipc.handle(IPC.COMPANION_GET, () => store.snapshot());
+  ipc.handle(IPC.COMPANION_DAILY_RECAPS, () => world?.getDailyRecaps() ?? []);
   const readWorld = () => {
     if (world) return world.getWorldView({ limit: 80 });
     const store = getSharedXilianWorldStore(path.join(app.getPath("userData"), "xilian-world.json"));

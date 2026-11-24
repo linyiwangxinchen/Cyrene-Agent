@@ -68,6 +68,18 @@ export interface RelationshipDailySummary {
   nextCareCue: string
 }
 
+export interface SavedDailyRecap {
+  date: string;
+  digest: string;
+  attemptedAt: number;
+  writtenAt?: number;
+  text?: string;
+  turns: { id: string; conversationId: string; turnId: string }[];
+  expressionIds: string[];
+  privateWords: string[];
+  factHashes: string[];
+}
+
 export type RelationshipPreferencesPatch = Partial<RelationshipPreferences>
 
 interface CompanionFeedbackRecord {
@@ -97,6 +109,7 @@ interface RelationshipLogData {
   speech: SpeechObservation[];
   desireHistory?: DesireSample[];
   entries: RelationshipLogEntry[]
+  dailyRecaps?: SavedDailyRecap[]
   dailySummaries: RelationshipDailySummary[]
   relationshipState: RelationshipState
   affectState: AffectState
@@ -540,6 +553,7 @@ export class RelationshipLogStore {
   }
   async forgetConversation(conversationId: string): Promise<void> {
     const data = this.repository.read();
+    data.dailyRecaps = data.dailyRecaps?.filter(r => !r.turns.some(t => t.conversationId === conversationId));
     data.speech = data.speech.filter(item => item.conversationId !== conversationId);
     data.entries = data.entries.filter(item => item.conversationId !== conversationId);
     data.desireHistory = data.desireHistory?.filter(item => item.conversationId !== conversationId);
@@ -559,6 +573,7 @@ export class RelationshipLogStore {
   }
   retainCompanionFeedbackTurns(conversationId: string, retainedUserTurnIds: ReadonlySet<string>): void {
     const data = this.repository.read();
+    data.dailyRecaps = data.dailyRecaps?.filter(r => !r.turns.some(t => t.conversationId === conversationId && !retainedUserTurnIds.has(t.turnId)));
     data.speech = data.speech.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.turnId));
     data.entries = data.entries.filter(item => item.conversationId !== conversationId || !item.companionTurnId || retainedUserTurnIds.has(item.companionTurnId));
     data.desireHistory = data.desireHistory?.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.turnId));
@@ -568,6 +583,23 @@ export class RelationshipLogStore {
     data.learningRevision++;
     data.taskLearningRevision++;
     data.revision++;
+    this.repository.write(data);
+  }
+  dailyRecapMaterial() {
+    const data = this.repository.read();
+    const enabled = data.relationshipState.recordHistory && !data.relationshipState.paused;
+    return {
+      enabled,
+      turns: enabled ? data.entries.filter(e => e.privateContext !== false && e.speechScope === "owner" && e.companionTurnId) : [],
+      expressions: enabled && data.relationshipState.learnPrivateExpressions
+        ? collectPrivateExpressions(data.speech.filter(row => row.scope === "owner")).samples : [],
+      saved: data.dailyRecaps ?? [],
+    };
+  }
+  saveDailyRecap(entry: SavedDailyRecap) {
+    const data = this.repository.read();
+    data.dailyRecaps = [...(data.dailyRecaps ?? []).filter(row => row.date !== entry.date), entry]
+      .sort((a, b) => a.date.localeCompare(b.date)).slice(-90);
     this.repository.write(data);
   }
   expressionEvidence() {
@@ -772,6 +804,7 @@ export class RelationshipLogStore {
       data.learningRevision++;
       // Derived summaries must not resurrect removed evidence.
       data.dailySummaries = [];
+      data.dailyRecaps = data.dailyRecaps?.filter(r => !r.turns.some(t => t.id === command.id));
       data.affectState = createDefaultAffectState(now);
       this.repository.purgeLegacy();
     } else if (command.type === "reset_bond_progress") {
@@ -779,6 +812,7 @@ export class RelationshipLogStore {
       data.seenCompanionEventIds = [];
       data.records.push({ id: randomUUID(), kind: "bond", at: now, text: "用户重置了羁绊进度" });
     } else if (command.type === "clear_history" || command.type === "reset_relationship") {
+      data.dailyRecaps = [];
       data.speech = [];
       data.desireHistory = [];
       data.entries = []; data.dailySummaries = []; data.records = []; data.followups = []; data.repairCases = []; data.commitments = [];
