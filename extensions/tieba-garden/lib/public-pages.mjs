@@ -1,3 +1,7 @@
+import { setTimeout as wait } from "node:timers/promises";
+import { authenticatedPage, initialJar } from "./authenticated-page.mjs";
+import { normalizeCookie } from "./session.mjs";
+
 export const TIEBA = "https://tieba.baidu.com";
 
 export function threadId(value) {
@@ -134,7 +138,91 @@ export class TiebaPageError extends Error {
   }
 }
 
-export async function publicPage(path, signal, cookie) {
+function checkStatus(status) {
+  if (status === 401 || status === 403 || status === 429 || (status >= 300 && status < 400)) {
+    throw new TiebaPageError("贴吧限制了自动访问（HTTP " + status + "）。可在浏览器打开原帖后导入楼层摘录。", true);
+  }
+  if (status < 200 || status >= 300) throw new TiebaPageError("贴吧读取失败（HTTP " + status + "）");
+}
+
+async function visitorPage(url, signal) {
+  const response = await fetch(url, {
+    method: "GET",
+    signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]),
+    redirect: "manual",
+    headers: { Accept: "text/html, application/xhtml+xml" },
+  });
+  if (!response.ok) await response.body?.cancel();
+  checkStatus(response.status);
+  if (!response.body) throw new TiebaPageError("贴吧返回空白页面");
+  let bytes = 0;
+  const chunks = [];
+  for await (const chunk of response.body) {
+    bytes += chunk.length;
+    if (bytes > 4_000_000) throw new TiebaPageError("贴吧页面过大");
+    chunks.push(chunk);
+  }
+  return { buffer: Buffer.concat(chunks), declared: response.headers.get("content-type") };
+}
+
+function decodePage({ buffer, declared }) {
+  if (!buffer.length) throw new TiebaPageError("贴吧返回空白页面");
+  if (buffer.length > 4_000_000) throw new TiebaPageError("贴吧页面过大");
+  const encoding = /charset=["\s\x27]*(?:gbk|gb2312|gb18030)/i.test(
+    (declared ?? "") + " " + buffer.subarray(0, 2000).toString("latin1"),
+  ) ? "gb18030" : "utf-8";
+  const html = new TextDecoder(encoding).decode(buffer);
+  if (/<title\b[^>]*>[^<]*(?:百度安全验证|访问验证)/i.test(html) ||
+    /\bBIOC_OPTIONS\b/.test(html.slice(0, 5000))) {
+    throw new TiebaPageError("贴吧要求安全验证。可在浏览器打开原帖后导入摘录。", true);
+  }
+  return html;
+}
+
+export function createAuthenticatedReader(request = authenticatedPage, now = Date.now, gapMs = 1200) {
+  let previousCookie;
+  let jar;
+  let loginUntil = 0;
+  let nextRequestAt = 0;
+  async function readWithJar(url, signal) {
+    const delay = nextRequestAt - now();
+    if (delay > 0) await wait(delay, undefined, { signal });
+    nextRequestAt = now() + gapMs;
+    return request(url, signal, jar);
+  }
+  return {
+    clear() {
+      previousCookie = undefined;
+      jar = undefined;
+      loginUntil = 0;
+    },
+    async read(url, signal, cookie) {
+      if (cookie !== previousCookie) {
+        previousCookie = cookie;
+        jar = initialJar(cookie);
+        loginUntil = 0;
+      }
+      if (now() >= loginUntil) {
+        const check = await readWithJar(new URL("/dc/common/tbs", TIEBA), signal);
+        checkStatus(check.status);
+        const body = decodePage(check);
+        let login;
+        try { login = JSON.parse(body); }
+        catch { throw new TiebaPageError("贴吧未返回可识别的登录状态"); }
+        if (String(login?.is_login) !== "1") {
+          throw new TiebaPageError("贴吧未识别当前 Cookie 的登录态，请在浏览器登录后重新导入");
+        }
+        jar = check.jar || jar;
+        loginUntil = now() + 600_000;
+      }
+      const result = await readWithJar(url, signal);
+      if (result.status >= 200 && result.status < 300) jar = result.jar || jar;
+      return result;
+    },
+  };
+}
+
+export async function publicPage(path, signal, cookie, readAuthenticated) {
   // Callers may only use the existing first-party reading routes.
   const url = new URL(TIEBA + path);
   const knownPage = /^\/f\?kw=[^&#]+$/.test(path)
@@ -143,44 +231,17 @@ export async function publicPage(path, signal, cookie) {
     || /^\/p\/comment\?tid=\d{1,20}&pid=\d{1,20}&pn=1$/.test(path);
   if (url.origin !== TIEBA || !knownPage) throw new TiebaPageError("贴吧读取入口无效");
   try {
-    const response = await fetch(url.href, {
-      method: "GET",
-      signal: AbortSignal.any([signal, AbortSignal.timeout(12_000)]),
-      redirect: "manual",
-      headers: { Accept: "text/html, application/xhtml+xml", ...(cookie && { Cookie: cookie }) },
-    });
-    if (response.status === 401 || response.status === 403 || response.status === 429 ||
-      (response.status >= 300 && response.status < 400)) {
-      await response.body?.cancel();
-      throw new TiebaPageError("贴吧限制了自动访问（HTTP " + response.status + "）。可在浏览器打开原帖后导入楼层摘录。", true);
-    }
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw new TiebaPageError("贴吧读取失败（HTTP " + response.status + "）");
-    }
-    if (!response.body) throw new TiebaPageError("贴吧返回空白页面");
-    let bytes = 0;
-    const chunks = [];
-    for await (const chunk of response.body) {
-      bytes += chunk.length;
-      if (bytes > 4_000_000) throw new TiebaPageError("贴吧页面过大");
-      chunks.push(chunk);
-    }
-    const buffer = Buffer.concat(chunks);
-    const declared = response.headers.get("content-type") ?? "";
-    const encoding = /charset=["\s\x27]*(?:gbk|gb2312|gb18030)/i.test(
-      declared + " " + buffer.subarray(0, 2000).toString("latin1"),
-    ) ? "gb18030" : "utf-8";
-    const html = new TextDecoder(encoding).decode(buffer);
-    if (/<title\b[^>]*>[^<]*(?:百度安全验证|访问验证)/i.test(html) ||
-      /\bBIOC_OPTIONS\b/.test(html.slice(0, 5000))) {
-      throw new TiebaPageError("贴吧要求安全验证。可在浏览器打开原帖后导入摘录。", true);
-    }
-    return html;
+    const page = cookie
+      ? await (readAuthenticated ?? createAuthenticatedReader().read)(url, signal, normalizeCookie(cookie))
+      : await visitorPage(url.href, signal);
+    if (cookie) checkStatus(page.status);
+    return decodePage(page);
   } catch (error) {
     if (signal.aborted || error instanceof TiebaPageError) throw error;
-    throw new TiebaPageError(error.name === "TimeoutError"
-      ? "读取贴吧公开页面超时"
-      : "暂时连不上贴吧公开页面");
+    if (error.code === "ENOENT") throw new TiebaPageError("找不到 curl，安装后可使用贴吧登录态");
+    if (error.code === 63 || error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") throw new TiebaPageError("贴吧页面过大");
+    throw new TiebaPageError(error.name === "TimeoutError" || error.code === 28
+      ? "读取贴吧页面超时"
+      : "暂时连不上贴吧");
   }
 }

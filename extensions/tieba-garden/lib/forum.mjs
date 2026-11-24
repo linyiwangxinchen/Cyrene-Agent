@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { floorsFromHtml, publicPage, repliesFromHtml, threadId, threadTitle, threadsFromHtml, TiebaPageError, TIEBA } from "./public-pages.mjs";
+import { createAuthenticatedReader, floorsFromHtml, publicPage, repliesFromHtml, threadId, threadTitle, threadsFromHtml, TiebaPageError, TIEBA } from "./public-pages.mjs";
 import { writeReadingNote } from "./notes.mjs";
 import { createReadSession } from "./session.mjs";
 
@@ -55,9 +55,11 @@ function recoveryVisits(visits, now) {
     : visit);
 }
 
-export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
+export function createForum(ctx, { page, now = Date.now } = {}) {
   const config = () => configFrom(ctx.storage.get("config"));
   const session = createReadSession(ctx.deps.secrets);
+  const authenticated = createAuthenticatedReader();
+  const readPage = page ?? ((path, signal, cookie) => publicPage(path, signal, cookie, authenticated.read));
   const loaded = ctx.storage.get("forum");
   const oldReading = legacyReading(ctx.storage.get("reading"));
   let data = {
@@ -108,7 +110,7 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
   async function discover(bar) {
     if (!bar) throw new Error("请先填写常逛的吧");
     const cookie = await session.requestCookie();
-    const html = await page(barPage(bar, Boolean(cookie)), ctx.signal, cookie);
+    const html = await readPage(barPage(bar, Boolean(cookie)), ctx.signal, cookie);
     const items = threadsFromHtml(html, bar);
     if (!items.length) throw new TiebaPageError("这个吧的页面未返回可读帖子，可打开原帖或导入楼层摘录。");
     const read = new Set(data.seen);
@@ -167,7 +169,7 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
       const path = cookie
         ? "/mo/q/m?kz=" + tid + "&pn=" + pageNumber
         : "/p/" + tid + (pageNumber > 1 ? "?pn=" + pageNumber : "");
-      const html = await page(path, ctx.signal, cookie);
+      const html = await readPage(path, ctx.signal, cookie);
       title = threadTitle(html) || title;
       floors = floorsFromHtml(html, Boolean(cookie)).map(floor => ({ ...floor, page: pageNumber }));
     }
@@ -181,7 +183,7 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
       if (!parents.length) replyStatus = "楼中楼 · 当前页面未提供可定位的楼层 ID";
       for (const floor of parents) {
         try {
-          const html = await page("/p/comment?tid=" + tid + "&pid=" + floor.post + "&pn=1", ctx.signal, cookie);
+          const html = await readPage("/p/comment?tid=" + tid + "&pid=" + floor.post + "&pn=1", ctx.signal, cookie);
           floors.push(...repliesFromHtml(html, floor.post).map(reply => ({ ...reply, page: pageNumber })));
           refreshedReplies.add(floor.post);
         } catch (error) {
@@ -315,18 +317,19 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
     const target = bar || config().bar || "贴吧";
     let status, message;
     try {
-      const html = await page(barPage(target, true), ctx.signal, cookie);
+      authenticated.clear();
+      const html = await readPage(barPage(target, true), ctx.signal, cookie);
       const readable = threadsFromHtml(html, target).length > 0;
       status = readable ? "accessible" : "unreadable";
       message = readable
-        ? "这次请求已读到帖子列表。检查结果只反映页面可读性。"
+        ? "贴吧已确认登录，帖子列表可读。"
         : "贴吧返回了页面，但未读取到帖子列表。";
     } catch (error) {
       if (ctx.signal.aborted) throw error;
       status = error instanceof TiebaPageError && error.pauseVisit ? "blocked" : "error";
       message = status === "blocked"
         ? "检查无法判断 Cookie 是否仍有效。" + formatError(error)
-        : "暂时无法读取贴吧，请稍后再检查。";
+        : error instanceof TiebaPageError ? formatError(error) : "暂时无法读取贴吧，请稍后再检查。";
     }
     session.recordCheck({ status, message, at: now(), bar: target });
   }
@@ -346,9 +349,12 @@ export function createForum(ctx, { page = publicPage, now = Date.now } = {}) {
         if (active || manualDiscovery) throw new Error("请等本轮逛吧结束后再管理登录会话");
         manualDiscovery = true;
         try {
-          if (cmd === "auth-save") await session.save(args.cookie);
-          else if (cmd === "auth-clear") await session.clear();
-          else await checkSession(barName(args.bar));
+          if (cmd === "auth-check") await checkSession(barName(args.bar));
+          else {
+            if (cmd === "auth-save") await session.save(args.cookie);
+            else await session.clear();
+            authenticated.clear();
+          }
         } finally {
           manualDiscovery = false;
         }
