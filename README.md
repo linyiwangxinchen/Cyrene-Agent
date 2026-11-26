@@ -96,11 +96,13 @@ pnpm run build:screenshot-helper
 pnpm run dev
 ```
 
-构建 Windows 可分发版本（自动构建 Electron 应用和 Rust 截图助手）：
+构建 Windows 本地目录包（自动构建 Electron 应用和 Rust 截图助手）：
 
 ```bash
 pnpm run package:win:dir
 ```
+
+可分发的 NSIS 安装器及更新文件按 [Windows 发行流程](docs/fork-releases.md#windows-x64-安装器) 构建和验收。
 
 <details>
 <summary><b>可选步骤</b>（3. BGE-M3 嵌入模型 / 4. cyrene 命令行入口）</summary>
@@ -697,7 +699,7 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
 
 ## <img src="./docs/image/icons/hand-coins.svg" width="20" height="20" alt=""> 随缘支持
 
-本项目由个人独立开发，所有功能免费开放。
+Cyrene 由 Playa-Cyrene 团队与贡献者共同开发维护。本分支维护 Windows、Linux 和 Web 适配，功能免费开放。
 
 如果 Cyrene 陪伴你的日子还不错，可以扫码请作者喝杯咖啡 —— 完全随缘，不支持也完全不影响使用。
 

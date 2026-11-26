@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createAuthenticatedReader, floorsFromHtml, mobileRepliesFromHtml, mobileReplyPagePath, publicPage, repliesFromMobilePage, threadId, threadTitle, threadsFromHtml, TiebaPageError, TIEBA } from "./public-pages.mjs";
-import { writeReadingNote } from "./notes.mjs";
+import { legacyTiebaExpressionId, tiebaExpressionFingerprint, writeReadingNote } from "./notes.mjs";
 import { submitThreadReply } from "./post-reply.mjs";
 import { createReadSession } from "./session.mjs";
 import { chooseVisitBars } from "./visit-interests.mjs";
@@ -76,6 +76,7 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
     visits: [],
     seen: oldReading ? [oldReading.tid] : [],
     forgotten: [],
+    forgottenEvidence: [],
     visitsStarted: 0,
     lastVisit: ctx.storage.get("lastVisit"),
     status: ctx.storage.get("status") ?? "",
@@ -138,18 +139,33 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
     try {
       const result = await writeReadingNote(llm, reading, allowLearning, ctx.signal, now());
       const samples = new Map(data.samples.map(row => [row.id, row]));
-      const accepted = config().learn ? result.samples.filter(sample => !data.forgotten.includes(sample.id)) : [];
+      const accepted = config().learn ? result.samples.filter(sample => !data.forgotten.includes(sample.id)
+        && !data.forgotten.includes(legacyTiebaExpressionId(sample.tid, sample.quote))
+        && !data.forgottenEvidence.includes(tiebaExpressionFingerprint(sample.tid, sample.quote))) : [];
       const current = data.readings.find(row => row.tid === reading.tid) ?? reading;
+      const acceptedIds = [];
       for (const sample of accepted) {
         // Keep the original learning timestamp on re-analysis so daily recaps do not repeat it.
-        const existing = samples.get(sample.id);
-        if (!existing) samples.set(sample.id, sample);
-        else if (!existing.style && sample.style) samples.set(sample.id, { ...existing, style: sample.style });
+        const existing = samples.get(sample.id) ?? [...samples.values()].find(row => row.tid === sample.tid && typeof row.quote === "string"
+          && tiebaExpressionFingerprint(row.tid, row.quote) === sample.id);
+        if (!existing) {
+          samples.set(sample.id, sample);
+          acceptedIds.push(sample.id);
+        } else {
+          // Trust can be upgraded by a new exact read, never by joining an old term to a newer thread row.
+          const exactRead = ["forum_public", "forum_authenticated"].includes(sample.origin.kind);
+          const previousExact = ["forum_public", "forum_authenticated"].includes(existing.origin?.kind);
+          const sameLocation = sample.origin.id === existing.origin?.id;
+          const reference = exactRead && (!previousExact || sameLocation && sample.origin.version !== existing.origin.version)
+            ? { quote: sample.quote, source: sample.source, origin: sample.origin } : {};
+          if (reference.origin || !existing.style && sample.style) samples.set(existing.id, { ...existing, ...reference, style: existing.style ?? sample.style });
+          acceptedIds.push(existing.id);
+        }
       }
       const stored = {
         ...reading, summary: result.summary || reading.summary, evidence: result.evidence.length ? result.evidence : reading.evidence,
         analysisStatus: "complete", analysisError: "",
-        sampleIds: [...new Set([...current.sampleIds, ...accepted.map(sample => sample.id)])],
+        sampleIds: [...new Set([...current.sampleIds, ...acceptedIds])],
       };
       saveReading(stored, [...samples.values()].slice(-500));
       return stored;
@@ -172,6 +188,7 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
     let title = typeof args.title === "string" ? args.title.trim().slice(0, 160) : "";
     status = "正在读帖 · " + (title || tid);
     const cookie = imported ? undefined : await session.requestCookie();
+    const origin = imported ? "imported_excerpt" : cookie ? "forum_authenticated" : "forum_public";
     let floors;
     let html;
     if (imported) {
@@ -231,6 +248,7 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
       floors = floors.flatMap(floor => [floor, ...(byParent.get(floor.post) ?? [])]);
     }
     ctx.signal.throwIfAborted();
+    floors = floors.map(floor => ({ ...floor, origin }));
     // Bound stored text and send the same excerpts to the model and the detail panel.
     if (old && !imported && !old.imported) {
       const currentPosts = new Set(floors.map(floor => floor.post));
@@ -499,12 +517,17 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
           save({ status });
         }, args.background === true, args.compact === true);
       } else if (cmd === "forget") {
-        const samples = data.samples.filter(row => row.id !== args.id);
-        const readings = data.readings.map(row => ({ ...row, sampleIds: row.sampleIds.filter(id => id !== args.id) }));
+        const row = data.samples.find(item => item.id === args.id);
+        const key = row && tiebaExpressionFingerprint(row.tid ?? /^https:\/\/tieba\.baidu\.com\/p\/(\d+)/u.exec(row.source)?.[1] ?? "", row.quote);
+        const removed = new Set([args.id, ...data.samples.filter(item => key && typeof item.quote === "string"
+          && tiebaExpressionFingerprint(item.tid ?? /^https:\/\/tieba\.baidu\.com\/p\/(\d+)/u.exec(item.source)?.[1] ?? "", item.quote) === key).map(item => item.id)]);
+        const samples = data.samples.filter(item => !removed.has(item.id));
+        const readings = data.readings.map(item => ({ ...item, sampleIds: item.sampleIds.filter(id => !removed.has(id)) }));
         const forgotten = typeof args.id === "string" && /^[a-f0-9]{64}$/.test(args.id)
           ? [...new Set([...data.forgotten, args.id])].slice(-1000)
           : data.forgotten;
-        save({ samples, readings, forgotten });
+        const forgottenEvidence = key ? [...new Set([...data.forgottenEvidence, key])] : data.forgottenEvidence;
+        save({ samples, readings, forgotten, forgottenEvidence });
       } else {
         throw new Error("未知操作");
       }

@@ -69,6 +69,7 @@ import { createCitaService } from "./cita/cita-service";
 import { createSocialContextService } from "./social-context/social-context-service";
 import "../moments/moments-service";
 import { registerAllTools } from "../orchestrator/tools/registry/tool-registration";
+import { closeConversationDatabases, getConversationDatabase } from "../storage/conversation-database-client";
 
 function conflictingSettings(): ModelSettings {
   return {
@@ -103,7 +104,8 @@ beforeEach(() => {
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeConversationDatabases();
   fs.rmSync(mocks.root, { recursive: true, force: true });
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -124,12 +126,20 @@ describe("默认模型消费者实际请求的档案归属", () => {
   it("社会记忆异步提取使用执行时的默认档案", async () => {
     const network = installApi('{"operations":[]}');
     let queued: (() => Promise<void>) | undefined;
+    const database = getConversationDatabase(mocks.root);
+    await database.call("transcript.append", "fixture", { id: "user-entry", kind: "user", turnId: "u1", revision: 1, at: 1,
+      payload: { text: "我喜欢海边。" } });
+    await database.call("transcript.append", "fixture", { id: "reply-entry", kind: "assistant", turnId: "a1", at: 2,
+      payload: { role: "assistant", content: "海风很舒服。" } });
     const service = createSocialContextService({
       llmClient: createLlmClient(),
-      enqueueLLMTask: async (_label, task) => { queued = task; },
+      enqueueLLMTask: (_label, task) => new Promise((resolve, reject) => {
+        queued = async () => { await task().then(resolve, reject); };
+      }),
     });
-    service.scheduler.schedule({
-      conversationId: "fixture", userTurn: { id: "u1", role: "user", text: "我喜欢海边。" },
+    await service.scheduler.schedule({
+      conversationId: "fixture", memoryScope: "owner", source: { userTurnId: "u1", assistantEntryId: "reply-entry" },
+      userTurn: { id: "u1", role: "user", text: "我喜欢海边。" },
       assistantTurn: { id: "a1", role: "assistant", text: "海风很舒服。" }, retrievedAtoms: [], now: 100,
     });
     expect(network).not.toHaveBeenCalled();

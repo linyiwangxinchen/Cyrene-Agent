@@ -2,7 +2,7 @@ import { extractMemoryKeywords } from "./memory-store-defaults";
 import { createHash } from "node:crypto";
 import type { MemoryDeletionPreview, MemoryEditCommand, MemoryExplanation, MemorySourceLocator } from "../../shared/memory-governance";
 import type { MemoryStore, L2Memory } from "./memory-types";
-import { candidateSources, memorySourceKey, wikiClaimKey } from "./memory-source-policy";
+import { candidateSources, memoryFactKey, memorySourceKey, wikiClaimKey } from "./memory-source-policy";
 
 export function cascadeMemoryIds(memories: L2Memory[], rootId: string): Set<string> {
   const ids = new Set([rootId]);
@@ -95,6 +95,7 @@ export function createMemoryGovernance(deps: MemoryGovernanceDependencies) {
         if (command.action === "delete") {
           const forgotten = next.forgetting ??= { memoryIds: [], sourceKeys: [], wikiClaimKeys: [], profileRecords: [] };
           forgotten.memoryIds = [...new Set([...forgotten.memoryIds, ...affected])];
+          forgotten.socialFactKeys = [...new Set([...(forgotten.socialFactKeys ?? []), ...candidateSources(memory).map(source => memoryFactKey(source, memory.content))])];
           if (selection?.preventReplay !== false) forgotten.sourceKeys = [...new Set([...forgotten.sourceKeys, ...preview!.sources.map(memorySourceKey)])];
           forgotten.wikiClaimKeys = [...new Set([...forgotten.wikiClaimKeys, ...(selection?.wikiClaims ?? []).map(claim => wikiClaimKey(claim.pageId, claim.claimId))])];
           for (const key of selection?.profileKeys ?? []) {
@@ -117,6 +118,10 @@ export function createMemoryGovernance(deps: MemoryGovernanceDependencies) {
           }
           if (command.action === "edit") {
             const target = next.l2.find(item => item.id === command.id)!;
+            const oldFactKeys = candidateSources(memory).map(source => memoryFactKey(source, memory.content));
+            const nextFactKeys = new Set(candidateSources(memory).map(source => memoryFactKey(source, command.content.trim())));
+            const forgetting = next.forgetting ??= { memoryIds: [], sourceKeys: [], wikiClaimKeys: [] };
+            forgetting.factKeys = [...new Set([...(forgetting.factKeys ?? []), ...oldFactKeys.filter(key => !nextFactKeys.has(key))])];
             target.content = command.content.trim();
             target.syncStatus = "pending_sync";
             target.keywords = extractMemoryKeywords(command.content);

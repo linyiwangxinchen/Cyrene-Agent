@@ -10,6 +10,7 @@ import { useTranslation } from "../../i18n";
 import "./ChannelsSettingsPanel.css";
 import { Card } from "../../components/ui/Card";
 import { ChannelRecoveryPanel, type ChannelRecoveryApi } from "./ChannelRecoveryPanel";
+import { QqModuleInstallationCard } from "./QqModuleInstallationCard";
 
 type ChannelId = "wechat" | "feishu" | "qq" | "qqbot";
 type ChannelConfig = Record<string, unknown>;
@@ -275,6 +276,8 @@ export function ChannelsSettingsPanel() {
         </>}
         {id === "qq" && <>
           <p className="cy-channels-hint">{t("settingsPage.channels.qq.description")}</p>
+          {api?.channelsQqModuleInstallationStatus && <QqModuleInstallationCard api={api}
+            listenMode={String(config.listenMode ?? "auto")} customHost={stringValue(config, "customHost")} />}
           <label className="cy-channels-field"><span>{t("settingsPage.channels.qq.listenMode")}</span><SettingsSelect ariaLabel={t("settingsPage.channels.qq.listenMode")} value={String(config.listenMode ?? "auto")} onChange={(value) => updateChannel(id, "listenMode", value)} options={[{ value: "auto", label: t("settingsPage.channels.qq.auto") }, { value: "wsl", label: "WSL" }, { value: "loopback", label: "127.0.0.1" }, { value: "custom", label: t("settingsPage.channels.qq.custom") }]} /></label>
           {config.listenMode === "custom" && <label className="cy-channels-field"><span>{t("settingsPage.channels.qq.customHost")}</span><SettingsInput value={stringValue(config, "customHost")} onChange={(event) => updateChannel(id, "customHost", event.target.value)} /></label>}
           <label className="cy-channels-field"><span>{t("settingsPage.channels.qq.port")}</span><SettingsInput type="number" min={1} max={65535} value={String(config.port ?? 6200)} onChange={(event) => updateChannel(id, "port", Number(event.target.value))} /></label>

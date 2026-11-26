@@ -15,6 +15,8 @@ export interface ChannelOutboxRecord {
   kind: "outbox"; id: string; channel: ChannelId; createdAt: number; updatedAt: number;
   fingerprint: string; message: OutgoingMessage;
   conversationId?: string; assistantTurnId?: string; runId?: string;
+  /** Authenticated QQ sender at creation. Absent in older records. */
+  qqAccountId?: string;
   parts: Array<{ status: OutboxPartStatus; error?: string; updatedAt: number }>;
 }
 export type ChannelRecoveryRecord = ChannelInboxRecord | ChannelOutboxRecord;
@@ -123,7 +125,7 @@ export class ChannelRecoveryStore {
     if (!record || record.kind !== "inbox") throw new Error("inbox_not_found");
     record.status = status; record.error = error; record.updatedAt = Math.max(Date.now(), record.updatedAt + 1); this.write(record); return record;
   }
-  prepareOutbox(message: OutgoingMessage, identity: OutboxIdentity = {}): ChannelOutboxRecord {
+  prepareOutbox(message: OutgoingMessage, identity: OutboxIdentity = {}, qqAccountId?: string): ChannelOutboxRecord {
     const id = identity.operationId || `outbox:${randomUUID()}`;
     const fingerprint = hash(JSON.stringify(message));
     const existing = this.get(id);
@@ -152,6 +154,7 @@ export class ChannelRecoveryStore {
       kind: "outbox", id, channel: message.channel, fingerprint, createdAt: now, updatedAt: now,
       message: { ...message, parts: message.parts.map(snapshot) },
       conversationId: identity.conversationId, assistantTurnId: identity.assistantTurnId, runId: identity.runId,
+      qqAccountId,
       parts: message.parts.map(() => ({ status: "pending", updatedAt: now })),
     };
     this.write(record); return record;

@@ -1322,6 +1322,26 @@
       "feishu": {
         "description": "在飞书开放平台创建自建应用并启用机器人能力，然后填写 App ID 和 App Secret。支持长连接，无需公网回调。"
       },
+      "qqModule": {
+        "tokenPolicy": "独立 QFCA 模块即使仅监听本机回环，也必须配置非空白 Access Token，并与后端一致。此要求不改变当前内建 QQ 接入；不会自动生成或改写 Token。",
+        "tokenRequired": "当前已保存的 Token 缺失或仅含空白，不能切换到独立模块。请先在原 QQ 设置和后端配置一致的 Token。",
+        "tokenAvailable": "已读取到非空白 Token；这不代表后端认证成功。迁移确认时仍须重新校验凭据和安全存储。",
+        "tokenUnresolved": "无法确认已保存的 Token 是否可用。切换前须检查凭据和安全存储；原配置保持不变。",
+        "loopbackPolicy": "首版独立模块仅支持数字 IP 的本机回环监听，不接受 localhost / DNS 名称、带括号 IPv6 或 scope ID。Token 不会开启远程支持；auto 解析为 WSL、显式 WSL 或局域网地址均不能直接切换，也不会自动改写配置。",
+        "listenReady": "当前监听预检：本机回环。发行信任与其他安装条件仍未完成。",
+        "listenUnsupported": "当前监听预检：地址不受首版独立模块支持（仅允许数字回环 IP）。请在后续切换前明确调整配置。",
+        "listenUnresolved": "当前监听预检：地址无法确定，不能确认独立模块兼容性。",
+        "title": "QQ 可选模块",
+        "summary": "独立 QQ 模块安装入口正在准备中。",
+        "entry": "查看模块安装条件",
+        "close": "关闭",
+        "unavailable": "发行来源和签名信任根尚未配置，暂不可下载或安装。",
+        "failed": "无法确认安装状态，已保持安装关闭。请关闭后重试。",
+        "legacy": "当前版本仍保留原内建 QQ 接入，下方原配置继续有效。独立模块尚未启用。",
+        "safety": "开放安装前需验证发布者签名、文件完整性、宿主与接口版本及平台兼容性。只有明确确认后才会安装；不会自动下载或运行外部后端。",
+        "data": "聊天历史、QQ 配置和会话绑定留在主程序。模块安装不等于数据迁移或账号切换。",
+        "install": "下载并安装（暂不可用）"
+      },
       "qq": {
         "description": "配置 NapCat OneBot 11 反向 WebSocket。群聊仅响应白名单群中的 @，并强制关闭群聊工具调用。",
         "listenMode": "监听模式",
@@ -1664,8 +1684,8 @@
               "kind": "list",
               "items": [
                 "[GitHub Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues)；",
-                "电子邮箱：[ky2569ly@gmail.com](mailto:ky2569ly@gmail.com)，标题建议注明“反馈”或“Bug”；",
-                "B 站私信 [Playa0](https://space.bilibili.com/260670644)，开头注明“反馈/Bug”。"
+                "电子邮箱：[Liang_zh_@outlook.com](mailto:Liang_zh_@outlook.com)，标题建议注明“反馈”或“Bug”；",
+                "B 站私信 [CCOLD-AS-ICEE](https://space.bilibili.com/1098067913)，开头注明“反馈/Bug”。"
               ]
             },
             {
@@ -2612,6 +2632,10 @@
       "proactiveChatDescription": "昔涟会因自己的见闻、兴趣或牵挂来找你。正在聊天、静默时段和连续两次未回复时暂停主动开场。",
       "companionPluginSharing": "分享插件发现",
       "companionPluginSharingDescription": "允许已启用插件把经过脱敏的有趣发现交给昔涟判断是否分享；默认关闭。",
+      "expressionSources": "插件表达使用范围",
+      "expressionSourcesDescription": "仅支持表达学习并已采集素材的插件生效。允许主动消息使用时，昔涟可借鉴接话方式。",
+      "expressionChat": "私聊",
+      "expressionProactive": "主动消息",
       "deliveryTarget": "主动消息发送到",
       "deliveryTargetDescription": "手机渠道不可用时，本次主动消息会取消，不会改发到本地。",
       "proactiveScoreStatus": "最近候选评分",

@@ -27,6 +27,21 @@ describe("resolveReasoningCapability — 行为基准", () => {
     expect(cap.autoEffort).toBe("high");
   });
 
+  // 预期值按官方 Qwen4-Max 模型页与 Chat Completions 文档独立填写（核验 2026-11-17）。
+  test("qwen + qwen4-max → reasoning_effort 三档 low/high/xhigh，默认 high，可关闭", () => {
+    const cap = resolveReasoningCapability("qwen", "qwen4-max");
+    expect(cap.control).toBe("toggle-effort");
+    expect(cap.requestStyle).toBe("openai-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "high", "xhigh"]);
+    expect(cap.defaultEffort).toBe("high");
+    expect(cap.supportsDisable).toBe(true);
+    expect(resolveReasoningCapability("unknown-provider", "qwen4-max").defaultEffort).toBe("high");
+  });
+
+  test("邻近反例：仅 Token Plan 可用的 qwen4-max-preview 不套用正式版规则", () => {
+    expect(resolveReasoningCapability("qwen", "qwen4-max-preview")).toBe(UNKNOWN_REASONING_CAPABILITY);
+  });
+
   test("厂商内排序敏感：qwen + qwen3-thinking → /-thinking$/ 先于 /^qwen3/ 命中 fixed-on", () => {
     const cap = resolveReasoningCapability("qwen", "qwen3-thinking");
     expect(cap.control).toBe("fixed-on");
@@ -64,8 +79,9 @@ describe("resolveReasoningCapability — 行为基准", () => {
   });
 
   // 预期值按官方文档独立填写（effort 文档，核验 2026-10-08），不从注册表复制。
-  // 预期值按官方模型总览与 effort 文档独立填写（核验 2026-11-01），不从注册表复制。
+  // 预期值按官方模型总览与 effort 文档独立填写（核验 2026-11-01；Fable 5.2 核验 2026-11-10），不从注册表复制。
   test.each([
+    ["claude-fable-5-2", "high", false],
     ["claude-fable-5-1", "high", false],
     ["claude-opus-5-5", "medium", false],
     ["claude-opus-5", "high", true],
@@ -101,9 +117,9 @@ describe("resolveReasoningCapability — 行为基准", () => {
     expect(resolveReasoningCapability("unknown-provider", "claude-haiku-5-5").defaultEffort).toBe("medium");
   });
 
-  // 预期值按官方文档独立填写（思考文档、OpenAI 兼容文档与模型页，核验 2026-10-18），不从注册表复制。
-  test("gemini + gemini-4-argon → reasoning_effort 三档 low/medium/high，默认 medium，不可关闭", () => {
-    const cap = resolveReasoningCapability("gemini", "gemini-4-argon");
+  // 预期值按官方文档独立填写（思考文档、OpenAI 兼容文档与模型页；Argon 核验 2026-10-18，Carbon 核验 2026-11-11），不从注册表复制。
+  test.each(["gemini-4-argon", "gemini-4-carbon"])("gemini + %s → reasoning_effort 三档 low/medium/high，默认 medium，不可关闭", (model) => {
+    const cap = resolveReasoningCapability("gemini", model);
     expect(cap.control).toBe("effort");
     expect(cap.requestStyle).toBe("openai-effort");
     expect(cap.supportedEfforts).toEqual(["low", "medium", "high"]);
@@ -111,8 +127,30 @@ describe("resolveReasoningCapability — 行为基准", () => {
     expect(cap.supportsDisable).toBe(false);
   });
 
-  test("Gemini 4 Argon 规则可跨厂商推断：托管端点使用同一型号名", () => {
-    expect(resolveReasoningCapability("unknown-provider", "gemini-4-argon").defaultEffort).toBe("medium");
+  test.each(["gemini-4-argon", "gemini-4-carbon"])("%s 规则可跨厂商推断：托管端点使用同一型号名", (model) => {
+    expect(resolveReasoningCapability("unknown-provider", model).defaultEffort).toBe("medium");
+  });
+
+  // 预期值按官方思考文档、OpenAI 兼容文档与发布说明独立填写（核验 2026-11-19）：四档含 xhigh，默认 high。
+  test("gemini + gemini-4-neon → reasoning_effort 四档 low/medium/high/xhigh，默认 high，不可关闭", () => {
+    const cap = resolveReasoningCapability("gemini", "gemini-4-neon");
+    expect(cap.control).toBe("effort");
+    expect(cap.requestStyle).toBe("openai-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(cap.defaultEffort).toBe("high");
+    expect(cap.supportsDisable).toBe(false);
+    expect(resolveReasoningCapability("unknown-provider", "gemini-4-neon").defaultEffort).toBe("high");
+  });
+
+  // 预期值按官方模型页与 OpenAI 兼容文档独立填写（核验 2026-11-13）：四档含 xhigh，默认 high。
+  test("gemini + gemini-4-hydrogen → reasoning_effort 四档 low/medium/high/xhigh，默认 high，不可关闭", () => {
+    const cap = resolveReasoningCapability("gemini", "gemini-4-hydrogen");
+    expect(cap.control).toBe("effort");
+    expect(cap.requestStyle).toBe("openai-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(cap.defaultEffort).toBe("high");
+    expect(cap.supportsDisable).toBe(false);
+    expect(resolveReasoningCapability("unknown-provider", "gemini-4-hydrogen").defaultEffort).toBe("high");
   });
 
   test("邻近反例：gemini-3.8-flash 仍走 gemini-3 规则，未核实的 gemini-4-flash 落兜底", () => {
@@ -143,6 +181,20 @@ describe("resolveReasoningCapability — 行为基准", () => {
       expect(row(model)).not.toContain("历史未核验");
     }
     expect(row("kimi-k3")).toContain("历史未核验");
+  });
+
+  // 预期值按官方推理指南与 GPT-6.2 迁移指南独立填写（核验 2026-11-18），不从注册表复制。
+  test.each(["gpt-6.2-astra", "gpt-6.2-sol"])("chatgpt + %s → 五档 effort，默认 medium，拒绝 none 不可关闭，支持 pro mode", (model) => {
+    const cap = resolveReasoningCapability("chatgpt", model);
+    expect(cap.control).toBe("effort");
+    expect(cap.requestStyle).toBe("openai-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(cap.defaultEffort).toBe("medium");
+    expect(cap.supportsDisable).toBe(false);
+    expect(cap.supportsProMode).toBe(true);
+    // 迁移指南：none / minimal 改用 low。
+    expect(cap.lowEffortFallback).toBe("low");
+    expect(resolveReasoningCapability("unknown-provider", model).supportsDisable).toBe(false);
   });
 
   // 预期值按官方文档独立填写（GPT-6.1 Terra / Sol 模型页与最新模型指南，核验 2026-10-28），不从注册表复制。

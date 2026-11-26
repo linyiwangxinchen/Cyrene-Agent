@@ -26,6 +26,7 @@ import type { ScheduledRunResult, ScheduledTask, ScheduledTaskHistoryEntry } fro
 type LegacyRunOptions = Omit<CyreneRunOptions, "toolSystemContent" | "soulSystemBaseContent">;
 
 interface RunnerDeps {
+  waitForTools?(task: ScheduledTask, signal?: AbortSignal): Promise<void>;
   buildOptions: (task: ScheduledTask) => Promise<LegacyRunOptions>;
   /** 有绑定工作区的用户任务每次触发创建独立 Cyrene 会话，不复用当前活动聊天。 */
   createRunSession?: (task: ScheduledTask) => (string) | Promise<string>;
@@ -93,9 +94,7 @@ export function createSchedulerRunner(deps: RunnerDeps) {
 
     // 旧任务仍是纯提醒；新 agent 任务保留创建时的工具白名单。
     const reminderOnly = Boolean(task.delivery && task.kind !== "agent");
-    const allTools = toolRegistry.getAllTools();
-    const effectiveTools = reminderOnly ? [] : filterToolsForTask(task, allTools);
-    const effectiveToolIds = effectiveTools.map(t => t.id);
+    let effectiveToolIds: string[] = [];
     // Freeze the UI target before any async build work; a later window switch
     // must not redirect this run's canonical facts or presentation events.
     let conversationId: string | null = null;
@@ -224,6 +223,10 @@ export function createSchedulerRunner(deps: RunnerDeps) {
     try {
       signal?.throwIfAborted();
       if (sessionCreationError) throw sessionCreationError;
+      if (!reminderOnly) await deps.waitForTools?.(task, signal);
+      signal?.throwIfAborted();
+      const effectiveTools = reminderOnly ? [] : filterToolsForTask(task, toolRegistry.getAllTools());
+      effectiveToolIds = effectiveTools.map(tool => tool.id);
       if (task.workspaceBinding && !task.delivery && conversationId) deps.recordHistory({
         id: historyId, taskId: task.id, taskTitle: task.title, firedAt: startedAt.toISOString(),
         status: "running", reason: manual ? "manual fireNow" : undefined, effectiveToolIds, sessionId: conversationId,
@@ -470,7 +473,8 @@ export function createSchedulerRunner(deps: RunnerDeps) {
     const target = task.delivery?.conversationId ?? task.delivery?.sessionId
       ?? (!task.workspaceBinding ? deps.getActiveConversation?.()?.sessionId : null);
     const historyId = deps.id(), startedAt = deps.now();
-    const effectiveToolIds = task.delivery && task.kind !== "agent" ? [] : filterToolsForTask(task, toolRegistry.getAllTools()).map(tool => tool.id);
+    const effectiveToolIds = deps.waitForTools || (task.delivery && task.kind !== "agent")
+      ? [] : filterToolsForTask(task, toolRegistry.getAllTools()).map(tool => tool.id);
     // Persist BEFORE waiting for another conversation run. The engine consumes
     // the scheduled occurrence immediately; a crash in this queue must be visible.
     deps.recordHistory({ id: historyId, taskId: task.id, taskTitle: task.title, firedAt: startedAt.toISOString(),

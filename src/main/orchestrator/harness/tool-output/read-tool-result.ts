@@ -9,6 +9,7 @@ import {
   toolOutputResultRef,
 } from "./file-tool-output-store";
 import type { ToolOutputStore } from "./tool-output-store";
+import { isDesktopBrowserTool } from "../../../browser/browser-tool-policy";
 
 export const READ_TOOL_RESULT_TOOL_ID = "read_tool_result";
 
@@ -17,7 +18,7 @@ export const readToolResultToolSpec: ToolSpec = {
   description: [
     "按需读取此前工具调用保存的完整结果。",
     "仅当上一轮 preview 不足以完成当前决策时使用；不要习惯性重读全部结果。",
-    "提供 result_ref 可读取当前会话的任意已保存结果；只提供 tool_call_id 时只读取当前 Run 的对应结果。",
+    "提供 result_ref 可读取当前会话中允许访问的已保存结果；只提供 tool_call_id 时只读取当前 Run 的对应结果。",
     "offset 和返回的 query 匹配位置均按 Unicode 码点计数；每次读取最多 8192 个码点。",
     "query 是纯文本查找，不支持正则表达式。不要提供文件系统路径。",
   ].join("\n"),
@@ -46,11 +47,15 @@ export async function executeReadToolResult(
   if ("error" in resultRef) return resultRef.error;
 
   const query = typeof args.query === "string" ? args.query : undefined;
+  const lookup = {
+    conversationId: toolContext!.conversationId!,
+    resultRef: resultRef.value,
+    ...(toolContext?.channelContext ? { canReadTool: (name: string) => !isDesktopBrowserTool(name) } : {}),
+  };
   try {
     if (query !== undefined) {
       const found = await store.find({
-        conversationId: toolContext!.conversationId!,
-        resultRef: resultRef.value,
+        ...lookup,
         query,
       });
       if (!found) return notFound();
@@ -70,8 +75,7 @@ export async function executeReadToolResult(
       return invalidArguments("offset 和 length 必须是数字");
     }
     const read = await store.read({
-      conversationId: toolContext!.conversationId!,
-      resultRef: resultRef.value,
+      ...lookup,
       offset,
       length,
     });

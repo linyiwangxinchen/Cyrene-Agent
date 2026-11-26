@@ -1,7 +1,7 @@
 import { createKeyedQueue } from "./keyed-queue";
 import type { DispatchContext } from "./channel-context";
 import { getChannelRecoveryStore, type ChannelInboxRecord, type ChannelRecoveryStore } from "./recovery-store";
-import type { ChannelId, IncomingMessage, OutgoingMessage } from "./types";
+import type { ChannelId, IncomingMessage, OutgoingMessage, TrackChannelWork } from "./types";
 
 export interface DurableChannelInboxDeps {
   store?: ChannelRecoveryStore;
@@ -26,9 +26,12 @@ export class DurableChannelInbox {
     const context = await this.deps.captureContext(message);
     return this.store.accept(message, context).record;
   }
-  async accept(message: IncomingMessage): Promise<void> {
+  async accept(message: IncomingMessage, trackWork?: TrackChannelWork): Promise<void> {
     const record = await this.persist(message);
-    if (record.status === "queued") void this.schedule(record).catch(() => undefined);
+    if (record.status !== "queued") return;
+    const completion = this.schedule(record);
+    void completion.catch(() => undefined);
+    trackWork?.(completion);
   }
   async handleIncoming(message: IncomingMessage): Promise<OutgoingMessage | null> {
     const record = await this.persist(message);

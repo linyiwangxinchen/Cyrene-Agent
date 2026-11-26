@@ -11,15 +11,17 @@
 // 注意：startChannels 必须晚于 initRAG / initMcpManager / loadModelSettings。
 import { app, BrowserWindow } from "electron";
 import path from "node:path";
+import { getQqModuleInstallationStatus } from "../qq-modules/installation-status";
 import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import {
   loadChannelsSettings,
+  readQqModulePreflightToken,
   saveChannelsSettings,
 } from "./settings-store";
 import { channelManager } from "./manager";
 import { createChannelConfigLifecycle } from "./config-lifecycle";
-import type { MessageHandler } from "./types";
+import type { MessageAcceptance, MessageHandler } from "./types";
 import { getChannelConversationBindingStore } from "./conversation-binding-store";
 import { listSessions, getSession } from "../chats/chats-store";
 import {
@@ -31,7 +33,7 @@ import { startInboundServer, stopInboundServer } from "./inbound-server";
 import { FeishuAdapter } from "./adapters/feishu";
 import { ILinkBotAdapter, loadCredentials } from "./adapters/wechat/ilink-bot-adapter";
 import { NapCatAdapter } from "./adapters/qq/napcat-adapter";
-import { resolveQqListenAuthRequirement } from "./adapters/qq/onebot-reverse-ws";
+import { resolveQqListenAuthRequirement } from "./qq-listen-policy";
 import { QqBotAdapter } from "./adapters/qqbot/qqbot-adapter";
 import { getRecentLog, clearLog, reloadLogFromDisk } from "./message-log";
 import { logger, LogTag } from "../logger";
@@ -66,7 +68,7 @@ let qqBotAdapter: QqBotAdapter | null = null;
 export interface InitializeChannelsOptions {
   ipc?: IpcScope;
   handleIncoming: MessageHandler;
-  acceptIncoming?: (msg: Parameters<MessageHandler>[0]) => Promise<void>;
+  acceptIncoming?: MessageAcceptance;
   reloadDispatcherSettings: () => void;
 }
 
@@ -345,6 +347,10 @@ function registerChannelsIpc(
     if (!qqAdapter) return { ok: false, error: "QQ adapter 未初始化" };
     return await qqAdapter.testConnection();
   });
+
+  ipc.handle(IPC.CHANNELS_QQ_MODULE_INSTALLATION_STATUS, (_event, input: unknown) =>
+    getQqModuleInstallationStatus(input, undefined, readQqModulePreflightToken),
+  );
 
   // ── QQ 官方机器人 IPC ─────────────────────────────────────────────────────
   ipc.handle(IPC.CHANNELS_QQBOT_TEST_CONNECTION, async () => {

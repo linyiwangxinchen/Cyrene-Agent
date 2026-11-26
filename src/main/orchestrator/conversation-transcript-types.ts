@@ -18,6 +18,7 @@ import type {
 import type { SideEffectKind, TodoItem, ToolCallOutcome, UncertainEffect } from "./harness/types";
 import type { ChatMessage as CanonicalChatMessage } from "./vendors/types";
 import { isContextUsageSnapshot } from "../../shared/context-usage";
+import { isCompanionReferenceList } from "../../shared/companion-references";
 import { normalizeMusicCardData } from "../../shared/music-card";
 import { normalizeMailDraftCardData } from "../../shared/mail-draft-card";
 import { SHELL_VISIBLE_OUTPUT_LIMIT } from "../../shared/shell-output";
@@ -53,7 +54,7 @@ export function assertValidPresentationPatch(value: unknown): asserts value is T
   const allowed = new Set([
     "content", "reasoning", "reasoningBlocks", "processMessages", "agentRounds",
     "taskDelegations", "channelSource", "sticker", "toolExecutions", "runActivity",
-    "runSnapshot", "ttsCacheKey", "ttsCacheVersion", "musicCard", "emailDraftCards", "contextUsage", "delta",
+    "runSnapshot", "ttsCacheKey", "ttsCacheVersion", "musicCard", "emailDraftCards", "contextUsage", "companionReferences", "delta",
   ]);
   if (Object.keys(value).some((key) => !allowed.has(key))) {
     throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
@@ -74,9 +75,10 @@ export function assertValidPresentationPatch(value: unknown): asserts value is T
       if (key === "taskDelegations" && !field.every((item) => isTaskDelegation(item))) throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
       if (key === "toolExecutions" && !field.every((item) => isToolExecution(item))) throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
     } else if (key === "channelSource") {
-      if (!isRecord(field) || !hasOnlyKeys(field, ["channel", "chatType", "senderName"]) || !["wechat", "feishu", "qq", "qqbot"].includes(field.channel as string) ||
+      if (!isRecord(field) || !hasOnlyKeys(field, ["channel", "chatType", "senderName", "recipientScope"]) || !["wechat", "feishu", "qq", "qqbot"].includes(field.channel as string) ||
         !optionalField(field, "chatType", (chatType) => ["private", "group"].includes(chatType as string)) ||
-        !optionalField(field, "senderName", (senderName) => typeof senderName === "string")) throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
+        !optionalField(field, "senderName", (senderName) => typeof senderName === "string") ||
+        !optionalField(field, "recipientScope", (scope) => typeof scope === "string" && /^peer:[a-f0-9]{64}$/.test(scope))) throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
     } else if (key === "runActivity") {
       if (!isRecord(field) || !hasOnlyKeys(field, ["startedAt", "completedAt", "reasoningMs", "activeReasoningStartedAt", "keepExpanded"]) || !finiteNumber(field.startedAt) || !finiteNumber(field.reasoningMs) ||
         !optionalField(field, "completedAt", finiteNumber) || !optionalField(field, "activeReasoningStartedAt", finiteNumber) ||
@@ -89,6 +91,8 @@ export function assertValidPresentationPatch(value: unknown): asserts value is T
       if (!Array.isArray(field) || !field.every((card) => normalizeMailDraftCardData(card) !== null)) throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
     } else if (key === "contextUsage") {
       if (!isContextUsageSnapshot(field) || !isContextUsageShape(field)) throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
+    } else if (key === "companionReferences") {
+      if (!isCompanionReferenceList(field)) throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
     } else {
       throw new Error("TRANSCRIPT_INVALID_PRESENTATION_PATCH");
     }

@@ -84,8 +84,14 @@ function flushVoiceFrames() {
   voiceFrames = []; sendVoice(IPC.CALL_AUDIO_FRAME, [bytes.buffer]);
 }
 export const ipcRenderer = {
-  invoke: (channel: string, ...args: unknown[]) => coreRequest("invoke", { channel, args }),
+  invoke(channel: string, ...args: unknown[]) {
+    // Web authenticates through the socket. Its first real RPC can then wait
+    // for the headless worker without calling the Electron-only handshake.
+    if (channel === IPC.APP_RUNTIME_IPC_READY) return connectCore();
+    return coreRequest("invoke", { channel, args });
+  },
   send(channel: string, ...args: unknown[]) {
+    if (channel === IPC.CHATS_REACT_READY) return;
     if (channel === IPC.CALL_STOP) { resetVoiceTransport(); void coreRequest("invoke", { channel, args }).catch(error => dispatch(IPC.CALL_ERROR, { message: error.message })); return; }
     if (channel === IPC.CALL_AUDIO_FRAME) { voiceFrames.push(new Uint8Array(args[0] as ArrayBuffer).slice()); voiceTimer ??= setTimeout(flushVoiceFrames, 80); return; }
     if (channel.startsWith("call:")) { flushVoiceFrames(); sendVoice(channel, args); return; }
@@ -127,9 +133,7 @@ export async function installSharedBridge(): Promise<void> {
   (window as any).chatStore.openInReactChatWindow = async (sessionId: string) => {
     const existing = await ipcRenderer.invoke(IPC.CHATS_GET, sessionId);
     if (!existing) throw new Error("原对话已删除");
-    const url = new URL(window.location.href);
-    url.searchParams.set("sessionId", sessionId);
-    window.location.assign(url.href);
+    dispatch(IPC.CHATS_REACT_SWITCH_SESSION, sessionId);
   };
   const api = (window as any).chat;
   api.ingestDroppedFiles = async (files: File[]) => {

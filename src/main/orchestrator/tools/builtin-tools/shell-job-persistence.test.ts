@@ -39,7 +39,10 @@ beforeEach(async () => {
   mocks.root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-shell-persistence-"));
   fs.mkdirSync(path.join(mocks.root, "shell-jobs"));
   child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
-  mocks.spawn.mockReset().mockReturnValue(child);
+  mocks.spawn.mockReset().mockImplementation(() => {
+    queueMicrotask(() => child.emit("spawn"));
+    return child;
+  });
   mocks.resolveShellExecutable.mockReset().mockImplementation(async kind => ({
     kind, executable: kind === "cmd" ? "fixture-cmd.exe" : "/fixture/bin/bash",
   }));
@@ -53,6 +56,31 @@ afterEach(async () => {
 });
 
 describe("shell job SQLite lifecycle (isolated data, mocked processes)", () => {
+  it("waits for the child spawn event before confirming startup", async () => {
+    mocks.spawn.mockImplementationOnce(() => child);
+    let resolved = false;
+    const pending = manager.startShellJob(options()).then(result => { resolved = true; return result; });
+    await expect.poll(() => mocks.spawn.mock.calls.length).toBe(1);
+    expect(resolved).toBe(false);
+    child.emit("spawn");
+    await expect(pending).resolves.toHaveProperty("jobId");
+    child.emit("close", 0);
+  });
+
+  it("preserves the failed state when the child cannot start", async () => {
+    const failure = Object.assign(new Error("fixture unavailable"), { code: "ENOENT" });
+    mocks.spawn.mockImplementationOnce(() => {
+      queueMicrotask(() => child.emit("error", failure));
+      return child;
+    });
+    await expect(manager.startShellJob(options())).rejects.toBe(failure);
+    const log = fs.readdirSync(path.join(mocks.root, "shell-jobs")).find(name => name.endsWith(".log"));
+    const jobId = log!.slice(0, -4);
+    expect(await manager.waitForShellJob(jobId, 0)).toMatchObject({ status: "failed", reason: "spawn_error: fixture unavailable", pid: null });
+    child.emit("close", -1);
+    expect(await manager.waitForShellJob(jobId, 0)).toMatchObject({ status: "failed" });
+  });
+
   it.each(["win32", "linux"])("run_shell forwards the host completion callback on %s and advertises automatic delivery only when supported", async platform => {
     const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
     Object.defineProperty(process, "platform", { configurable: true, value: platform });

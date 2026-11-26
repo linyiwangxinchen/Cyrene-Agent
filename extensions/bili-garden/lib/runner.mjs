@@ -1,4 +1,4 @@
-import { rememberExpression } from "./expressions.mjs";
+import { locateVideoExpression, rememberExpression } from "./expressions.mjs";
 import { videoId } from "./config.mjs";
 import { evidenceView, saveReport, validateCitations } from "./content.mjs";
 
@@ -235,13 +235,14 @@ export class GardenRunner {
           return result;
         },
       ),
-      ...(cfg.learnExpressions && run.kind !== "guard" ? [tool("learn_expression", "从已读视频字幕或评论选一句有特色的原话，说明在什么具体场景使用。", { bvid: str("BV号"), quote: str("逐字引用"), scene: str("具体语境"), cue: str("可迁移的接话场景，如庆祝、惊讶、接梗、鼓励"), delivery: str("一句话概括怎样接话，让昔涟可以用自己的话表达") }, ["bvid","quote","scene"], async a => {
+      ...(cfg.learnExpressions && run.kind !== "guard" ? [tool("learn_expression", "从已读视频字幕或评论选一句有特色的原话，说明在什么具体场景使用。", { bvid: str("BV号"), quote: str("逐字引用"), scene: str("具体语境"), cue: str("可迁移的接话场景，如庆祝、惊讶、接梗、鼓励"), delivery: str("一句话概括怎样接话，让昔涟可以用自己的话表达"), commentId: str("评论 ID（可选）") }, ["bvid","quote","scene"], async a => {
         if (!this.config().learnExpressions) throw new Error("表达学习已关闭");
         const bvid = videoId(a.bvid);
-        const subtitle = this.store.get("evidence", bvid)?.text ?? "";
-        const comment = (commentEvidence.get(bvid) ?? []).find(row=>row.text.includes(a.quote));
-        const source = "https://www.bilibili.com/video/" + bvid + (comment && /^\d+$/.test(comment.id) ? "/#reply"+comment.id : "");
-        return rememberExpression(this.store, source, a.quote, a.scene, comment?.text ?? subtitle, a);
+        const quote = String(a.quote ?? "").trim();
+        const match = locateVideoExpression(bvid, quote, { video: this.store.get("evidence", bvid),
+          comments: commentEvidence.get(bvid), commentId: a.commentId });
+        if (!match) throw new Error("该原句无法定位到已读视频或评论");
+        return rememberExpression(this.store, match.source.url, quote, a.scene, match.text, a, match.source);
       }, "mutation")] : []),
       tool(
         "propose_interaction",

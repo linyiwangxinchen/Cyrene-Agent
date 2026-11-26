@@ -59,6 +59,16 @@ function stubOpenMeteo() {
 }
 
 describe("weather 结果缓存", () => {
+  it("外部会话缺少城市时询问对方，本地仍可使用设置中的默认城市", async () => {
+    const fetchCalls = stubOpenMeteo();
+    const context = { userQuery: "天气怎样", channelContext: { channel: "wechat" as const, targetId: "peer", sessionId: "private" } };
+    expect(await weatherTool.execute({}, context)).toBe("[提示] 请问对方要查询哪个城市。");
+    expect(fetchCalls).toHaveLength(0);
+    await weatherTool.execute({ city: "北京" }, context);
+    expect(new URL(fetchCalls[0]).searchParams.get("name")).toBe("北京");
+    expect(JSON.parse(await weatherTool.execute({})).city).toBe("上海");
+    expect(new URL(fetchCalls[2]).searchParams.get("name")).toBe("上海");
+  });
   it("同城市两次：解析 + 预报各只请求一次，第二次返回 cached 标注", async () => {
     const fetchCalls = stubOpenMeteo();
 

@@ -20,6 +20,7 @@ import { getCallWeatherCity } from "../call/call-weather";
 import { reactChatWindow } from "../windows/window-state";
 
 export interface BootstrapConfigContext {
+  waitForCallContext?(signal: AbortSignal): Promise<void>;
   loadGeneralSettings: () => GeneralSettings;
 }
 
@@ -153,8 +154,13 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
         ttsMosslandFormat: s.ttsMosslandFormat,
       };
     },
-    buildCallSystemPrompt,
-    // 通话中明确询问天气时，查询当前天气。
+    // 通话专用 system prompt 构建器
+    async (userText, messages, signal) => {
+      await ctx.waitForCallContext?.(signal);
+      signal.throwIfAborted();
+      return buildCallSystemPrompt(userText, messages);
+    },
+    // 天气快捷处理：正则匹配到天气关键词 → 调 weather 工具的 execute
     async (userText: string) => {
       try {
         const weatherTool = toolRegistry.getById("weather");

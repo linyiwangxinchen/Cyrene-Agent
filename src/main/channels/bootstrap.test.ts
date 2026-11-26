@@ -2,6 +2,7 @@
 // 核心回归点：createChannelsSubsystem 在构造期只创建对象并连接依赖，
 // 不做任何初始化/启动 —— initialize / start / shutdown 必须显式调用。
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { createHash } from "node:crypto";
 import type { HarnessEvent } from "../orchestrator/harness/types";
 import { sendHarnessEventAsAgui } from "../orchestrator/harness/adapter/event-mapper";
 
@@ -10,6 +11,8 @@ const channelMocks = vi.hoisted(() => ({
   bindingResolve: vi.fn(),
   isGroupBoundConversation: vi.fn(),
   relationshipControls: vi.fn(),
+  recordAcceptedCompanionFeedback: vi.fn(),
+  getMemoryAccountId: vi.fn(),
   flush: vi.fn(),
   listSessions: vi.fn(),
   getSession: vi.fn(),
@@ -32,7 +35,10 @@ const channelMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../relationship/relationship-log", () => ({
-  getRelationshipStore: () => ({ getControls: channelMocks.relationshipControls }),
+  getRelationshipStore: () => ({
+    getControls: channelMocks.relationshipControls,
+    recordAcceptedCompanionFeedback: channelMocks.recordAcceptedCompanionFeedback,
+  }),
 }));
 
 vi.mock("electron", () => ({
@@ -91,6 +97,9 @@ vi.mock("./channel-context", () => ({
 vi.mock("./conversation-binding-store", () => ({
   getChannelConversationBindingStore: () => ({ resolve: channelMocks.bindingResolve, flush: channelMocks.flush }),
   isGroupBoundConversation: channelMocks.isGroupBoundConversation,
+}));
+vi.mock("./manager", () => ({
+  channelManager: { getAdapter: () => ({ getMemoryAccountId: channelMocks.getMemoryAccountId }) },
 }));
 vi.mock("../chats/chats-store", () => ({
   listSessions: channelMocks.listSessions,
@@ -185,6 +194,7 @@ beforeEach(() => {
   channelMocks.dispatcherDeps.length = 0;
   channelMocks.getSessionRecord.mockResolvedValue(null);
   channelMocks.relationshipControls.mockReset().mockReturnValue({ learningRevision: 7 });
+  channelMocks.getMemoryAccountId.mockReset().mockReturnValue(undefined);
   channelMocks.isGroupBoundConversation.mockReset().mockReturnValue(false);
 });
 
@@ -368,7 +378,18 @@ describe("createChannelsSubsystem lifecycle", () => {
     void shutdownChannels;
   });
 
-  it.each(["wechat-private", "group", "group-binding", "settings-unavailable"] as const)("渠道收尾只学习私聊原文：%s", async (scope) => {
+  it.each([
+    { scenario: "确认账号的私聊", startPrivate: true, finishPrivate: true, accepted: true, feedback: true },
+    { scenario: "群聊", chatType: "group" },
+    { scenario: "缺少明确私聊类型", chatType: undefined },
+    { scenario: "账号不匹配", currentAccount: "other-account" },
+    { scenario: "适配器未确认账号", currentAccount: undefined },
+    { scenario: "会话已绑定群聊", groupBinding: true },
+    { scenario: "模型运行期间换账号", changedAccount: true, startPrivate: true, accepted: true },
+    { scenario: "关系设置读取失败", settingsUnavailable: true, startPrivate: true, finishPrivate: true, accepted: true },
+    { scenario: "没有权威用户条目", missingUserEntry: true, startPrivate: true, finishPrivate: true },
+    { scenario: "用户消息经过编辑", userRevision: 2, startPrivate: true, finishPrivate: true },
+  ])("渠道只从已验证的私聊原文学习：$scenario", async (fixture) => {
     const onRunFinished = vi.fn(async () => ({ sticker: null }));
     const agentRuntime = makeAgentRuntime(onRunFinished);
     const publishLifecycle = makePublishLifecycle();
@@ -380,14 +401,22 @@ describe("createChannelsSubsystem lifecycle", () => {
 
     const buildAndRunAgent = channelMocks.buildAndRunAgent;
     if (!buildAndRunAgent) throw new Error("渠道 Agent 执行函数未注册");
-    if (scope === "group-binding") channelMocks.isGroupBoundConversation.mockReturnValueOnce(true);
-    if (scope === "settings-unavailable") {
+    const accountId = "fixture-account";
+    channelMocks.getMemoryAccountId.mockReturnValue("currentAccount" in fixture ? fixture.currentAccount : accountId);
+    if (fixture.changedAccount) channelMocks.getMemoryAccountId.mockReturnValueOnce(accountId).mockReturnValueOnce("next-account");
+    if (fixture.groupBinding) channelMocks.isGroupBoundConversation.mockReturnValue(true);
+    if (fixture.settingsUnavailable) {
       channelMocks.relationshipControls.mockImplementationOnce(() => { throw new Error("read failed"); });
     }
+    const senderId = "user-1";
+    const memoryScope = "peer:" + createHash("sha256").update(JSON.stringify(["wechat", accountId, senderId])).digest("hex");
+    const source = { userEntryId: "canonical-user-entry", userRevision: 1 };
     await buildAndRunAgent({
       channel: "wechat",
-      ...(scope === "group" ? { chatType: "group" } : {}),
-      senderId: "user-1",
+      chatType: "chatType" in fixture ? fixture.chatType : "private",
+      senderId,
+      chatId: senderId,
+      accountId,
       text: "用户原文",
       at: new Date("2026-09-02T00:00:00Z"),
     }, {
@@ -395,25 +424,38 @@ describe("createChannelsSubsystem lifecycle", () => {
       target: { conversationId: "channel-session" },
       modelContext: { messages: [], uncertainEffects: [], throughSeq: 0 },
       userTurnId: "channel-user",
+      ...(!fixture.missingUserEntry ? { ...source, userRevision: fixture.userRevision ?? 1 } : {}),
       assistantTurnId: "channel-assistant",
       runId: "channel-run",
       transcriptSink: { getLastAssistantEntryId: () => "channel-reply-entry" },
     });
 
+    expect(agentRuntime.buildOptions).toHaveBeenCalledWith(expect.objectContaining({
+      privateRelationshipContext: Boolean(fixture.startPrivate),
+      skipLearnedCompanionStyle: !fixture.startPrivate,
+      memoryScope: fixture.startPrivate ? memoryScope : undefined,
+      speechScope: fixture.startPrivate ? memoryScope : undefined,
+    }));
+    if (fixture.accepted) expect(channelMocks.recordAcceptedCompanionFeedback).toHaveBeenCalledExactlyOnceWith({
+      conversationId: "channel-session", userTurnId: "channel-user", ...source,
+      speechScope: memoryScope, text: "用户原文", channel: "wechat",
+    });
+    else expect(channelMocks.recordAcceptedCompanionFeedback).not.toHaveBeenCalled();
     expect(onRunFinished).toHaveBeenCalledWith(
       { reply: "渠道回复", toolResults: [] },
       "渠道问题",
       {
         source: "channel",
-        privateRelationshipContext: scope !== "group",
-        speechScope: scope === "wechat-private" ? expect.stringMatching(/^peer:[a-f0-9]{64}$/) : undefined,
+        privateRelationshipContext: Boolean(fixture.finishPrivate),
+        speechScope: fixture.finishPrivate ? memoryScope : undefined,
+        memoryScope: fixture.finishPrivate ? memoryScope : undefined,
         runId: "channel-run",
         mode: "chat",
         conversationId: "channel-session",
         channel: "wechat",
         userTurnId: "channel-user",
         assistantEntryId: "channel-reply-entry",
-        ...(scope === "wechat-private" ? { companionFeedback: { text: "用户原文", userTurnId: "channel-user", revision: 7 } } : {}),
+        ...(fixture.feedback ? { companionFeedback: { text: "用户原文", userTurnId: "channel-user", revision: 7, source } } : {}),
       },
     );
 

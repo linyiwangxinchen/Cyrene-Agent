@@ -93,6 +93,10 @@ export interface GeneralSettings {
   proactiveDailyLimit: number;
   /** 允许已启用插件把经过宿主脱敏的观察事件交给陪伴生活队列。 */
   companionPluginSharingEnabled: boolean;
+  /** 允许在主动消息中借鉴接话方式的插件 ID。 */
+  proactiveExpressionSources?: string[];
+  /** 普通私聊显式允许的插件 ID。缺省保留内置插件的既有学习开关。 */
+  conversationExpressionSources?: string[];
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo" | "mossland";
   ttsAutoRead: boolean;

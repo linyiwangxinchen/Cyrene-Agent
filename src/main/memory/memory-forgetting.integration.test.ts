@@ -97,6 +97,22 @@ describe("provenance-bound forgetting", () => {
     expect((await restarted.wiki.findPage("用户", { kind: "global" }))?.claims).toHaveLength(1);
   });
 
+  it("retraction only removes exact assertions from the same source and prevents their replay", async () => {
+    const initial = await context();
+    await initial.memoryManager.writeMemory([candidate(),
+      { ...candidate(), content: "用户家里有一只猫" }, candidate("u2", "other-chat")]);
+    await initial.memoryStore.retractFact({ conversationId: "chat", messageId: "u1" }, "对方喜欢画画。");
+    await initial.wiki.close();
+    await vi.dynamicImportSettled();
+    vi.resetModules();
+    const reopened = await context();
+    await reopened.memoryManager.writeMemory([candidate()]);
+    const l2 = await reopened.memoryStore.getAllL2();
+    expect(l2.map(item => [item.sourceConversationId, item.content])).toEqual([
+      ["chat", "用户家里有一只猫"], ["other-chat", "用户喜欢画画"],
+    ]);
+  });
+
   it("rejects stale previews and arbitrary unrelated deletion targets before mutation", async () => {
     const f = await context(); await f.memoryManager.writeMemory([candidate()]);
     const memory = (await f.memoryStore.getAllL2())[0], preview = (await f.governance.explain(memory.id)).related!;

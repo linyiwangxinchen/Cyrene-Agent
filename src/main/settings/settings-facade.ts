@@ -22,6 +22,7 @@ import {
   normalizeProactiveChatMode,
   normalizeProactiveDensity,
   normalizeProactiveDeliveryTarget,
+  normalizeExpressionSourceIds,
   normalizeProactiveTargetScore,
   normalizeProactiveQuietStartMinute,
   normalizeProactiveQuietEndMinute,
@@ -79,6 +80,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   proactiveQuietEndMinute: DEFAULT_PROACTIVE_QUIET_END_MINUTE,
   proactiveDailyLimit: 3,
   companionPluginSharingEnabled: false,
+  proactiveExpressionSources: [],
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -276,6 +278,8 @@ export function normalizeGeneralSettings(
     proactiveQuietEndMinute: normalizeProactiveQuietEndMinute(input?.proactiveQuietEndMinute),
     proactiveDailyLimit: normalizeProactiveDailyLimit(input?.proactiveDailyLimit),
     companionPluginSharingEnabled: input?.companionPluginSharingEnabled === true,
+    proactiveExpressionSources: normalizeExpressionSourceIds(input?.proactiveExpressionSources),
+    ...(input?.conversationExpressionSources === undefined ? {} : { conversationExpressionSources: normalizeExpressionSourceIds(input.conversationExpressionSources) }),
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo", "mossland"].includes(input?.ttsEngine as string)
       ? input?.ttsEngine
       : "off") as GeneralSettings["ttsEngine"],

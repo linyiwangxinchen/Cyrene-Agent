@@ -135,6 +135,7 @@ export interface CompanionLearnedPreference {
   conversationId: string;
   topic: CompanionLearningTopic;
   updatedAt: number;
+  userTurnId?: string;
 }
 
 export const COMPANION_TASK_KINDS = ["find-content", "survey-directory", "read-document"] as const;

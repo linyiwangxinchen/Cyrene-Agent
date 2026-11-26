@@ -1,4 +1,4 @@
-import type { CompanionLearningTopic } from "../../shared/companion";
+import type { CompanionLearningTopic, CompanionReplyMode } from "../../shared/companion";
 
 export type { CompanionLearningTopic } from "../../shared/companion";
 export type CompanionLearningPreference = "prefer" | "default";
@@ -14,6 +14,46 @@ const LEADING = /^(?:(?<durable>从今以后|从现在(?:起|开始)|今后|以�
 const TEMPORARY = /(?:这(?:一次|一轮|一回|一条|条|次|轮|回|会儿|一刻)|本轮|这一句|先这样|仅限|此刻|刚才|现在先|一会儿|暂时|今天|今晚|明天|这几天)/u;
 const REPORTED_OR_HYPOTHETICAL = /^(?:要是|如果|假如|假设|比如|例如)|(?:^|[，,\s])(?:(?:我(?:的)?|这|那|有个)?(?:同事|朋友|老师|同学|对象|家人|妈妈|爸爸)|[他她](?:们)?|用户|客户)(?:自己)?(?:跟我)?(?:说|希望|要求|觉得|问|让|建议)|举个例|举例|原话|转述|引用/u;
 const EDITING_OR_ROLEPLAY = /(?:^|[。.!！?？；;，,\n])\s*(?:麻烦你|请|帮我|你)?(?:改写|润色|翻译|概括|扮演|模仿)|这(?:段|份|篇|个|句)?(?:台词|文案|稿子|论文|文章|小说|代码|文档|提示词|回复模板|摘要)|(?:文章|文案|代码|报告|论文|角色|角色设定)里/u;
+const NOT_A_REQUEST = /(?:不是(?:在|想|让|要)|并非(?:要|让)|并不(?:是|想|要)|没(?:有)?(?:说|让|要求)|别当成|不要当成|只是(?:引用|在引用|举例|在举例)|这是(?:引用|例子|反例))/u;
+
+export function stripCompanionQuotedBlocks(text: string): string {
+  return text.normalize("NFKC")
+    .replace(/~~~[\s\S]*?(?:~~~|$)|\x60{3}[\s\S]*?(?:\x60{3}|$)/gu, " ")
+    .replace(/\x60[^\x60\n]*\x60|^[\t ]*>.*$/gmu, " ");
+}
+
+function withoutCompanionQuotes(text: string): string {
+  return text.replace(/"[^"\n]*"|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』/gu, " ");
+}
+
+export function isDirectCompanionWording(text: string): boolean {
+  const outsideQuotes = withoutCompanionQuotes(text).trim();
+  return Boolean(outsideQuotes) && !EDITING_OR_ROLEPLAY.test(outsideQuotes)
+    && !REPORTED_OR_HYPOTHETICAL.test(outsideQuotes) && !NOT_A_REQUEST.test(outsideQuotes);
+}
+
+export function isTemporaryCompanionWording(text: string): boolean {
+  return TEMPORARY.test(withoutCompanionQuotes(text)) || /^(?:下次|这一回|先)/u.test(text.trim());
+}
+
+const currentReplyModes: ReadonlyArray<[CompanionReplyMode, RegExp]> = [
+  ["listen", /^(?:(?:这次|这会儿|现在|今天|本轮|先|只|就|你|请|我只想|我就想|我想)\s*)*(?:听我(?:慢慢)?(?:说|讲)(?:完)?|倾诉(?:一下)?|吐槽(?:一下)?|(?:别|不要|不用)(?:急着|先)?(?:给(?:我)?建议|分析|追问))(?:一会儿|一下)?$/u],
+  ["reflect", /^(?:(?:这次|现在|先|请|你|可以)\s*)*(?:陪我|和我一起|跟我一起|帮我)(?:梳理|捋(?:一捋|一下)?|想清楚|理一理)(?:一下|这件事|一下这件事)?$/u],
+  ["help", /^(?:(?:这次|现在|先|再|请|你|可以)\s*)*(?:直接)?(?:给我(?:一个)?(?:建议|下一步)|告诉我(?:现在)?(?:该)?怎么做)(?:一下)?$/u],
+  ["light", /^(?:(?:这次|现在|先|请|你|我们)\s*)*(?:换(?:个|一个)(?:轻松的)?话题|聊点轻松的|聊点别的)$/u],
+];
+
+export function classifyCompanionPragmatics(text: string): { responseMode?: CompanionReplyMode } {
+  const unquoted = withoutCompanionQuotes(stripCompanionQuotedBlocks(text));
+  if (!isDirectCompanionWording(unquoted)) return {};
+  const modes = new Set<CompanionReplyMode>();
+  for (const clause of unquoted.split(/[。.!！?？；;，,\n]+/u)) {
+    const cleaned = clause.trim().replace(TRAILING_POLITENESS, "");
+    const found = currentReplyModes.find(([, pattern]) => pattern.test(cleaned));
+    if (found) modes.add(found[0]);
+  }
+  return modes.size === 1 ? { responseMode: [...modes][0] } : {};
+}
 
 const RULES: Record<CompanionLearningTopic, Record<CompanionLearningPreference, RegExp[]>> = {
   length: {
@@ -79,13 +119,11 @@ const TRAILING_POLITENESS = /(?:(?:就好|就行|就够了|可以吗|好不好|�
 const TOPIC_RULES = Object.entries(RULES) as [CompanionLearningTopic, typeof RULES[CompanionLearningTopic]][];
 
 export function classifyCompanionFeedback(text: string): CompanionFeedbackObservation[] {
-  const unquoted = text.normalize("NFKC")
-    .replace(/~~~[\s\S]*?(?:~~~|$)|```[\s\S]*?(?:```|$)/gu, " ")
-    .replace(/`[^`\n]*`|^[\t ]*>.*$/gmu, " ")
+  const unquoted = stripCompanionQuotedBlocks(text)
     // A quoted nickname after "叫我" is still an addressed request. Never inspect the nickname itself.
     .replace(/((?:叫|喊|称呼)我\s*)(?:["“‘「『][^"”’」』\r\n]+["”’」』])/gu, "$1<称呼>")
     .replace(/"[^"\n]*"|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』/gu, " ");
-  if (EDITING_OR_ROLEPLAY.test(unquoted)) return [];
+  if (EDITING_OR_ROLEPLAY.test(unquoted) || NOT_A_REQUEST.test(unquoted)) return [];
   const observations = new Map<CompanionLearningTopic, CompanionFeedbackObservation | null>();
   for (const sentence of unquoted.split(/[。.!！?？；;\n]+/u)) {
     if (REPORTED_OR_HYPOTHETICAL.test(sentence.trim())) continue;

@@ -133,6 +133,13 @@ export class ConversationDatabase {
    CREATE INDEX IF NOT EXISTS shell_jobs_retention ON shell_jobs(status, ended_at);
    INSERT INTO schema_migrations VALUES(9)`));
     }
+    if (!this.db.prepare("SELECT version FROM schema_migrations WHERE version=10").get()) {
+      this.transaction(() => this.db.exec(`CREATE TABLE IF NOT EXISTS memory_social_jobs(
+   job_id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+   user_entry_id TEXT NOT NULL, payload_json TEXT, status TEXT NOT NULL);
+   CREATE INDEX IF NOT EXISTS memory_social_pending ON memory_social_jobs(status, conversation_id);
+   INSERT INTO schema_migrations VALUES(10)`));
+    }
     this.transaction(() => {
       const rows = this.db.prepare("SELECT run_id,record_json FROM runs WHERE status IN ('prepared','running')").all();
       for (const row of rows) {

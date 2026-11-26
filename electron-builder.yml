@@ -17,11 +17,8 @@ asarUnpack:
   - "**/node_modules/@playwright/**"
   - "**/node_modules/playwright/**"
   - "**/node_modules/playwright-core/**"
-  # Filesystem MCP 同理（dist/index.js + 其依赖的 sdk / diff / glob 等）
-  - "**/node_modules/@modelcontextprotocol/**"
-  - "**/node_modules/diff/**"
-  - "**/node_modules/glob/**"
-  - "**/node_modules/minimatch/**"
+  # 文件系统 MCP 以独立文件运行，子进程无需读取 ASAR 内的依赖。
+  - "**/dist/main/main/filesystem-mcp.mjs"
   # 小花园由外部 Python 执行脚本，必须提供真实磁盘文件。
   - "dist/main/plugins/bili-garden/python/**"
 electronDist: node_modules/electron/dist

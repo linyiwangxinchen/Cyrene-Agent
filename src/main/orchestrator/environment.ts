@@ -110,7 +110,24 @@ function platformLabel(): string {
  * 注意：这里只读取既有运行时状态，不做任何副作用；调用方负责 try/catch
  * 拼接失败的情况，避免环境注入炸掉聊天主流程。
  */
-export function buildEnvironmentContext(userInfo?: UserInfoContext): string {
+export function buildEnvironmentContext(userInfo?: UserInfoContext, includeLocalEnvironment = true): string {
+  // 用户时区缺失或无效时使用聊天的默认时区。
+  const tz = resolveChatContextTimezone(userInfo?.timezone);
+  const dateStr = formatDate(new Date(), tz);
+  const configured = userInfo?.replyLanguage?.trim();
+  const replyLanguage = !configured || configured === "auto" ? getLocaleContext().uiLocale : configured;
+  const replyLanguageLine = replyLanguage
+    ? `- 回复语言：${REPLY_LANGUAGE_LABELS[replyLanguage] ?? replyLanguage}（除非用户当轮明确要求其他语言，否则一律用这种语言回复）`
+    : "";
+  if (!includeLocalEnvironment) {
+    return [
+      "## 对话环境",
+      `- 当前时间：${dateStr}（时区 ${tz}）`,
+      replyLanguageLine,
+      "> 时区仅用于时间计算，不得据此推断对方所在城市。",
+    ].filter(Boolean).join("\n");
+  }
+
   const level = getCurrentLevel();
   const levelLabel = ACCESS_LEVEL_LABEL[level];
 
@@ -119,9 +136,6 @@ export function buildEnvironmentContext(userInfo?: UserInfoContext): string {
   const downloads = safeGetPath("downloads");
   const home = safeGetPath("home");
   const username = os.userInfo().username;
-  // 用户时区（profile.timezone 缺/非法时由 resolver 回退 Asia/Shanghai），不再读系统时区。
-  const tz = resolveChatContextTimezone(userInfo?.timezone);
-  const dateStr = formatDate(new Date(), tz);
 
   // MCP server 状态
   let mcpLine = "未连接任何 MCP server";
@@ -184,12 +198,7 @@ export function buildEnvironmentContext(userInfo?: UserInfoContext): string {
       lines.push("- 性别约束：性别未知或保密时只使用中性称呼，不得根据昵称、头像或语气推断。");
     }
     // 回复语言：档案显式指定则用指定语言；auto / 留空表示跟随界面语言。
-    const configured = userInfo.replyLanguage?.trim();
-    const replyLanguage = !configured || configured === "auto" ? getLocaleContext().uiLocale : configured;
-    if (replyLanguage) {
-      const label = REPLY_LANGUAGE_LABELS[replyLanguage] ?? replyLanguage;
-      lines.push(`- 回复语言：${label}（除非用户当轮明确要求其他语言，否则一律用这种语言回复）`);
-    }
+    if (replyLanguageLine) lines.push(replyLanguageLine);
     lines.push("");
     // 时区≠地点：明确告知模型 timezone 与 defaultCity 是两个独立维度，不得交叉推断。
     lines.push("> 用户时区仅用于时间计算，不代表用户所在地，不得根据时区推断用户所在城市。默认城市仅用于天气等需要定位的工具。");

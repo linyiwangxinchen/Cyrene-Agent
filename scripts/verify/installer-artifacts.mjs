@@ -5,7 +5,7 @@
 //   2. latest.yml 的 version 与 package.json 一致，path 指向同一安装器，sha512 存在
 //   3. 安装器同名 .blockmap（差分更新指纹表）存在且非空
 //   4. win-unpacked/resources 内截图辅助程序、mpv、MinGit、skills 快照齐全
-// 用法：node scripts/verify/installer-artifacts.mjs [--expect-version x.y.z] [--artifact-name filename.exe] [--config electron-builder.yml]
+// 用法：node scripts/verify/installer-artifacts.mjs [--expect-version x.y.z] [--artifact-name filename.exe] [--config electron-builder.yml] [--output-dir release]
 //   --expect-version：标签构建时传入标签版本，校验「产物版本与标签一致」
 //   --artifact-name：验证 fork 构建配置生成的独立安装器名称
 import { createHash } from "node:crypto";
@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import * as yaml from "yaml";
 import { verifyScreenshotHelper } from "./screenshot-helper.mjs";
 import { verifyMpvHelper } from "./mpv-helper.mjs";
+import { verifyFilesystemMcp } from "./filesystem-mcp.mjs";
 
 const parseYaml = yaml.parse;
 const execFileAsync = promisify(execFile);
@@ -29,13 +30,13 @@ const projectRoot = path.resolve(scriptDir, "..", "..");
 const MIN_INSTALLER_BYTES = 20 * 1024 * 1024;
 
 export async function verifyInstallerArtifacts(options = {}) {
-  const { expectVersion, artifactName: artifactNameOverride, configPath } = options;
+  const { expectVersion, artifactName: artifactNameOverride, configPath, outputDir: outputDirOverride } = options;
 
   const pkg = JSON.parse(await readFile(path.join(projectRoot, "package.json"), "utf8"));
   const builderConfig = parseYaml(
     await readFile(path.resolve(projectRoot, configPath ?? "electron-builder.yml"), "utf8"),
   );
-  const outputDir = path.join(projectRoot, builderConfig.directories?.output ?? "release");
+  const outputDir = path.resolve(projectRoot, outputDirOverride ?? builderConfig.directories?.output ?? "release");
   const artifactName = (artifactNameOverride ?? builderConfig.nsis?.artifactName ?? "Cyrene-Setup-${version}.${ext}")
     .replace("${version}", pkg.version)
     .replace("${ext}", "exe");
@@ -80,6 +81,14 @@ export async function verifyInstallerArtifacts(options = {}) {
 
   // 4. win-unpacked 内的随包二进制（与安装器内容一致，免去装机检查）
   const resourcesDir = path.join(outputDir, "win-unpacked", "resources");
+  if (builderConfig.publish?.provider === "github") {
+    const updateConfig = parseYaml(await readFile(path.join(resourcesDir, "app-update.yml"), "utf8"));
+    for (const field of ["provider", "owner", "repo"]) {
+      if (updateConfig?.[field] !== builderConfig.publish[field]) {
+        throw new Error(`app-update.yml 的 ${field} 与打包配置不一致`);
+      }
+    }
+  }
   const screenshot = await verifyScreenshotHelper(path.join(resourcesDir, "bin", "cyrene-screenshot.exe"));
   const mpv = await verifyMpvHelper(path.join(resourcesDir, "bin", "mpv", "mpv.exe"));
   // MinGit 的 cmd/git.exe 只是启动器（几十 KB），真二进制在 mingw64/bin/，
@@ -91,6 +100,12 @@ export async function verifyInstallerArtifacts(options = {}) {
     timeout: 10_000,
   });
   await stat(path.join(resourcesDir, "cyrene-skills", "skills-snapshot.zip"));
+  // 使用发行包自身的 Electron 与真实展开入口，避免开发目录的依赖掩盖漏打包。
+  const productName = builderConfig.productName ?? pkg.productName ?? pkg.name;
+  await verifyFilesystemMcp({
+    executable: path.join(outputDir, "win-unpacked", `${productName}.exe`),
+    entry: path.join(resourcesDir, "app.asar.unpacked", "dist", "main", "main", "filesystem-mcp.mjs"),
+  });
 
   return {
     installerPath,
@@ -112,7 +127,9 @@ if (isDirectRun) {
   const artifactName = artifactIndex !== -1 ? process.argv[artifactIndex + 1] : undefined;
   const configIndex = process.argv.indexOf("--config");
   const configPath = configIndex !== -1 ? process.argv[configIndex + 1] : undefined;
-  verifyInstallerArtifacts({ expectVersion, artifactName, configPath })
+  const outputIndex = process.argv.indexOf("--output-dir");
+  const outputDir = outputIndex !== -1 ? process.argv[outputIndex + 1] : undefined;
+  verifyInstallerArtifacts({ expectVersion, artifactName, configPath, outputDir })
     .then((result) => {
       console.log(
         `[installer] verified ${result.installerPath} (${result.installerSize} bytes) — v${result.version}`,

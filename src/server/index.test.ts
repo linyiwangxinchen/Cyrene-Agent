@@ -53,6 +53,8 @@ describe("legacy web data migration regression", () => {
     expect(isWebCoreChannelAllowed("invoke", IPC.CHATS_OPEN_FOLDER)).toBe(true);
     expect(isWebCoreChannelAllowed("invoke", IPC.MUSIC_IMPORT_LOCAL_TRACKS)).toBe(true);
     expect(isWebCoreChannelAllowed("invoke", "unknown:channel")).toBe(false);
+    expect(isWebCoreChannelAllowed("invoke", IPC.APP_RUNTIME_IPC_READY)).toBe(false);
+    expect(isWebCoreChannelAllowed("send", IPC.CHATS_REACT_READY)).toBe(false);
     expect(isWebCoreChannelAllowed("send", "agui:run")).toBe(false);
   });
 

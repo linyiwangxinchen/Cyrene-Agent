@@ -17,6 +17,7 @@ import type {
 import { randomUUID } from "node:crypto";
 import { withConversationRun } from "../orchestrator/conversation-run-guard";
 import type { MaterializedTranscript } from "../orchestrator/conversation-transcript-projection";
+import type { ChannelRecipientContext } from "../orchestrator/conversation-journal-service";
 import type { TranscriptSink } from "../orchestrator/transcript-sink";
 import type { ChannelsSettings } from "./settings-store";
 import { appendLog } from "./message-log";
@@ -64,10 +65,10 @@ export interface ChannelConversationJournal {
     text: string;
     at?: number;
     attachments?: Array<{ kind: "image" | "document"; name: string; filePath: string; mime?: string; caption?: string }>;
-  }): Promise<{ id: string }>;
+  }): Promise<{ id: string; revision?: number }>;
   appendPresentation(conversationId: string, messageId: string, patchRevision: number, patch: Record<string, unknown>): Promise<unknown>;
   appendPresentationNext?(conversationId: string, messageId: string, mutationKey: string, patch: Record<string, unknown>): Promise<unknown>;
-  buildModelContext(conversationId: string): Promise<MaterializedTranscript>;
+  buildModelContext(conversationId: string, recipient?: ChannelRecipientContext): Promise<MaterializedTranscript>;
   getChannelTurnState?(conversationId: string, input: {
     userTurnId: string;
     assistantTurnId: string;
@@ -94,6 +95,8 @@ export interface ChannelAgentInput {
   modelContext: MaterializedTranscript;
   transcriptSink?: TranscriptSink;
   userTurnId: string;
+  userEntryId?: string;
+  userRevision?: number;
   assistantTurnId: string;
   /** 渠道轮次运行标识：由 dispatcher 生成，贯通 sink、runStore 与生命周期事件。 */
   runId: string;
@@ -130,6 +133,9 @@ export interface DispatcherDeps {
   };
   /** 记录最近见到的外部聊天，供设置页列出可绑定的来源。 */
   readonly observeExternalChat?: (sessionId: string, msg: IncomingMessage) => void;
+  /** Host-verified channel account and contact. */
+  readonly resolveTrustedRecipientScope?: (msg: IncomingMessage) => string | undefined;
+  readonly hasOtherBinding?: (conversationId: string, sessionId: string) => boolean;
   /** 可选 — 桌面端镜像广播：bot 入站/出站消息通知给 chatWindow。 */
   readonly broadcastChat?: (event: {
     type: "bot:incoming" | "bot:outgoing";
@@ -302,19 +308,27 @@ export class ChannelDispatcher {
     }
     this.broadcastIncoming(msg);
     this.appendIncomingAuditLog(msg);
+    const recipientScope = this.deps.resolveTrustedRecipientScope?.(msg);
     const userPresentation = {
       content: msg.text,
       channelSource: {
         channel: msg.channel,
         chatType: msg.chatType ?? "private",
         ...(msg.senderName ? { senderName: msg.senderName } : {}),
+        ...(recipientScope ? { recipientScope } : {}),
       },
     } as const;
     try {
       if (journal.appendPresentationNext) await journal.appendPresentationNext(target.conversationId, userEntry.id, "channel:user:delivery", userPresentation);
       else await journal.appendPresentation(target.conversationId, userEntry.id, 1, userPresentation);
     } catch (error) { console.warn(LOG, "渠道用户展示更新失败:", error); }
-    const modelContext = await journal.buildModelContext(target.conversationId);
+    const modelContext = this.deps.resolveTrustedRecipientScope
+      ? await journal.buildModelContext(target.conversationId, {
+        currentUserEntryId: userEntry.id,
+        recipientScope,
+        otherBinding: Boolean(this.deps.hasOtherBinding?.(target.conversationId, context.sessionId)),
+      })
+      : await journal.buildModelContext(target.conversationId);
     const transcriptSink = journal.createRunSink({
       conversationId: target.conversationId,
       runId,
@@ -379,6 +393,8 @@ export class ChannelDispatcher {
         modelContext,
         transcriptSink,
         userTurnId: turnId,
+        userEntryId: userEntry.id,
+        userRevision: userEntry.revision,
         assistantTurnId,
         runId,
         signal: controller.signal,
@@ -459,6 +475,7 @@ export class ChannelDispatcher {
             channel: msg.channel,
             chatType: msg.chatType ?? "private",
             ...(msg.senderName ? { senderName: msg.senderName } : {}),
+            ...(recipientScope ? { recipientScope } : {}),
           },
           ...(result.sticker && prepared.message.parts.some((part) => part.kind === "sticker")
             ? { sticker: result.sticker } : {}),

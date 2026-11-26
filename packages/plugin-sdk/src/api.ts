@@ -645,13 +645,38 @@ export type PluginPromptBuildInput =
 export type PluginPromptProviderInput = PluginPromptBuildInput & {
   /** 插件停止时触发；Provider 应尽快结束仍在进行的异步工作。 */
   readonly signal: AbortSignal;
+  /** 内置贴吧表达 Provider 可检查自己的样本是否被当前私聊的表达纠正排除。 */
+  readonly isExpressionBlocked?: (text: string) => boolean;
 };
+
+export type PluginExpressionStrategy = "acknowledge" | "detail" | "playful" | "reassure" | "pacing" | "surprise";
+export type PluginExpressionCue = "celebrate" | "joke" | "surprise" | "encourage";
+
+/** A bounded reference to a locally stored example. The host assigns source trust and decides where it can be used. */
+export interface PluginExpressionEvidence {
+  id: string;
+  quote: string;
+  at: number;
+  source: {
+    kind: "video_subtitle" | "video_transcript" | "video_comment" | "forum_public" | "forum_authenticated" | "imported_excerpt" | "legacy" | "plugin";
+    id: string;
+    unit: string;
+    url?: string;
+    version?: string;
+  };
+  strategy?: PluginExpressionStrategy;
+  cues?: readonly PluginExpressionCue[];
+  topics?: readonly string[];
+}
 
 export interface PluginPromptProvider {
   /** Only receive turns from a private companion chat. */
   privateCompanionOnly?: boolean;
   /** Public, locally held examples for the owner's memory graph. */
   listExpressions?(): ReadonlyArray<{id: string; quote: string; scene: string; source: string; at: number}>;
+  /** Enumerate already acquired, local examples. This input contains no conversation or user information. */
+  listExpressionEvidence?(input: { readonly limit: number; readonly signal: AbortSignal }):
+    readonly PluginExpressionEvidence[] | Promise<readonly PluginExpressionEvidence[]>;
   /** 当前插件内唯一；框架会自动补全 plugin:<插件id>: 前缀。 */
   id: string;
   /** 缺省表示全部会话模式。 */

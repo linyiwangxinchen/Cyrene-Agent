@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { WebSocket } from "ws";
+import { createChannelDeliveryService, resumeChannelDelivery } from "../../delivery-service";
+import { ChannelRecoveryStore } from "../../recovery-store";
 import type { IncomingMessage, OutgoingMessage } from "../../types";
 
 const mockedSettings = vi.hoisted(() => ({
@@ -9,6 +14,7 @@ const mockedSettings = vi.hoisted(() => ({
     enabled: true,
     listenMode: "loopback" as const,
     port: 0,
+    accessToken: undefined as string | undefined,
     allowedPrivateUserIds: ["1000"],
     allowedGroupIds: ["2000", "2001"],
     groupRequireMention: true as const,
@@ -39,10 +45,13 @@ import { NapCatAdapter } from "./napcat-adapter";
 
 const sockets: WebSocket[] = [];
 const adapters: NapCatAdapter[] = [];
+const recoveryDirectories: string[] = [];
 
 afterEach(async () => {
   for (const socket of sockets.splice(0)) socket.terminate();
   for (const adapter of adapters.splice(0)) await adapter.stop();
+  for (const directory of recoveryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+  mockedSettings.qq.accessToken = undefined;
 });
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
@@ -54,6 +63,64 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<voi
 }
 
 describe("NapCatAdapter fake reverse WebSocket integration", () => {
+  it("only retries a durable unsent part through the account that prepared the outbox", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "qq-outbox-retry-"));
+    recoveryDirectories.push(directory);
+    mockedSettings.qq.accessToken = "test-only-outbox-secret";
+    const adapter = new NapCatAdapter();
+    adapters.push(adapter);
+    await adapter.start();
+    const url = String(adapter.getConnectionInfo().listenUrl);
+    const connect = async (accountId: string, rejectedText?: string) => {
+      const socket = new WebSocket(url, { headers: {
+        "X-Self-ID": accountId,
+        Authorization: `Bearer ${mockedSettings.qq.accessToken}`,
+      } });
+      sockets.push(socket);
+      const sent: string[] = [];
+      socket.on("message", (raw) => {
+        const { action, echo, params } = JSON.parse(raw.toString());
+        const text = action === "send_private_msg" ? params.message[0].data.text : undefined;
+        const failed = typeof text === "string" && text === rejectedText;
+        if (typeof text === "string") sent.push(text);
+        const data = action === "get_login_info" ? { user_id: accountId }
+          : action === "get_version_info" ? { app_version: "4.8.115" } : { message_id: "sent" };
+        socket.send(JSON.stringify({ status: failed ? "failed" : "ok", retcode: failed ? 100 : 0, data, echo }));
+      });
+      await waitFor(() => adapter.getMemoryAccountId() === accountId);
+      return { socket, sent };
+    };
+    const disconnect = async (socket: WebSocket) => {
+      socket.close();
+      await waitFor(() => adapter.getMemoryAccountId() === undefined);
+    };
+
+    const first = await connect("9000", "待重投");
+    const store = new ChannelRecoveryStore(directory);
+    const manager = { getAdapter: () => adapter };
+    const outgoing: OutgoingMessage = { channel: "qq", chatType: "private", targetId: "1000",
+      parts: [{ kind: "text", text: "已送达" }, { kind: "text", text: "待重投" }] };
+    const id = "test-qq-outbox";
+    await expect(createChannelDeliveryService(manager, store).send(outgoing, { operationId: id }))
+      .resolves.toMatchObject({ ok: false, status: "unknown", deliveredParts: 1, totalParts: 2 });
+    expect(first.sent).toEqual(["已送达", "待重投"]);
+    await disconnect(first.socket);
+
+    const reopened = new ChannelRecoveryStore(directory);
+    reopened.recoverInterrupted();
+    reopened.setPart(id, 1, "failed", "user_confirmed_not_sent");
+    const other = await connect("9001");
+    const refused = await resumeChannelDelivery(manager, reopened, id);
+    expect(other.sent).toEqual([]);
+    expect(refused).toMatchObject({ ok: false, status: "failed", error: "qq_delivery_account_mismatch", deliveredParts: 1 });
+    expect(reopened.get(id)).toMatchObject({ qqAccountId: "9000", parts: [{ status: "sent" }, { status: "failed" }] });
+
+    await disconnect(other.socket);
+    const original = await connect("9000");
+    await expect(resumeChannelDelivery(manager, reopened, id)).resolves.toMatchObject({ ok: true, deliveredParts: 2 });
+    expect(original.sent).toEqual(["待重投"]);
+  });
+
   it("handshakes, filters events, deduplicates, and sends private/group replies", async () => {
     const adapter = new NapCatAdapter();
     adapters.push(adapter);

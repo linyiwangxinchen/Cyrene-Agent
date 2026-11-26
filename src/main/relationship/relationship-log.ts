@@ -2,6 +2,7 @@ import { app } from "electron"
 import path from "node:path"
 import { RelationshipLogStore as CoreStore, type RelationshipTurnInput, type RelationshipLogEntry } from "./relationship-log-core"
 import type { CompanionEvent } from "../../shared/companion-events"
+import type { CompanionReference } from "../../shared/companion-references"
 export type { CompanionFeedbackInput, RelationshipChannel, RelationshipTurnInput, RelationshipLogEntry, RelationshipDailySummary, RelationshipPreferencesPatch } from "./relationship-log-core"
 
 export class RelationshipLogStore extends CoreStore {
@@ -18,8 +19,9 @@ export function getRelationshipStore(): RelationshipLogStore {
 export function recordRelationshipTurn(input: RelationshipTurnInput): Promise<RelationshipLogEntry | null> {
   return getRelationshipStore().recordTurn(input)
 }
-export function buildRelationshipContext(conversationId?: string, privateContext = true, currentUserText?: string, useLearnedStyle = false, includeTaskLedger = true, speechScope = "owner"): Promise<string> {
-  return getRelationshipStore().buildContext(conversationId, privateContext, currentUserText, useLearnedStyle, includeTaskLedger, speechScope)
+export function buildRelationshipContext(conversationId?: string, privateContext = true, currentUserText?: string, useLearnedStyle = false, includeTaskLedger = true, speechScope = "owner",
+  onReference?: (reference: CompanionReference) => void): Promise<string> {
+  return getRelationshipStore().buildContext(conversationId, privateContext, currentUserText, useLearnedStyle, includeTaskLedger, speechScope, onReference)
 }
 export function recordCompanionEvent(event: CompanionEvent) {
   return getRelationshipStore().recordCompanionEvent(event)

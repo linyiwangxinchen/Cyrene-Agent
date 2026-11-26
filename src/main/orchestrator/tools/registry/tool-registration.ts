@@ -1,6 +1,7 @@
 import { loadGeneralSettings } from "../../../settings/settings-facade";
 import { loadModelSettings, resolveModelSettingsProfile } from "../../../settings/model-settings";
-import type { GeneralSettings } from "../../../settings/general-settings";
+import { syncBuiltInToolToggles } from "./tool-toggles";
+export { syncBuiltInToolToggles } from "./tool-toggles";
 import { registerEmailTools } from "../email-tools";
 import { registerGmailTools } from "../gmail-tools";
 import type { GmailService } from "../../../email/gmail-service";
@@ -24,11 +25,6 @@ import { registerReminderTool } from "../reminder-tool";
 import { registerChannelFileTool } from "../channel-file-tool";
 import { registerPersonMemoryTools } from "../person-memory-tools";
 import type { SocialAtomStore } from "../../../social-context/store";
-
-export function syncBuiltInToolToggles(settings: GeneralSettings): void {
-  toolRegistry.setEnabled("weather", settings.weatherEnabled);
-  toolRegistry.setEnabled("plan_trip", settings.travelEnabled);
-}
 
 export function registerAllTools(deps: { lspManager: LspManager; gmailService?: GmailService; socialAtomStore?: SocialAtomStore }): void {
   registerLspTool(deps.lspManager, toolRegistry);

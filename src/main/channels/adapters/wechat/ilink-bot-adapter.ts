@@ -291,6 +291,10 @@ export class ILinkBotAdapter implements ChannelAdapter {
     return this.status;
   }
 
+  getMemoryAccountId(): string | undefined {
+    return this.client ? this.currentCredentials?.ilinkBotId : undefined;
+  }
+
   // ── Login UI flow ────────────────────────────────────────────────────────
 
   /**
@@ -464,6 +468,8 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
     const incoming: IncomingMessage = {
       channel: "wechat",
+      accountId: this.currentCredentials?.ilinkBotId,
+      chatType: "private",
       senderId: msg.fromUserId,
       chatId: msg.fromUserId,
       // 透传平台消息 ID：turn ID 由此保持稳定，同一入站消息重投不会重复执行

@@ -8,6 +8,7 @@ import { GardenRunner } from "./runner.mjs";
 import { InteractionPolicy, worthwhile } from "./policy.mjs";
 import { due, localClock, videoId, withinWindow } from "./config.mjs";
 import { markdownReport, timePlaylist } from "./content.mjs";
+import { forgetExpression, visibleExpressions } from "./expressions.mjs";
 
 export class GardenService {
   constructor(
@@ -111,7 +112,7 @@ export class GardenService {
       videos: this.store.list("video", 150),
       reports: this.store.list("report", 40),
       memories: this.store.list("memory", 60),
-      expressions: this.store.list("expression", 500),
+      expressions: visibleExpressions(this.store),
       actions: this.store.actions(100),
       questions: this.store.list("question", 30),
       events: this.store.list("event", 35),
@@ -487,7 +488,7 @@ export class GardenService {
         return e;
       }
       case "expression-delete":
-        this.store.remove("expression", String(args.id));
+        forgetExpression(this.store, String(args.id));
         return {ok:true};
       case "memory-delete":
         this.store.remove("memory", String(args.id));

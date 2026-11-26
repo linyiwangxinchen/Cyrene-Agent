@@ -7,7 +7,11 @@ import { registerChannelRecoveryIpc, setChannelRecoveryReceiptWriter } from "./r
 import type { IpcScope } from "../application/ipc-scope";
 import { IPC } from "../../shared/ipc-channels";
 const mock = vi.hoisted(() => ({ send: vi.fn(async () => ({ ok: true })), enabled: true }));
-vi.mock("./manager", () => ({ channelManager: { getAdapter: () => ({ send: mock.send, getStatus: () => ({ enabled: mock.enabled, phase: mock.enabled ? "running" : "offline" }) }) } }));
+vi.mock("./manager", () => ({ channelManager: { getAdapter: () => ({
+  send: mock.send,
+  getStatus: () => ({ enabled: mock.enabled, phase: mock.enabled ? "running" : "offline" }),
+  getMemoryAccountId: () => "10000",
+}) } }));
 const directories: string[] = [];
 afterEach(() => { setChannelRecoveryStore(undefined); setChannelRecoveryReceiptWriter(undefined); mock.send.mockClear(); mock.enabled = true; for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
 function setup() {
@@ -49,5 +53,26 @@ describe("channel recovery UI boundary", () => {
     const { store, call } = setup(); call("cancel", { id: "operation" });
     expect((store.get("operation") as ChannelOutboxRecord).parts.map(part => part.status)).toEqual(["sent", "unknown"]);
     await expect(call("retry", { id: "operation", confirmed: true })).rejects.toThrow("resolve_unknown_parts");
+  });
+  it("keeps old QQ receipts reviewable and cancellable without assigning them to the current account", async () => {
+    const { store, call } = setup();
+    const id = "legacy-qq";
+    store.prepareOutbox({ channel: "qq", chatType: "private", targetId: "30000", parts: [
+      { kind: "text", text: "送达情况待核对" }, { kind: "text", text: "未发送内容" },
+    ] }, { operationId: id });
+    store.setPart(id, 0, "sending");
+    const reopened = new ChannelRecoveryStore(store.directory);
+    reopened.recoverInterrupted();
+    setChannelRecoveryStore(reopened);
+
+    expect(call("list")).toEqual(expect.arrayContaining([expect.objectContaining({ id, status: "unknown" })]));
+    await call("resolve", { id, index: 0, outcome: "sent", confirmed: true });
+    await expect(call("retry", { id, confirmed: true })).resolves.toMatchObject({
+      ok: false, error: "qq_delivery_account_missing", deliveredParts: 1,
+    });
+    expect(mock.send).not.toHaveBeenCalled();
+    expect(reopened.get(id)).not.toHaveProperty("qqAccountId");
+    call("cancel", { id });
+    expect((reopened.get(id) as ChannelOutboxRecord).parts.map(part => part.status)).toEqual(["sent", "cancelled"]);
   });
 });

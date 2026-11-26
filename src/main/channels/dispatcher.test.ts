@@ -1,5 +1,7 @@
 // dispatcher 核心单元测试：sessionId hash + 限速
 import * as os from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
+import path from "node:path";
 import { describe, it, expect, vi } from "vitest";
 import {
   ChannelDispatcher,
@@ -16,6 +18,12 @@ import { createChannelRateLimiter } from "./rate-limiter";
 import { createChannelDeliveryService } from "./delivery-service";
 import type { ChannelsSettings } from "./settings-store";
 import type { IncomingMessage } from "./types";
+import { ChannelConversationBindingStore } from "./conversation-binding-store";
+import { resolveChannelMemoryScope } from "./memory-scope";
+import { ConversationJournalService } from "../orchestrator/conversation-journal-service";
+import { ConversationTranscriptStore } from "../orchestrator/conversation-transcript-store";
+import { ConversationTranscriptCompactor } from "../orchestrator/conversation-transcript-compactor";
+import { closeConversationDatabases } from "../storage/conversation-database-client";
 
 vi.mock("electron", () => ({
   app: {
@@ -142,6 +150,8 @@ describe("channels/dispatcher", () => {
       } as ChannelsSettings)),
       loadGeneralSettings: options.loadGeneralSettings ?? (() => ({})),
       observeExternalChat: options.observeExternalChat,
+      resolveTrustedRecipientScope: options.resolveTrustedRecipientScope,
+      hasOtherBinding: options.hasOtherBinding,
       broadcastChat: options.broadcastChat,
       isControlAllowed: options.isControlAllowed,
       sendProgressUpdates: options.sendProgressUpdates,
@@ -154,6 +164,84 @@ describe("channels/dispatcher", () => {
       await Promise.resolve();
     }
   }
+
+  it.each(["concurrent bindings", "former binding in an archived checkpoint"])("restricts the actual channel model history with %s", async scenario => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "cyrene-channel-recipient-"));
+    const conversationId = "shared-desktop";
+    const bindings = new ChannelConversationBindingStore(path.join(root, "bindings.json"));
+    const ownScope = (msg: IncomingMessage) => msg.accountId === "bot-account" ? resolveChannelMemoryScope(msg) : undefined;
+    const own = (peer: string, text: string, accountId = "bot-account") => makeIncoming({
+      channel: "wechat", chatId: peer, senderId: peer, accountId, text, messageId: text,
+    });
+    const bindPeer = (peer: string) => {
+      const msg = own(peer, "setup");
+      const sessionId = makeSessionId(msg.channel, msg.chatId);
+      bindings.observe({ sessionId, channel: msg.channel, chatId: peer, chatType: "private", recipientScope: ownScope(msg), lastAt: 1 });
+      bindings.bind(sessionId, conversationId);
+      return sessionId;
+    };
+    const runAgent = vi.fn<DispatcherDeps["buildAndRunAgent"]>(async (msg, input) => {
+      const text = `reply ${msg.text}`;
+      await input.transcriptSink!.appendAssistant({ message: { role: "assistant", content: text } });
+      return { text, sticker: null };
+    });
+    let store = new ConversationTranscriptStore(root);
+    let journal = new ConversationJournalService(store);
+    const makeRealDispatcher = () => makeDispatcher({
+      journal, resolveBoundConversationId: sessionId => bindings.resolve(sessionId), buildAndRunAgent: runAgent,
+      resolveTrustedRecipientScope: ownScope,
+      hasOtherBinding: (id, sessionId) => bindings.list().bindings.some(binding => binding.conversationId === id && binding.sessionId !== sessionId),
+    });
+    let dispatcher = makeRealDispatcher();
+    try {
+      await journal.appendUser(conversationId, { id: "desktop", turnId: "desktop", text: "OWNER_ONLY" });
+      bindPeer("peer-a");
+      await dispatcher.handleIncoming(own("peer-a", "a-first"));
+      expect(runAgent.mock.lastCall?.[1].modelContext).toMatchObject({ messages: [
+        expect.objectContaining({ content: "OWNER_ONLY" }), expect.objectContaining({ content: "a-first" }),
+      ] });
+      expect(runAgent.mock.lastCall?.[1].modelContext.recipientIsolated).toBeUndefined();
+
+      const b = bindPeer("peer-b");
+      const samePeerHistory = ["a-first", "reply a-first"];
+      if (scenario === "concurrent bindings") {
+        await dispatcher.handleIncoming(own("peer-a", "a-after-new-binding"));
+        expect(runAgent.mock.lastCall?.[1].modelContext.recipientIsolated).toBe(true);
+        expect(runAgent.mock.lastCall?.[1].modelContext.messages.map(message => message.content)).toEqual([...samePeerHistory, "a-after-new-binding"]);
+        samePeerHistory.push("a-after-new-binding", "reply a-after-new-binding");
+      }
+      await dispatcher.handleIncoming(own("peer-b", "PEER_B_ONLY"));
+      expect(runAgent.mock.lastCall?.[1].modelContext).toMatchObject({ recipientIsolated: true, messages: [
+        expect.objectContaining({ content: "PEER_B_ONLY" }),
+      ] });
+      if (scenario === "former binding in an archived checkpoint") {
+        bindings.unbind(b);
+        await journal.appendUser(conversationId, { id: "tail", turnId: "tail", text: "DESKTOP_LATEST" });
+        await new ConversationTranscriptCompactor({ store, summarize: async () => "SHARED_ARCHIVE_OWNER_AND_PEER_B" })
+          .compact({ conversationId, trigger: "manual", retainTokens: 1 });
+        expect((await store.read(conversationId)).entries.some(entry => entry.kind === "user" && entry.payload.text === "PEER_B_ONLY")).toBe(false);
+        expect((await journal.buildModelContext(conversationId)).messages[0]?.content).toContain("SHARED_ARCHIVE_OWNER_AND_PEER_B");
+        await closeConversationDatabases();
+        store = new ConversationTranscriptStore(root);
+        journal = new ConversationJournalService(store);
+        dispatcher = makeRealDispatcher();
+      }
+
+      const request = { ...own("peer-a", "a-followup"), attachments: [{ kind: "image" as const, filePath: "D:/inbox/a.png" }] };
+      await dispatcher.handleIncoming(request);
+      const scoped = runAgent.mock.lastCall?.[1].modelContext;
+      expect(scoped?.recipientIsolated).toBe(true);
+      expect(scoped?.messages.map(message => message.content)).toEqual([...samePeerHistory, "a-followup"]);
+      expect(scoped?.messages.at(-1)?.userAttachments).toEqual([expect.objectContaining({ filePath: "D:/inbox/a.png" })]);
+      await dispatcher.handleIncoming(own("peer-a", "unverified followup", "wrong-account"));
+      expect(runAgent.mock.lastCall?.[1].modelContext).toMatchObject({ recipientIsolated: true, messages: [
+        expect.objectContaining({ content: "unverified followup" }),
+      ] });
+    } finally {
+      await closeConversationDatabases();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   it("构造调度器时不读取消息日志", () => {
     vi.mocked(reloadLogFromDisk).mockClear();

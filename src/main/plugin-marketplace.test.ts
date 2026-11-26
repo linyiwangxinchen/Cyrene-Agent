@@ -3,6 +3,8 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+const headlessNet = vi.hoisted(() => ({ fetch: vi.fn() }));
+vi.mock("electron", () => ({ net: headlessNet }));
 import {
   MARKET_ZIP_URL_PREFIXES,
   createPluginMarketplaceService,
@@ -18,6 +20,7 @@ const GITEE_ZIP_URL = `${MARKET_ZIP_URL_PREFIXES[1]}demo-1.0.0.zip`;
 let tmp = "";
 
 afterEach(() => {
+  headlessNet.fetch.mockReset();
   vi.restoreAllMocks();
   if (tmp) {
     rmSync(tmp, { recursive: true, force: true });
@@ -66,7 +69,36 @@ function makeDeps(overrides: Partial<PluginMarketplaceDeps> = {}): PluginMarketp
   };
 }
 
+it("follows the trusted zip redirect with the Web host's fetch-only network API", async () => {
+  const payload = new TextEncoder().encode("fixture plugin package");
+  const asset = "https://release-assets.githubusercontent.com/github-production-release-asset/1356124154/a-b";
+  const deps = makeDeps({ registryUrls: [REGISTRY_URL_A] });
+  headlessNet.fetch
+    .mockResolvedValueOnce(jsonResponse(registryJson([registryEntry({ sha256: sha256Of(payload) })])))
+    .mockResolvedValueOnce(new Response(null, { status: 302, headers: { Location: asset } }))
+    .mockResolvedValueOnce(new Response(payload));
+  const market = createPluginMarketplaceService(deps);
+  expect((await market.listMarket()).ok).toBe(true);
+  expect((await market.installFromMarket("demo")).ok).toBe(true);
+  expect(headlessNet.fetch).toHaveBeenNthCalledWith(2, ZIP_URL, expect.objectContaining({ redirect: "manual" }));
+  expect(headlessNet.fetch).toHaveBeenNthCalledWith(3, asset, expect.objectContaining({ redirect: "manual" }));
+  expect(deps.installZip).toHaveBeenCalledOnce();
+});
+
 describe("listMarket", () => {
+  it("discards package URLs that escape the canonical repository path", async () => {
+    const prefix = MARKET_ZIP_URL_PREFIXES[0];
+    const deps = makeDeps({ fetchImpl: async () => jsonResponse(registryJson([
+      registryEntry({ id: "literal", zip: `${prefix}../../../../other/repo/releases/download/v1/demo.zip` }),
+      registryEntry({ id: "encoded", zip: `${prefix}%2e%2e/%2e%2e/%2e%2e/%2e%2e/other/repo/releases/download/v1/demo.zip` }),
+      registryEntry({ id: "separator", zip: `${prefix}v1%2f..%2fdemo.zip` }),
+      registryEntry({ id: "double", zip: `${prefix}%252e%252e/demo.zip` }),
+      registryEntry({ id: "valid" }),
+    ])) });
+    const result = await createPluginMarketplaceService(deps).listMarket();
+    expect(result.plugins.map((plugin) => plugin.id)).toEqual(["valid"]);
+  });
+
   it("成功拉取并按下载量降序排序", async () => {
     const fetchImpl: MarketplaceFetch = async (input) => {
       if (input === REGISTRY_URL_A) {
@@ -249,6 +281,52 @@ describe("listMarket", () => {
 });
 
 describe("installFromMarket", () => {
+  it.each([
+    [ZIP_URL, [
+      `${MARKET_ZIP_URL_PREFIXES[2]}demo-1.0.0.zip`,
+      "https://release-assets.githubusercontent.com/github-production-release-asset/1356124154/aaaa-bbbb?signature=test",
+    ]],
+    [GITEE_ZIP_URL, ["https://raw.giteeusercontent.com/playa0/cyrene-plugins/raw/main/zips/demo-1.0.0.zip"]],
+  ])("accepts the official redirect chain for %s", async (initial, redirects) => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const chain = [initial, ...redirects];
+    const fetched: string[] = [];
+    const deps = makeDeps({ fetchImpl: async (url, init) => {
+      if (url === REGISTRY_URL_A) return jsonResponse(registryJson([registryEntry({ zip: initial, sha256: sha256Of(bytes) })]));
+      if (url === REGISTRY_URL_B) throw new Error("offline");
+      const index = chain.indexOf(url);
+      if (index < 0) throw new Error("unexpected source");
+      expect(init?.redirect).toBe("manual");
+      fetched.push(url);
+      return chain[index + 1] ? Response.redirect(chain[index + 1], 302) : new Response(bytes);
+    } });
+    const service = createPluginMarketplaceService(deps);
+    await service.listMarket();
+    expect(await service.installFromMarket("demo")).toMatchObject({ ok: true });
+    expect(fetched).toEqual(chain);
+    expect(deps.installZip).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    "https://github.com/other/repo/releases/download/v1/demo.zip",
+    "https://release-assets.githubusercontent.com/github-production-release-asset/9999/aaaa-bbbb",
+    "https://github.com:444/Playa-Cyrene/Cyrene-Plugins/releases/download/v1/demo.zip",
+    "http://github.com/Playa-Cyrene/Cyrene-Plugins/releases/download/v1/demo.zip",
+    "https://elsewhere.example/demo.zip",
+  ])("rejects redirect to %s before making a request", async (target) => {
+    const fetchImpl = vi.fn<MarketplaceFetch>(async (url) => {
+      if (url === REGISTRY_URL_A) return jsonResponse(registryJson([registryEntry()]));
+      if (url === ZIP_URL) return Response.redirect(target, 302);
+      throw new Error("unexpected source");
+    });
+    const deps = makeDeps({ fetchImpl });
+    const service = createPluginMarketplaceService(deps);
+    await service.listMarket();
+    expect(await service.installFromMarket("demo")).toMatchObject({ ok: false, error: expect.stringContaining("重定向") });
+    expect(fetchImpl.mock.calls.map(([url]) => url)).not.toContain(target);
+    expect(deps.installZip).not.toHaveBeenCalled();
+  });
+
   async function serviceWithZip(
     zipBytes: Uint8Array,
     entryOverrides: Record<string, unknown> = {},

@@ -5,7 +5,7 @@ import { findPossibleConflictCandidate } from "./memory-conflict"
 import { scoreMemoryConflict, type ConflictEvidenceLevel } from "./memory-conflict-score"
 import { wasRecentlyInjectedMemory } from "./recent-injected-memory"
 import { addL2MemoryVector, searchMemoryEntries } from "../rag/index"
-import { candidateSources, isForgottenSource } from "./memory-source-policy"
+import { candidateSources, isForgottenFact, isForgottenSource } from "./memory-source-policy"
 
 type L1Field = "recentGoals" | "recentPreferences" | "currentProject"
 
@@ -54,12 +54,14 @@ export class MemoryManager {
     await memoryStore.upsertL0Field("permanentNote", updated)
   }
 
-  async writeMemory(candidates: MemoryCandidate[], assertSourceCurrent?: () => Promise<void>): Promise<void> {
+  async writeMemory(candidates: MemoryCandidate[], assertSourceCurrent?: () => Promise<void>): Promise<{ written: number; syncFailed: number }> {
+    let written = 0
+    let syncFailed = 0
     for (const candidate of candidates) {
       if (assertSourceCurrent) await assertSourceCurrent()
       const sources = candidateSources(candidate)
       const awaitedStore = await memoryStore.load()
-      if (sources.some(source => isForgottenSource(awaitedStore, source))) continue
+      if (sources.some(source => isForgottenSource(awaitedStore, source) || isForgottenFact(awaitedStore, source, candidate.content))) continue
       if (shouldSkipCandidate(candidate)) {
         console.log("[PMRS/Manager] 候选标记为不写入或存在过度概括，跳过")
         continue
@@ -95,18 +97,22 @@ export class MemoryManager {
 
         // 情况三：合法字段，直接写入
         await memoryStore.upsertL0Field(candidate.field as L0WritableField, candidate.content, assertSourceCurrent, sources)
+        written++
         console.log(`[PMRS/Manager] L0 更新字段: ${candidate.field} = "${candidate.content.slice(0, 20)}"`)
       } else if (candidate.layer === "L1") {
         const field = resolveL1Field(candidate.field, candidate.content)
         await memoryStore.replaceL1Field(field, candidate.content, assertSourceCurrent, sources)
+        written++
         console.log(`[PMRS/Manager] L1 更新字段: ${field}`)
       } else if (candidate.layer === "L2") {
-        await this.writeL2(candidate, assertSourceCurrent)
+        if (!await this.writeL2(candidate, assertSourceCurrent)) syncFailed++
+        written++
       }
     }
+    return { written, syncFailed }
   }
 
-  private async writeL2(candidate: MemoryCandidate, assertSourceCurrent?: () => Promise<void>): Promise<void> {
+  private async writeL2(candidate: MemoryCandidate, assertSourceCurrent?: () => Promise<void>): Promise<boolean> {
     const l2Input: Omit<L2Memory, "id" | "createdAt" | "lastAccessedAt" | "accessCount" | "weight" | "status"> = {
       content: candidate.content,
       triggerText: candidate.triggerText,
@@ -133,7 +139,7 @@ export class MemoryManager {
     } catch (err) {
       await memoryStore.markL2SyncStatus(l2.id, "sync_failed", undefined, err)
       console.warn("[PMRS/Manager] L2 已写入，但 RAG 同步失败:", err)
-      return
+      return false
     }
 
     console.log(`[PMRS/Manager] L2 写入: "${preview(candidate.content, 30)}"（l2Id: ${l2.id}, ragId: ${ragId}）`)
@@ -144,6 +150,7 @@ export class MemoryManager {
     } catch (err) {
       console.warn("[PMRS/Manager] 冲突检测失败:", err)
     }
+    return true
   }
 
   /** 检测新记忆是否与现有 active 记忆矛盾，如有则标记 */

@@ -31,6 +31,14 @@ export function AppRouter() {
     setSettingsOpen(true);
   }), []);
 
+  useEffect(() => {
+    if (!window.__cyreneWeb) return;
+    const store = (window as typeof window & {
+      chatStore?: { onReactSwitchSession?: (listener: (sessionId: string) => void) => () => void };
+    }).chatStore;
+    return store?.onReactSwitchSession?.(() => setSettingsOpen(false));
+  }, []);
+
   const openSettings = useCallback(() => {
     setSettingsSection("appearance");
     setSettingsOpen(true);

@@ -30,6 +30,44 @@ function userInput(turnId: string, text: string): JournalUserInput {
   return { id: `user:${turnId}`, turnId, text, revision: 1, at: 1_000 };
 }
 
+it("keeps a verified recipient away from channel turns whose source metadata was never written", async () => {
+  const { journal } = createJournal();
+  const conversation = "missing-channel-source";
+  await journal.appendUser(conversation, { ...userInput("unknown", "UNVERIFIED_LEGACY_MESSAGE"), id: "channel:unknown" });
+  const current = await journal.appendUser(conversation, { ...userInput("new", "当前消息"), id: "channel:new" });
+  expect(await journal.buildModelContext(conversation, {
+    currentUserEntryId: current.id, recipientScope: "peer:verified-contact", otherBinding: false,
+  })).toMatchObject({ recipientIsolated: true, messages: [{ role: "user", content: "当前消息" }] });
+});
+
+it("shares visible turns with a single trusted channel without exposing browser tools or their archived summary", async () => {
+  const { store, journal } = createJournal();
+  const conversation = "bound-browser-history";
+  await journal.appendUser(conversation, userInput("desktop", "旧桌面问题".repeat(80)));
+  const sink = journal.createRunSink({ conversationId: conversation, runId: "desktop-browser", assistantTurnId: "desktop-reply" });
+  const assistantEntryId = await sink.appendAssistant({
+    message: { role: "assistant", content: "", toolCalls: [{ id: "page", name: "browser_get_page_elements", arguments: "{}" }] },
+  });
+  await sink.appendToolResult({
+    assistantEntryId, outcome: "success",
+    message: { role: "tool", toolCallId: "page", name: "browser_get_page_elements", content: "BROWSER_FIXTURE_RESULT" },
+  });
+  await sink.appendAssistant({ message: { role: "assistant", content: "可以共享的回复" } });
+  await journal.appendUser(conversation, userInput("following", "继续原话题"));
+  await new ConversationTranscriptCompactor({ store, summarize: async () => "BROWSER_FIXTURE_SUMMARY" })
+    .compact({ conversationId: conversation, trigger: "manual", retainTokens: 1 });
+  const reopened = new ConversationJournalService(store);
+  const current = await reopened.appendUser(conversation, { ...userInput("channel", "渠道里的当前消息"), id: "channel:current" });
+  expect(JSON.stringify((await reopened.buildModelContext(conversation)).messages)).toContain("BROWSER_FIXTURE_SUMMARY");
+  const initial = await reopened.buildModelContext(conversation, {
+    currentUserEntryId: current.id, recipientScope: "peer:verified-contact", otherBinding: false,
+  });
+  expect(initial).toMatchObject({ recipientIsolated: true, uncertainEffects: [] });
+  expect(JSON.stringify(initial.messages)).not.toMatch(/BROWSER_FIXTURE|browser_get_page_elements/u);
+  expect(initial.messages).toContainEqual({ role: "assistant", content: "可以共享的回复" });
+  expect(initial.messages.at(-1)?.content).toBe("渠道里的当前消息");
+});
+
 it("压缩归档后仍识别已处理的微信轮次和投递回执", async () => {
   const { store, journal } = createJournal();
   await journal.appendUser("wechat-archive", userInput("wechat-user-1", "处理这个请求".repeat(80)));

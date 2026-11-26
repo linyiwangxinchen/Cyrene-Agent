@@ -32,6 +32,9 @@ it("shows a bound concrete followup and sends revisioned completion / rescheduli
   Object.assign(window, { companion: { get: async () => snapshot, update, export: async () => "{}" }, settings: { getToolCatalog: async () => [] }, chatStore: { list: async () => [{ id: "chat-1", title: "微信绑定对话" }] } });
   const host = document.createElement("div"); document.body.append(host); root = createRoot(host);
   await act(async () => root!.render(createElement(CompanionSettingsPanel)));
+  const preference = () => host.querySelector<HTMLButtonElement>('[aria-label="记住聊天偏好"]')!;
+  await act(async () => preference().click());
+  expect(preference().getAttribute("aria-checked")).toBe("false");
   const followupTab = Array.from(host.querySelectorAll<HTMLElement>("[role=tab]")).find(item => item.textContent === "具体跟进")!;
   await act(async () => followupTab.click());
   expect(host.textContent).toContain("微信绑定对话");
@@ -39,6 +42,10 @@ it("shows a bound concrete followup and sends revisioned completion / rescheduli
   const button = (label: string) => Array.from(host.querySelectorAll("button")).find(item => item.textContent?.replace(/\s/g, "") === label.replace(/\s/g, ""))!;
   await act(async () => button("完成").click());
   expect(update).toHaveBeenLastCalledWith({ type: "followup_status", id: "f1", conversationId: "chat-1", status: "completed", expectedRevision: 7 });
+  const relationshipTab = Array.from(host.querySelectorAll<HTMLElement>("[role=tab]")).find(item => item.textContent === "相处与形象")!;
+  await act(async () => relationshipTab.click());
+  expect(preference().getAttribute("aria-checked")).toBe("false");
+  await act(async () => followupTab.click());
   await act(async () => button("编辑 / 再约时间").click());
   expect((host.querySelector('[aria-label="跟进事项名称"]') as HTMLInputElement).value).toBe("论文答辩");
   await act(async () => button("保存并重新约时间").click());
@@ -91,16 +98,20 @@ it("forgets only the selected chat preference and saves an opt-out at the latest
     snapshot = { ...snapshot, revision: snapshot.revision + 1 };
     return snapshot;
   });
+  const openSource = vi.fn(async () => undefined);
   Object.assign(window, {
     companion: { get: async () => snapshot, update, export: async () => "{}" },
     settings: { getToolCatalog: async () => [] },
-    chatStore: { list: async () => [{ id: "chat-1", title: "微信私聊" }, { id: "chat-2", title: "桌面私聊" }] },
+    chatStore: { list: async () => [{ id: "chat-1", title: "微信私聊" }, { id: "chat-2", title: "桌面私聊" }], openInReactChatWindow: openSource },
   });
   const host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
   await act(async () => root!.render(createElement(CompanionSettingsPanel)));
 
+  const sourceLink = [...host.querySelectorAll("button")].find(button => button.textContent === "打开来源会话")!;
+  await act(async () => sourceLink.click());
+  expect(openSource).toHaveBeenCalledExactlyOnceWith("chat-1");
   const preferenceSwitch = host.querySelector<HTMLButtonElement>('[aria-label="记住聊天偏好"]')!;
   expect(preferenceSwitch.getAttribute("aria-checked")).toBe("true");
   await act(async () => preferenceSwitch.click());

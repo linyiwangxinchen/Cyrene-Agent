@@ -14,6 +14,11 @@ import type { ToolDefinition, ToolRegistry } from "./registry/tool-registry";
 import type { SocialAtomStore } from "../../social-context/store";
 import type { SocialAtom, SocialAtomType } from "../../social-context/types";
 import { rankSocialAtoms } from "../../social-context/retrieval";
+import { getMemoryModeVersion, isPersonalMemoryEnabled } from "../../memory/memory-mode";
+import { resolvePersonalMemoryScope } from "../../memory/memory-scope";
+import { activeMemoryUserEntry, filterActiveSocialAtoms } from "../../memory/memory-owner-recall";
+import { socialAtomDisplayText } from "../../social-context/context";
+import { memoryStore } from "../../memory/memory-store";
 
 const DAY_MS = 86_400_000;
 /** 与提取器一致：open_loop 默认三天，最长 21 天。 */
@@ -45,15 +50,18 @@ function userQuote(ctx: ToolContext | undefined, fallback: string): string {
   return (text || fallback).slice(0, MAX_QUOTE_CHARS);
 }
 
-type Scope = { ok: true; conversationId: string } | { ok: false; message: string };
+type Scope = { ok: true; conversationId: string; memoryScope: string } | { ok: false; message: string };
 
 function resolveScope(ctx: ToolContext | undefined, toolId: string): Scope {
   if (ctx?.channelContext?.chatType === "group") {
-    return { ok: false, message: `[${toolId}] 群聊里不使用个人记忆。` };
+    return { ok: false, message: `[错误] 群聊里不使用个人记忆。` };
   }
   const conversationId = ctx?.conversationId?.trim();
-  if (!conversationId) return { ok: false, message: `[${toolId}] 当前没有会话上下文，无法使用记忆。` };
-  return { ok: true, conversationId };
+  if (!conversationId) return { ok: false, message: `[错误] 当前没有会话上下文，无法使用记忆。` };
+  if (!isPersonalMemoryEnabled()) return { ok: false, message: "[错误] 个人记忆已关闭。" };
+  const memoryScope = ctx?.memoryScope && resolvePersonalMemoryScope({ ...ctx, channel: ctx.channelContext?.channel });
+  if (!memoryScope || memoryScope !== ctx?.memoryScope) return { ok: false, message: `[错误] ${toolId} 缺少可信的记忆主体。` };
+  return { ok: true, conversationId, memoryScope };
 }
 
 function formatDate(at: number): string {
@@ -62,7 +70,7 @@ function formatDate(at: number): string {
 
 function formatAtom(atom: SocialAtom): string {
   const expiry = typeof atom.expiresAt === "number" ? ` · 到期 ${formatDate(atom.expiresAt)}` : "";
-  return `- [${atom.id}] (${TYPE_LABEL[atom.type]} · 记于 ${formatDate(atom.createdAt)}${expiry}) ${atom.content}`;
+  return `- [${atom.id}] (${TYPE_LABEL[atom.type]} · 记于 ${formatDate(atom.createdAt)}${expiry}) ${socialAtomDisplayText(atom)}`;
 }
 
 /** 接受毫秒时间戳、ISO 日期或日期时间；无法解析返回 null，未提供返回 undefined。 */
@@ -82,7 +90,11 @@ function atomType(raw: unknown): SocialAtomType | null {
   return raw === "long_term" || raw === "short_term" || raw === "open_loop" ? raw : null;
 }
 
-export function createPersonMemoryTools(store: SocialAtomStore, now: () => number = Date.now): ToolDefinition[] {
+export function createPersonMemoryTools(store: SocialAtomStore, now: () => number = Date.now, requireCanonicalSources = false): ToolDefinition[] {
+  async function retractLinkedFact(atom: SocialAtom): Promise<void> {
+    if (!requireCanonicalSources || !atom.sourceEntryId) return;
+    await memoryStore.retractFact({ conversationId: atom.conversationId, messageId: atom.sourceEntryId }, atom.content);
+  }
   const remember: ToolDefinition = {
     id: "memory_remember",
     name: "记住这件事",
@@ -122,12 +134,19 @@ export function createPersonMemoryTools(store: SocialAtomStore, now: () => numbe
     execute: async (args, ctx) => {
       const scope = resolveScope(ctx, "memory_remember");
       if (!scope.ok) return scope.message;
+      const version = getMemoryModeVersion();
       const content = typeof args.content === "string" ? args.content.trim() : "";
       if (!content) return "[错误] content 不能为空";
       if (content.length > MAX_CONTENT_CHARS) return `[错误] content 太长（${content.length} 字），请概括到 ${MAX_CONTENT_CHARS} 字以内`;
       const type = atomType(args.type);
       if (!type) return `[错误] type 只能是 long_term、short_term 或 open_loop，收到 ${JSON.stringify(args.type)}`;
       const at = now();
+
+      const sourceEntryId = ctx?.memoryUserTurnId && requireCanonicalSources
+        ? await activeMemoryUserEntry(scope.conversationId, ctx.memoryUserTurnId) : undefined;
+      if ((requireCanonicalSources && !sourceEntryId) || getMemoryModeVersion() !== version) {
+        return "[错误] 无法核对当前用户消息，记忆没有写入。";
+      }
 
       const requestedExpiry = parseExpiresAt(args.expires_at);
       if (requestedExpiry === null) return `[错误] expires_at 无法解析：${JSON.stringify(args.expires_at)}，请用 YYYY-MM-DD 或 ISO 时间`;
@@ -141,21 +160,30 @@ export function createPersonMemoryTools(store: SocialAtomStore, now: () => numbe
         expiresAt = requestedExpiry ?? at + SHORT_TERM_DEFAULT_TTL_MS;
       }
 
-      const active = store.listActive(scope.conversationId, at);
+      const active = store.listActive(scope.conversationId, at, scope.memoryScope);
       const existing = active.find((atom) => atom.type === type && atom.content.trim() === content);
-      if (existing) return `[memory_remember] 这件事已经记着了（id: ${existing.id}）`;
 
       const replacesId = typeof args.replaces_id === "string" ? args.replaces_id.trim() : "";
-      if (replacesId && !active.some((atom) => atom.id === replacesId)) {
+      const replaced = replacesId ? active.find(atom => atom.id === replacesId) : undefined;
+      if (replacesId && !replaced) {
         return `[错误] 找不到要替换的条目 ${replacesId}（可能已过期或已删除），先用 memory_recall 确认 id`;
+      }
+      if (existing) {
+        if (replaced && existing.id !== replacesId) {
+          await retractLinkedFact(replaced);
+          store.applyOperations(scope.conversationId, [{ operation: "retire", targetAtomId: replacesId }], at, scope.memoryScope);
+        }
+        return `[memory_remember] 这件事已经记着了（id: ${existing.id}）`;
       }
 
       const atom: SocialAtom = {
         id: randomUUID(),
         conversationId: scope.conversationId,
+        memoryScope: scope.memoryScope,
         type,
         content,
         evidenceTurnId: `memory_tool:${ctx?.runId ?? at}`,
+        ...(sourceEntryId ? { sourceEntryId } : {}),
         evidenceQuote: userQuote(ctx, content),
         createdAt: at,
         ...(expiresAt ? { expiresAt } : {}),
@@ -163,7 +191,9 @@ export function createPersonMemoryTools(store: SocialAtomStore, now: () => numbe
       };
       store.applyOperations(scope.conversationId, [replacesId
         ? { operation: "supersede", atom, targetAtomId: replacesId }
-        : { operation: "add", atom }], at);
+        : { operation: "add", atom }], at, scope.memoryScope);
+      if (!store.getById(atom.id)) return "[错误] 记忆未写入，原消息可能已被遗忘。";
+      if (replaced) await retractLinkedFact(replaced);
       const expiryNote = expiresAt ? `，${formatDate(expiresAt)} 到期` : "";
       return `[memory_remember] 记下了（id: ${atom.id}，${TYPE_LABEL[type]}${expiryNote}）${replacesId ? `，旧条目 ${replacesId} 已标记为过时` : ""}：${content}`;
     },
@@ -202,12 +232,15 @@ export function createPersonMemoryTools(store: SocialAtomStore, now: () => numbe
     execute: async (args, ctx) => {
       const scope = resolveScope(ctx, "memory_recall");
       if (!scope.ok) return scope.message;
+      const version = getMemoryModeVersion();
       const at = now();
       const rawLimit = Math.trunc(Number(args.limit));
       const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_RECALL_LIMIT) : DEFAULT_RECALL_LIMIT;
       const typeFilter = args.type === "long_term" || args.type === "short_term" || args.type === "open_loop" ? args.type : undefined;
-      const active = store.listActive(scope.conversationId, at)
+      const scoped = store.listActive(scope.conversationId, at, scope.memoryScope);
+      const active = (requireCanonicalSources ? await filterActiveSocialAtoms(scoped) : scoped)
         .filter((atom) => !typeFilter || atom.type === typeFilter);
+      if (getMemoryModeVersion() !== version) return "[错误] 记忆模式已变更，未读取记忆。";
       if (active.length === 0) return "[memory_recall] 关于对方，现在还没有记着的事";
 
       const query = typeof args.query === "string" ? args.query.trim() : "";
@@ -266,11 +299,12 @@ export function createPersonMemoryTools(store: SocialAtomStore, now: () => numbe
       const at = now();
       const atom = store.getById(id);
       // 其他会话的条目对本会话不可见，按“找不到”处理
-      if (!atom || atom.conversationId !== scope.conversationId) {
+      if (!atom || atom.conversationId !== scope.conversationId || atom.memoryScope !== scope.memoryScope) {
         return `[错误] 找不到记忆条目 ${id}，先用 memory_recall 确认 id`;
       }
       if (action === "delete") {
-        store.applyOperations(scope.conversationId, [{ operation: "delete", targetAtomId: id }], at);
+        await retractLinkedFact(atom);
+        store.applyOperations(scope.conversationId, [{ operation: "delete", targetAtomId: id }], at, scope.memoryScope);
         return `[memory_forget] 已删除：${atom.content}`;
       }
       const active = atom.status === "active" && (typeof atom.expiresAt !== "number" || atom.expiresAt > at);
@@ -283,10 +317,11 @@ export function createPersonMemoryTools(store: SocialAtomStore, now: () => numbe
           targetAtomId: id,
           evidenceTurnId: `memory_tool:${ctx?.runId ?? at}`,
           evidenceQuote,
-        }], at);
+        }], at, scope.memoryScope);
         return `[memory_forget] 已标记为已解决：${atom.content}`;
       }
-      store.applyOperations(scope.conversationId, [{ operation: "retire", targetAtomId: id }], at);
+      await retractLinkedFact(atom);
+      store.applyOperations(scope.conversationId, [{ operation: "retire", targetAtomId: id }], at, scope.memoryScope);
       return `[memory_forget] 已标记为过时：${atom.content}`;
     },
   };
@@ -296,5 +331,5 @@ export function createPersonMemoryTools(store: SocialAtomStore, now: () => numbe
 
 /** 由 registerAllTools 在拿到组合根注入的 store 后调用。 */
 export function registerPersonMemoryTools(registry: Pick<ToolRegistry, "register">, store: SocialAtomStore): void {
-  for (const tool of createPersonMemoryTools(store)) registry.register(tool);
+  for (const tool of createPersonMemoryTools(store, Date.now, true)) registry.register(tool);
 }

@@ -2,7 +2,7 @@ import { ConflictLog, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus,
 import { appendMemoryTrace } from "./memory-trace"
 import { isImportingMemory } from "./obsidian-sync-flag"
 import type { MemorySourceLocator } from "../../shared/memory-governance"
-import { candidateSources, isForgottenSource, memorySourceKey } from "./memory-source-policy"
+import { candidateSources, isForgottenFact, isForgottenSource, memoryFactKey, memorySourceKey } from "./memory-source-policy"
 import {
   CURRENT_MEMORY_SCHEMA_VERSION,
   boundMemorySnippet,
@@ -93,10 +93,15 @@ class MemoryStoreManager {
       store.forgetting = {
         memoryIds: [...new Set([...(previous?.memoryIds ?? []), ...(store.forgetting?.memoryIds ?? [])])],
         sourceKeys: [...new Set([...(previous?.sourceKeys ?? []), ...(store.forgetting?.sourceKeys ?? [])])],
+        factKeys: [...new Set([...(previous?.factKeys ?? []), ...(store.forgetting?.factKeys ?? [])])],
+        socialFactKeys: [...new Set([...(previous?.socialFactKeys ?? []), ...(store.forgetting?.socialFactKeys ?? [])])],
         wikiClaimKeys: [...new Set([...(previous?.wikiClaimKeys ?? []), ...(store.forgetting?.wikiClaimKeys ?? [])])],
         profileRecords: [...new Map([...(previous?.profileRecords ?? []), ...(store.forgetting?.profileRecords ?? [])].map(record => [JSON.stringify(record), record])).values()],
       }
       const removed = new Set(store.forgetting.memoryIds)
+      for (const memory of store.l2) {
+        if (candidateSources(memory).some(source => isForgottenFact(store, source, memory.content))) removed.add(memory.id)
+      }
       let expanded = true
       while (expanded) {
         expanded = false
@@ -106,6 +111,13 @@ class MemoryStoreManager {
       store.l2 = store.l2.filter(memory => !removed.has(memory.id))
       store.evidence = store.evidence?.filter(evidence => !removed.has(evidence.memoryId))
       store.l2DmaeStates = store.l2DmaeStates?.filter(item => !removed.has(item.l2Id))
+      for (const [key, source] of Object.entries(store.profileSources ?? {})) {
+        if (!source.sources.some(item => isForgottenFact(store, item, source.content))) continue
+        const [layer, field] = key.split(".")
+        const profile = layer === "L0" ? store.l0 : layer === "L1" ? store.l1 : null
+        if (profile && Reflect.get(profile, field) === source.content) Object.assign(profile, { [field]: "" })
+        delete store.profileSources![key]
+      }
       for (const record of store.forgetting.profileRecords ?? []) {
         const source = store.profileSources?.[record.key]
         if (!source?.sources.some(item => record.sourceKeys.includes(memorySourceKey(item)))) continue
@@ -129,18 +141,26 @@ class MemoryStoreManager {
     import("./obsidian-exporter.js").then(({ notifyMemoryChanged }) => notifyMemoryChanged()).catch(() => {})
   }
 
+  async retractFact(source: MemorySourceLocator, content: string): Promise<void> {
+    const store = structuredClone(await this.load())
+    const forgetting = store.forgetting ??= { memoryIds: [], sourceKeys: [], wikiClaimKeys: [] }
+    const key = memoryFactKey(source, content)
+    forgetting.factKeys = [...new Set([...(forgetting.factKeys ?? []), key])]
+    await this.save(store)
+  }
+
   async getL0(): Promise<L0Profile> {
     const store = await this.load()
     return store.l0
   }
 
-  async upsertL0Field(field: L0WritableField, value: L0Profile[L0WritableField], assertSourceCurrent?: () => Promise<void>, sources?: MemorySourceLocator[]): Promise<void> {
+  async upsertL0Field(field: L0WritableField, value: L0Profile[L0WritableField], assertSourceCurrent?: () => Promise<void>, sources?: MemorySourceLocator[], ownerManaged?: true): Promise<void> {
     if (assertSourceCurrent) await assertSourceCurrent()
     const store = await this.load()
     if (sources?.some(source => isForgottenSource(store, source))) throw new Error("MEMORY_SOURCE_FORGOTTEN")
     store.l0 = { ...store.l0, [field]: value, updatedAt: Date.now() }
     store.profileSources ??= {}
-    if (sources?.length && typeof value === "string") store.profileSources[`L0.${field}`] = { content: value, sources }
+    if ((sources?.length || ownerManaged) && typeof value === "string") store.profileSources[`L0.${field}`] = { content: value, sources: sources ?? [], ...(ownerManaged ? { ownerManaged } : {}) }
     else delete store.profileSources[`L0.${field}`]
     await this.save(store)
     appendMemoryTrace({
@@ -154,7 +174,7 @@ class MemoryStoreManager {
   async updateL0(patch: Partial<L0Profile>): Promise<void> {
     for (const [field, value] of Object.entries(patch) as Array<[keyof L0Profile, L0Profile[keyof L0Profile]]>) {
       if (field === "updatedAt") continue
-      await this.upsertL0Field(field, value as L0Profile[L0WritableField])
+      await this.upsertL0Field(field, value as L0Profile[L0WritableField], undefined, undefined, true)
     }
   }
 
@@ -163,13 +183,13 @@ class MemoryStoreManager {
     return store.l1
   }
 
-  async replaceL1Field(field: L1WritableField, value: L1Profile[L1WritableField], assertSourceCurrent?: () => Promise<void>, sources?: MemorySourceLocator[]): Promise<void> {
+  async replaceL1Field(field: L1WritableField, value: L1Profile[L1WritableField], assertSourceCurrent?: () => Promise<void>, sources?: MemorySourceLocator[], ownerManaged?: true): Promise<void> {
     if (assertSourceCurrent) await assertSourceCurrent()
     const store = await this.load()
     if (sources?.some(source => isForgottenSource(store, source))) throw new Error("MEMORY_SOURCE_FORGOTTEN")
     store.l1 = { ...store.l1, [field]: value }
     store.profileSources ??= {}
-    if (sources?.length && typeof value === "string") store.profileSources[`L1.${field}`] = { content: value, sources }
+    if ((sources?.length || ownerManaged) && typeof value === "string") store.profileSources[`L1.${field}`] = { content: value, sources: sources ?? [], ...(ownerManaged ? { ownerManaged } : {}) }
     else delete store.profileSources[`L1.${field}`]
     await this.save(store)
     appendMemoryTrace({
@@ -182,7 +202,7 @@ class MemoryStoreManager {
 
   async updateL1(patch: Partial<L1Profile>): Promise<void> {
     for (const [field, value] of Object.entries(patch) as Array<[L1WritableField, L1Profile[L1WritableField]]>) {
-      await this.replaceL1Field(field, value)
+      await this.replaceL1Field(field, value, undefined, undefined, true)
     }
   }
 

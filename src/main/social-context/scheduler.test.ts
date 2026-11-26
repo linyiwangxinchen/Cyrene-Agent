@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createSocialContextScheduler } from "./scheduler";
 import { createSocialAtomStore } from "./store";
 import type { SocialExtractionInput } from "./types";
+import { setMemoryMode } from "../memory/memory-mode";
 
 function extractionInput(): SocialExtractionInput {
   return {
@@ -14,6 +15,49 @@ function extractionInput(): SocialExtractionInput {
 }
 
 describe("social context scheduler", () => {
+  it("waits for a pre-off job record that resolves after the bulk cancellation", async () => {
+    const store = createSocialAtomStore();
+    let finishRecord!: (value: string) => void;
+    const jobs = {
+      record: vi.fn(() => new Promise<string>(resolve => { finishRecord = resolve; })),
+      pending: vi.fn(async () => [{ id: "pending-before-off", input: extractionInput() }]),
+      complete: vi.fn(async () => undefined),
+      discardPending: vi.fn(async () => undefined),
+    };
+    const generate = vi.fn(async () => '{"operations":[]}');
+    const scheduler = createSocialContextScheduler({ store, jobs, generate, enqueue: (_label, task) => task() });
+    try {
+      const recorded = scheduler.schedule(extractionInput());
+      setMemoryMode("off");
+      const done = vi.fn();
+      const cancellation = scheduler.resumePending().then(done);
+      await vi.waitFor(() => expect(jobs.discardPending).toHaveBeenCalledOnce());
+      expect(done).not.toHaveBeenCalled();
+      finishRecord("late-record");
+      await Promise.all([recorded, cancellation]);
+      expect(jobs.complete).toHaveBeenCalledWith("late-record");
+      expect(jobs.pending).not.toHaveBeenCalled();
+      expect(generate).not.toHaveBeenCalled();
+    } finally { setMemoryMode("vector"); }
+  });
+  it("does not commit a late extraction after memory is switched off and back on", async () => {
+    const store = createSocialAtomStore();
+    let finish!: (value: string) => void;
+    const generate = vi.fn(() => new Promise<string>(resolve => { finish = resolve; }));
+    let queued: Promise<void> | undefined;
+    const scheduler = createSocialContextScheduler({ store, generate, enqueue: (_label, task) => queued = task() });
+    try {
+      scheduler.schedule(extractionInput());
+      await vi.waitFor(() => expect(generate).toHaveBeenCalledOnce());
+      setMemoryMode("off");
+      scheduler.schedule(extractionInput());
+      setMemoryMode("vector");
+      finish(JSON.stringify({ operations: [{ operation: "add", type: "long_term", content: "喜欢海边", evidenceTurnId: "user-1", evidenceQuote: "我喜欢海边" }] }));
+      await queued;
+      expect(generate).toHaveBeenCalledOnce();
+      expect(store.listActive("chat-a", 100)).toEqual([]);
+    } finally { setMemoryMode("vector"); }
+  });
   it("queues exactly one extraction call when the initial output is valid", async () => {
     const store = createSocialAtomStore();
     const generate = vi.fn().mockResolvedValue(JSON.stringify({

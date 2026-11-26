@@ -77,7 +77,7 @@ export function createShutdownCoordinator(options: CreateShutdownCoordinatorOpti
   const readiness = options.readiness;
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const setTimeoutFn = options.setTimeout ?? ((handler: () => void, ms: number) => globalThis.setTimeout(handler, ms));
-  const clearTimeoutFn = options.clearTimeout ?? ((handle: ReturnType<typeof setTimeout>) => globalThis.clearTimeout(handle));
+  const clearTimeoutFn = options.clearTimeout ?? ((handle: ReturnType<typeof setTimeout> | number) => globalThis.clearTimeout(handle));
   const log = options.log ?? ((message, error) => console.error(message, error));
 
   const registrations = new Map<string, Registration>();
@@ -170,7 +170,7 @@ export function createShutdownCoordinator(options: CreateShutdownCoordinatorOpti
       const pendingIds = new Set<string>();
       const timing: ShutdownTiming = { phases: [], slow: [] };
       const cleanupStartedAt = performance.now();
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      let timeoutHandle: ReturnType<typeof setTimeout> | number | undefined;
       const deadline = new Promise<void>((resolve) => {
         timeoutHandle = setTimeoutFn(() => {
           controller.abort();

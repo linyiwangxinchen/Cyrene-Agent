@@ -84,6 +84,58 @@ async function buildAgentRunOptions(
 }
 
 describe("build-options", () => {
+  it("cancels only the waiting chat while its plugin context is starting", async () => {
+    const deps = createBuildDeps()
+    let release!: (context: string) => void
+    const startup = new Promise<string>(resolve => { release = resolve })
+    deps.buildPluginPromptContext = vi.fn(() => startup)
+    const controller = new AbortController()
+    const input = { mode: "chat" as const, messages: [{ role: "user" as const, content: "hello" }] }
+    const cancelled = buildAgentRunOptions({ ...input, signal: controller.signal }, deps)
+    const expectCancellation = expect(cancelled).rejects.toThrow("cancelled while waiting")
+    await vi.waitFor(() => expect(deps.buildPluginPromptContext).toHaveBeenCalledOnce())
+    const next = buildAgentRunOptions(input, deps)
+    controller.abort(new Error("cancelled while waiting"))
+    await expectCancellation
+    release("READY_CONTEXT")
+    expect((await next).options.soulRuntimeContext).toContain("READY_CONTEXT")
+  })
+
+  it("渠道与桌面共用请求前的就绪检查，按旧渠道执行模式解析依赖", async () => {
+    const deps = createBuildDeps()
+    let release!: () => void
+    deps.waitForStartup = vi.fn(() => new Promise<void>(resolve => { release = resolve }))
+    const settings = vi.spyOn(deps, "loadModelSettings")
+    const run = buildAgentRunOptions({ channel: "wechat", executionMode: "soul-only", messages: [{ role: "user", content: "hi" }] }, deps)
+    expect(deps.waitForStartup).toHaveBeenCalledWith("chat", undefined)
+    expect(settings).not.toHaveBeenCalled()
+    release()
+    await run
+    expect(settings).toHaveBeenCalled()
+  })
+  it("loads a chat slash command before composing its prompt but skips the wait for plain text", async () => {
+    const deps = createBuildDeps()
+    let ready = false
+    deps.waitForPromptSkills = vi.fn(async () => { ready = true })
+    deps.resolveSlashActivation = () => ready ? "SKILL_BODY" : ""
+    const run = (content: string) => buildAgentRunOptions({ mode: "chat", messages: [{ role: "user", content }] }, deps)
+    await run("hello")
+    expect(deps.waitForPromptSkills).not.toHaveBeenCalled()
+    expect((await run("/demo")).options.soulRuntimeContext).toContain("SKILL_BODY")
+  })
+
+  it("waits for the plan skill in a resumed chat without skill tools", async () => {
+    const { enterPlanDiscussing, exitPlanMode } = await import("./plan-mode")
+    const id = "startup-plan"
+    enterPlanDiscussing(id)
+    try {
+      const deps = createBuildDeps()
+      deps.waitForPromptSkills = async () => { deps.skillRegistry.getBody = () => "PLAN_BODY" }
+      const { options } = await buildAgentRunOptions({ mode: "chat", sessionId: id, messages: [{ role: "user", content: "继续" }] }, deps)
+      expect(options.planSkillContext).toContain("PLAN_BODY")
+    } finally { exitPlanMode(id) }
+  })
+
   it("文件命令先于 Skill 斜杠激活展开：工作区命令 > 用户命令，命中后同名 Skill 不再激活", async () => {
     const { expandLatestUserCommand } = await import("../skills/file-commands")
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-command-build-"))
@@ -205,7 +257,7 @@ describe("build-options", () => {
     deps.buildXilianLifeContext = () => "【昔涟虚拟生活快照】\n地点：星炉台\n正在做：维护一盏小灯";
     const currentUser = { turnId: "u1", text: "今天开了三个会，累死了", visibleContent: "今天开了三个会，累死了" };
     const result = await buildAgentRunOptions({
-      sessionId: "wechat-private", channel: "wechat", executionMode: "chat", privateRelationshipContext: true, currentUser,
+      sessionId: "wechat-private", channel: "wechat", memoryScope: "peer:wechat-123", executionMode: "chat", privateRelationshipContext: true, currentUser,
       modelContext: { messages: [{ role: "user", content: currentUser.text }], uncertainEffects: [], throughSeq: 1 },
     }, deps);
     expect(result.options.soulSystemBaseContent).toContain("【渠道回复方式】");
@@ -230,7 +282,7 @@ describe("build-options", () => {
       modelContext: { messages: [{ role: "user", content: "昨天焦虑死了" }], uncertainEffects: [], throughSeq: 1 },
     };
     await buildAgentRunOptions(input, deps);
-    await buildAgentRunOptions({ ...input, channel: "wechat" }, deps);
+    await buildAgentRunOptions({ ...input, channel: "wechat", memoryScope: "peer:wechat-123" }, deps);
     await buildAgentRunOptions({
       ...input,
       transcriptRewind: { anchorUserTurnId: "u1", disposition: "replace_user" },
@@ -246,9 +298,9 @@ describe("build-options", () => {
       await buildAgentRunOptions({ ...input, ...suppressed }, deps);
     }
     expect(vi.mocked(deps.buildRelationshipContext).mock.calls).toEqual([
-      ["mood", true, "我的杯子到了", true, false],
-      ["mood", true, "我的杯子到了", true, false],
-      ["mood", true, "我的杯子到了", true, false],
+      ["mood", true, "我的杯子到了", true, false, "owner", expect.any(Function)],
+      ["mood", true, "我的杯子到了", true, false, "peer:wechat-123"],
+      ["mood", true, "我的杯子到了", true, false, "owner", expect.any(Function)],
       ["mood", false, undefined, false, false],
       ["mood", false, undefined, false, false],
       ["mood", true, undefined, false, false],
@@ -265,7 +317,7 @@ describe("build-options", () => {
     deps.loadUserProfile = () => ({ callPreference: "私下称呼", birthday: "2000-01-02", timezone: "Asia/Shanghai" });
     deps.buildEnvironmentContext = (profile) => JSON.stringify(profile);
     deps.buildAlwaysOnContext = vi.fn(async () => "PRIVATE_MEMORY");
-    deps.buildRelationshipContext = vi.fn(async (_id, own) => own ? "PRIVATE_RELATIONSHIP" : "");
+    deps.buildRelationshipContext = vi.fn(async (_id, enabled, _text, _style, _ledger, scope = "owner") => enabled ? scope === "owner" ? "PRIVATE_RELATIONSHIP" : "PEER_RELATIONSHIP" : "");
     deps.buildXilianLifeContext = vi.fn(() => "PRIVATE_WORLD");
     deps.buildMomentsContext = vi.fn(() => "PRIVATE_MOMENTS");
     deps.buildChatSocialContext = vi.fn(async () => ({ contextBlock: "PRIVATE_SOCIAL", retrievedAtoms: [] }));
@@ -279,9 +331,13 @@ describe("build-options", () => {
     expect(group.options.soulRuntimeContext).not.toMatch(/PRIVATE_|私下称呼|2000-01-02/);
     expect(deps.buildAlwaysOnContext).not.toHaveBeenCalled();
     expect(deps.buildMomentsContext).not.toHaveBeenCalled();
-    const privateTurn = await buildAgentRunOptions(input, deps);
-    expect(privateTurn.options.soulRuntimeContext).toContain("私下称呼");
-    expect(privateTurn.options.soulRuntimeContext).toContain("PRIVATE_MOMENTS");
+    const privateTurn = await buildAgentRunOptions({ ...input, memoryScope: "peer:wechat-123" }, deps);
+    expect(privateTurn.options.soulRuntimeContext).toContain("PEER_RELATIONSHIP");
+    expect(privateTurn.options.soulRuntimeContext).not.toMatch(/PRIVATE_(?:RELATIONSHIP|MOMENTS)|私下称呼|2000-01-02/);
+    expect(deps.buildMomentsContext).not.toHaveBeenCalled();
+    const local = await buildAgentRunOptions({ ...input, channel: undefined }, deps);
+    expect(local.options.soulRuntimeContext).toContain("私下称呼");
+    expect(local.options.soulRuntimeContext).toContain("PRIVATE_MOMENTS");
     expect(deps.buildMomentsContext).toHaveBeenCalledWith(currentUser.text, "shared");
   });
 
@@ -652,6 +708,7 @@ describe("build-options", () => {
       messages: [{ role: "user", content: "你好" }],
       style: "01_default.md",
       channel: "wechat",
+      memoryScope: "peer:wechat-123",
     }, createBuildDeps())
 
     expect(result.options.soulSystemBaseContent).toContain("你正在通过微信回复用户")
@@ -848,6 +905,7 @@ describe("build-options", () => {
     })
     deps.buildChatSocialContext = vi.fn(async () => ({ contextBlock: "【你记得的关于对方的事】\n- 对方喜欢游泳", retrievedAtoms: [] }))
     deps.buildRelationshipContext = vi.fn(async () => "")
+    deps.prepareCitaTurn = vi.fn(async () => ({ contextBlock: "owner task context" }))
     const base = {
       sessionId: "bound-chat",
       executionMode: "work",
@@ -855,13 +913,14 @@ describe("build-options", () => {
       memoryTurnIds: { userTurnId: "u1", assistantTurnId: "a1" },
       modelContext: { messages: [{ role: "user", content: "戳～" }], uncertainEffects: [], throughSeq: 1 },
     }
-    const wechat = await buildAgentRunOptions({ ...base, channel: "wechat" }, deps)
+    const wechat = await buildAgentRunOptions({ ...base, channel: "wechat", memoryScope: "peer:wechat-123" }, deps)
     expect(wechat.options.soulSystemBaseContent).toContain("【私聊怎么说】")
     expect(wechat.options.soulRuntimeContext).toContain("对方喜欢游泳")
     expect(wechat.options.socialContext).toMatchObject({ enabled: true, userTurnId: "u1", assistantTurnId: "a1" })
     // The tool run keeps its own transcript identity.
     expect(wechat.options.assistantTurnId).toBeUndefined()
-    expect(vi.mocked(deps.buildRelationshipContext).mock.calls[0]).toEqual(["bound-chat", true, "戳～", true, false])
+    expect(vi.mocked(deps.buildRelationshipContext).mock.calls[0]).toEqual(["bound-chat", true, "戳～", true, false, "peer:wechat-123"])
+    expect(deps.prepareCitaTurn).not.toHaveBeenCalled()
 
     const group = await buildAgentRunOptions({ ...base, channel: "wechat", privateRelationshipContext: false }, deps)
     expect(group.options.soulSystemBaseContent).not.toContain("【私聊怎么说】")
@@ -1230,7 +1289,8 @@ describe("build-options", () => {
       recordRelationshipTurn,
     }
 
-    await onAgentRunFinished({ reply: "好呀", toolResults: [] }, "今天有点累", deps, "wechat")
+    await onAgentRunFinished({ reply: "好呀", toolResults: [] }, "今天有点累", deps, "wechat", "chat",
+      { memoryScope: "peer:wechat-test", privateRelationshipContext: true })
 
     expect(recordRelationshipTurn).toHaveBeenCalledWith({
       privateContext: true,
@@ -1238,6 +1298,8 @@ describe("build-options", () => {
       assistantText: "好呀",
       cyreneFeeling: "温柔",
       channel: "wechat",
+      conversationId: "chat",
+      speechScope: "peer:wechat-test",
     })
   })
 
@@ -1439,6 +1501,8 @@ describe("build-options", () => {
     expect(observeRuntimeState).not.toHaveBeenCalled()
     expect(scheduleSocialAtomExtraction).toHaveBeenCalledWith({
       conversationId: "chat-a",
+      memoryScope: "owner",
+      source: { userTurnId: "user-1", assistantEntryId: "journal-assistant-1" },
       userTurn: { id: "user-1", role: "user", text: "我喜欢海边。" },
       assistantTurn: { id: "assistant-1", role: "assistant", text: "海风确实很舒服。" },
       retrievedAtoms,
@@ -1993,6 +2057,33 @@ describe("权威轨迹上下文源（CTA Phase 1）", () => {
       modelContext: { messages: [{ role: "user", content: "旧历史".repeat(10_000) }, { role: "user", content: "微信本轮问题" }], uncertainEffects: [], throughSeq: 2 },
     } as never, deps)).rejects.toMatchObject({ reason: "history_changed" })
   })
+
+  it("isolated channel turns never compact or reload the shared transcript", async () => {
+    const deps = createBuildDeps();
+    deps.loadModelSettings = () => ({ provider: "test", baseUrl: "https://example.test", model: "m", apiKey: "k", contextWindowTokens: 10_000 });
+    deps.buildModelContext = vi.fn(async () => ({
+      messages: [{ role: "system", content: "SHARED_CHECKPOINT" }], uncertainEffects: [], throughSeq: 1,
+    }));
+    deps.compactTranscript = vi.fn(async () => ({ checkpointEntryId: "shared-checkpoint" }));
+    const latest = "继续";
+    const built = await buildAgentRunOptions({
+      sessionId: "isolated-peer", channel: "wechat", mode: "chat", executionMode: "chat",
+      currentUser: { turnId: "turn", text: latest, visibleContent: latest },
+      modelContext: {
+        messages: [
+          { role: "user", content: "太长的旧消息".repeat(10_000) },
+          { role: "assistant", content: "旧回复" },
+          { role: "user", content: "简短原话" }, { role: "assistant", content: "最近的回复" },
+          { role: "user", content: latest },
+        ],
+        uncertainEffects: [], throughSeq: 2, recipientIsolated: true,
+      },
+    }, deps);
+    expect(deps.compactTranscript).not.toHaveBeenCalled();
+    expect(deps.buildModelContext).not.toHaveBeenCalled();
+    expect(built.options.compactTranscript).toBeUndefined();
+    expect(built.options.cleanMessages?.map(message => message.content)).toEqual(["简短原话", "最近的回复", latest]);
+  });
 
   it("传入 modelContext 超预算时同样执行自动压缩并重读 journal", async () => {
     const deps = createBuildDeps()

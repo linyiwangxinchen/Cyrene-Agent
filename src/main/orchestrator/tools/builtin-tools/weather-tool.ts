@@ -11,6 +11,7 @@
 // built-in-tools.snapshot.test.ts）。
 
 import type { ToolDefinition } from "../registry/tool-registry";
+import type { ToolContext } from "../registry/tool-context";
 import { getDateLocale, getWeatherLanguage } from "../../../locale-context";
 import { currentUserTimezone } from "./timezone";
 import { TtlResultCache } from "./ttl-result-cache";
@@ -283,31 +284,19 @@ async function amapFetchWeather(city: string, key: string): Promise<string> {
   }
 }
 
-async function executeWeather(args: Record<string, unknown>): Promise<string> {
+async function executeWeather(args: Record<string, unknown>, context?: ToolContext): Promise<string> {
   if (weatherEnabledGetter && !weatherEnabledGetter()) {
     return "[错误] 天气查询功能未启用，请在设置里开启";
   }
 
   const source = weatherSourceGetter?.() ?? "open-meteo";
 
-  // 城市：参数优先，没传读用户信息默认城市
-  let city = String(args.city ?? "").trim();
-  if (!city) {
-    city = (weatherCityGetter?.() ?? "").trim();
-  }
-  // 城市解析日志：用于确认模型是否仍自行传入"上海"。
-  // 脱敏：仅记城市名（公开地理名）+ 来源标签；不带用户 ID/任何凭证。
+  // 外部会话必须明确指定城市。本地设置的默认城市属于设备所有者。
   const argsCityRaw = String(args.city ?? "").trim();
-  const defaultCityRaw = (weatherCityGetter?.() ?? "").trim();
-  const source2: "arg" | "default" | "none" = argsCityRaw
-    ? "arg"
-    : defaultCityRaw
-      ? "default"
-      : "none";
-  console.log(
-    `[Weather] city resolution: argsCity=${argsCityRaw || "(empty)"} defaultCity=${defaultCityRaw || "(empty)"} final=${city || "(empty)"} source=${source2}`,
-  );
+  const useLocalDefault = !context?.channelContext;
+  const city = argsCityRaw || (useLocalDefault ? (weatherCityGetter?.() ?? "").trim() : "");
   if (!city) {
+    if (!useLocalDefault) return "[提示] 请问对方要查询哪个城市。";
     return "[提示] 没有指定城市，也没设置默认城市。请告诉用户：在 设置 → 我的信息 填默认城市，或直接说出要查的城市名。";
   }
 
@@ -343,6 +332,7 @@ export const weatherTool: ToolDefinition = {
     "参数：city（可选，城市名中文或拼音；不传则用用户设置的默认城市）。",
   enabled: true,
   risk: "network",
+  needsContext: true,
   modes: ["work"],
   effectKind: "read" as const,
   verificationPolicy: "none" as const,

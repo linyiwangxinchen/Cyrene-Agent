@@ -1,11 +1,12 @@
 // 工具注册表 — 统一管理所有可被 LLM Router 调度的工具
 // Worldbook 不在此注册，它走独立常驻检索路径
 
-import { searchMemory } from "../../../rag/index";
+import { searchMemoryEntries } from "../../../rag/index";
 import type { ToolRiskLevel } from "../../../permission";
 import type { ToolContext } from "./tool-context";
 import type { ConversationMode } from "../../../../shared/chat-types";
-import { isVectorMemoryEnabled, isWikiMemoryEnabled } from "../../../memory/memory-mode";
+import { getMemoryModeVersion, isVectorMemoryEnabled, isWikiMemoryEnabled } from "../../../memory/memory-mode";
+import { isOwnerMemoryScope } from "../../../memory/memory-scope";
 import { canReadWikiMemory } from "../../../memory/wiki-memory-health";
 import { isKnowledgeBaseAvailable } from "../../../knowledge-base/knowledge-base-service";
 
@@ -233,6 +234,8 @@ toolRegistry.register({
     '- 用户从没提过的信息（查不到就老实说不知道）\n\n' +
     '参数：query (必填，搜索关键词)，topK (可选，返回条数，默认5)。',
   enabled: true,
+  privateContextOnly: true,
+  needsContext: true,
   effectKind: "read",
   verificationPolicy: "none",
   inputSchema: {
@@ -243,10 +246,18 @@ toolRegistry.register({
     },
     required: ['query'],
   },
-  execute: async (args) => {
-    if (!isVectorMemoryEnabled()) return "[用户记忆] 当前模式不使用向量记忆";
-    const results = await searchMemory(String(args.query), 'user_memory', Number(args.topK) || 5);
-    return results.map(formatMemoryResult).filter(Boolean).join('\n');
+  execute: async (args, ctx) => {
+    if (!isVectorMemoryEnabled() || !isOwnerMemoryScope(ctx?.memoryScope)) return "[错误] 当前上下文不能使用私人向量记忆";
+    const version = getMemoryModeVersion();
+    const { memoryStore } = await import("../../../memory/memory-store.js");
+    const { selectOwnerL2Memories } = await import("../../../memory/memory-owner-recall.js");
+    const visible = await selectOwnerL2Memories(await memoryStore.load());
+    const allowedL2Ids = new Set(visible.map(memory => memory.id));
+    const results = await searchMemoryEntries(String(args.query), 'user_memory', Math.min(10, Math.max(1, Number(args.topK) || 5)), { allowedL2Ids });
+    const current = new Map((await selectOwnerL2Memories(await memoryStore.load())).map(memory => [memory.id, memory.content]));
+    if (getMemoryModeVersion() !== version) return "[错误] 记忆模式已变更，未读取记忆";
+    return results.filter(result => typeof result.metadata?.l2Id === "string" && current.get(result.metadata.l2Id) === result.text)
+      .map(result => formatMemoryResult(result.text)).filter(Boolean).join('\n');
   },
 });
 
@@ -368,6 +379,8 @@ toolRegistry.register({
     '- 当前附件文件（应通过附件路径读取）\n\n' +
     '参数：无参 = 概览（L0/L1 全量 + L2 目录最新 50 条）；id (可选，L2 条目 id) = 读该条全文。',
   enabled: true,
+  privateContextOnly: true,
+  needsContext: true,
   effectKind: "read",
   verificationPolicy: "none",
   inputSchema: {
@@ -376,16 +389,20 @@ toolRegistry.register({
       id: { type: 'string', description: 'L2 条目 id（来自概览列表），传入则读该条全文' },
     },
   },
-  execute: async (args) => {
-    if (!isVectorMemoryEnabled()) return "[通读记忆] 当前模式不使用向量记忆";
+  execute: async (args, ctx) => {
+    if (!isVectorMemoryEnabled() || !isOwnerMemoryScope(ctx?.memoryScope)) return "[错误] 当前上下文不能使用私人向量记忆";
+    const version = getMemoryModeVersion();
     // 懒加载避开注册期副作用（与 fs-tools 的视觉配置懒加载同模式）
     const { memoryStore } = require("../../../memory/memory-store") as
       typeof import("../../../memory/memory-store");
+    const { selectOwnerL2Memories, selectOwnerProfileFields } = await import("../../../memory/memory-owner-recall.js");
+    const state = await memoryStore.load();
+    const [l2All, fields] = await Promise.all([selectOwnerL2Memories(state), selectOwnerProfileFields(state)]);
+    if (getMemoryModeVersion() !== version) return "[错误] 记忆模式已变更，未读取记忆";
 
     const id = String(args.id || "").trim();
     if (id) {
-      const all = await memoryStore.getAllL2();
-      const hit = all.find((m) => m.id === id);
+      const hit = l2All.find((m) => m.id === id);
       if (!hit) return `[错误] 找不到 L2 条目: ${id}（先无参调用拿概览列表）`;
       const lines = [
         `id: ${hit.id}`,
@@ -400,18 +417,15 @@ toolRegistry.register({
       return lines.join('\n');
     }
 
-    const [l0, l1, l2All] = await Promise.all([
-      memoryStore.getL0(),
-      memoryStore.getL1(),
-      memoryStore.getAllL2(),
-    ]);
+    const l0 = Object.fromEntries(Object.entries(state.l0).filter(([key]) => key === "isPinned" || fields.has(`L0.${key}`)));
+    const l1 = Object.fromEntries(Object.entries(state.l1).filter(([key]) => fields.has(`L1.${key}`)));
     const items: L2OverviewItem[] = l2All.map((m) => ({
       id: m.id,
       title: m.slug || (m.content.length > 40 ? m.content.slice(0, 40) + "…" : m.content),
       createdAt: m.createdAt,
       status: m.status,
     }));
-    return formatMemoryOverview(l0 as unknown as Record<string, unknown>, l1 as unknown as Record<string, unknown>, items);
+    return formatMemoryOverview(l0, l1, items);
   },
 });
 
@@ -427,9 +441,11 @@ toolRegistry.register({
     '- 普通对话中自行判断值得记的信息（那是后台反思系统的事，不要主动调用本工具）\n' +
     '- 当前对话里临时记的东西（对话上下文本身就是记忆）\n\n' +
     '参数：layer (必填，L0/L1/L2)，content (必填，要记住的内容)；\n' +
-    'field (L0 可选：preferredName/occupation/longTermInterests/language/permanentNote；L1 可选：recentGoals/recentPreferences/currentProject，缺省按内容自动分流)；\n' +
+    'field (L0 必填：preferredName/occupation/longTermInterests/language/permanentNote；L1 可选：recentGoals/recentPreferences/currentProject，缺省按内容自动分流)；\n' +
     'slug (L2 可选，≤20 字标题)，sourceQuote (L2 可选，用户原话)。',
   enabled: true,
+  privateContextOnly: true,
+  needsContext: true,
   effectKind: "mutation",
   verificationPolicy: "none",
   inputSchema: {
@@ -444,7 +460,8 @@ toolRegistry.register({
     required: ['layer', 'content'],
   },
   execute: async (args, ctx) => {
-    if (!isVectorMemoryEnabled()) return "[更新记忆] 当前模式不使用向量记忆";
+    if (!isVectorMemoryEnabled() || !isOwnerMemoryScope(ctx?.memoryScope)) return "[错误] 当前上下文不能写入私人向量记忆";
+    const version = getMemoryModeVersion();
     const candidate = buildWriteCandidate({
       layer: String(args.layer || ""),
       content: String(args.content || ""),
@@ -454,6 +471,12 @@ toolRegistry.register({
       triggerText: ctx?.userQuery || String(args.content).slice(0, 50),
     });
     if (!candidate) return "[错误] 参数无效：layer 必须是 L0/L1/L2，content 不能为空";
+    if (candidate.layer === "L0" && !candidate.field) return "[错误] 写入核心画像需要指定 field";
+    if (!ctx?.conversationId || !ctx.memoryUserTurnId) return "[错误] 无法核对当前用户消息，记忆没有写入";
+    const { activeMemoryUserEntry } = await import("../../../memory/memory-owner-recall.js");
+    const { conversationId, memoryUserTurnId } = ctx;
+    const messageId = await activeMemoryUserEntry(conversationId, memoryUserTurnId);
+    if (!messageId?.startsWith("user:v1:") || getMemoryModeVersion() !== version) return "[错误] 无法核对当前用户消息，记忆没有写入";
 
     // 懒加载走 memoryManager.writeMemory 既有校验链（L0 锁定/字段白名单/L1 分流/L2 写入+RAG 同步）
     const { memoryManager } = require("../../../memory/memory-manager") as
@@ -463,11 +486,16 @@ toolRegistry.register({
 
     if (candidate.layer === "L0") {
       const l0 = await memoryStore.getL0();
-      if (l0.isPinned) return "[跳过] 核心画像已被用户锁定（记忆面板里可解锁），本次未写入";
+      if (l0.isPinned) return "[错误] 核心画像已被用户锁定（记忆面板里可解锁），本次未写入";
     }
 
-    await memoryManager.writeMemory([candidate]);
-    return `已写入 ${candidate.layer}${candidate.field ? `（字段 ${candidate.field}）` : ""}: ${candidate.content.slice(0, 60)}${candidate.content.length > 60 ? "…" : ""}`;
+    const result = await memoryManager.writeMemory([{ ...candidate, sourceConversationId: conversationId, sourceMessageIds: [messageId] }], async () => {
+      if (await activeMemoryUserEntry(conversationId, memoryUserTurnId) !== messageId || getMemoryModeVersion() !== version) {
+        throw new Error("MEMORY_SOURCE_CHANGED");
+      }
+    });
+    if (!result.written) return "[错误] 记忆未写入，检查字段是否有效或来源是否已遗忘";
+    return `已写入 ${candidate.layer}${candidate.field ? `（字段 ${candidate.field}）` : ""}: ${candidate.content.slice(0, 60)}${candidate.content.length > 60 ? "…" : ""}${result.syncFailed ? "（正文已保存，向量索引同步失败）" : ""}`;
   },
 });
 

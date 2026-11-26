@@ -172,7 +172,7 @@ describe("call turn submission", () => {
       { role: "user", content: "总算到家了" },
       { role: "assistant", content: "到家就好。" },
       { role: "user", content: "刚才下雨，我全淋湿了" },
-    ]);
+    ], expect.any(AbortSignal));
     expect(mocks.synthesizeByEngine).toHaveBeenLastCalledWith("minimax", expect.objectContaining({ text: "衣服都湿了呀。" }));
     expect(sentAudio.at(-1)?.text).toBe("衣服都湿了呀。");
   });
@@ -247,6 +247,32 @@ describe("call turn submission", () => {
 
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(sentErrors).toContain("TTS 未配置：请在设置中启用 TTS 引擎");
+  });
+
+  it("hangs up while the first prompt is waiting without contacting the model", async () => {
+    let partial!: (text: string) => void;
+    mocks.createAsrStream.mockImplementation((_config, onPartial: (text: string) => void) => {
+      partial = onPartial;
+      return { start: vi.fn(async () => {}), stop: vi.fn(), sendAudio: vi.fn() };
+    });
+    const { waitForStartupTask } = await import("../application/startup-cancellation");
+    const buildPrompt = vi.fn(async (_text: string, signal: AbortSignal) => {
+      await waitForStartupTask(new Promise<void>(() => {}), signal);
+      return "";
+    });
+    setCallSettings(
+      () => ({ provider: "openai", baseUrl: "https://example.test/v1", model: "test", apiKey: "test-key" }),
+      () => ({ ttsEngine: "off" } as never), buildPrompt, async () => null,
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    startCall();
+    partial("用户语音");
+    const turn = endTurn();
+    await vi.waitFor(() => expect(buildPrompt).toHaveBeenCalledOnce());
+    stopCall();
+    await turn;
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("reports missing model config when the getter returns no api key", async () => {

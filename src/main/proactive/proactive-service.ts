@@ -46,6 +46,7 @@ export interface ProactiveChatServiceDeps {
   runModel: (messages: ChatMessage[], deliveryTarget?: ProactiveDeliveryTarget) => Promise<ProactiveModelResult>;
   getFallback: (candidate: ProactiveCandidate) => Promise<ProactiveFallback | null>;
   commitMessage: (input: ProactiveCommitInput) => Promise<ProactiveCommitResult>;
+  recoverCommittedIntent?: (intent: ProactiveCommitIntent) => Promise<ProactiveCommitResult | undefined>;
   /** Local journal commits require a durable intent; legacy external channels do not. */
   requiresDurableIntent?: () => boolean;
   /** Read once per evaluation so a settings change cannot reroute its commit. */
@@ -196,7 +197,22 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       const requiresDurableIntent = deps.requiresDurableIntent?.() ?? (!frozenDeliveryTarget || frozenDeliveryTarget === "local");
       const pendingIntent = requiresDurableIntent ? initialState.pendingCommitIntent : undefined;
       if (pendingIntent) {
-        const pendingDecision = pendingCommitDecision(initialSnapshot, initialState, pendingIntent);
+        if (generating) return;
+        if (deps.recoverCommittedIntent) {
+          generating = true;
+          try {
+            const receipt = await deps.recoverCommittedIntent(pendingIntent);
+            if (receipt) {
+              finalizeDelivery(receipt, pendingIntent.candidate, pendingIntent.source, pendingIntent.generationEpoch, pendingIntent.intentAt, pendingIntent.localDate, pendingIntent.intentId);
+              return;
+            }
+          } finally {
+            generating = false;
+          }
+        }
+        const currentState = deps.loadState();
+        if (currentState.pendingCommitIntent?.intentId !== pendingIntent.intentId) return;
+        const pendingDecision = pendingCommitDecision(deps.getSnapshot(), currentState, pendingIntent);
         if (!pendingDecision.allowed) {
           if (pendingDecision.reason === "stale_epoch") {
             deps.onOpportunityDecision?.(pendingIntent.candidate, "drop", { now: initialSnapshot.now });

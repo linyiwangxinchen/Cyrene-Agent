@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   resetPendingAdjustByRun: vi.fn(),
   runCyreneAgent: vi.fn(),
   relationshipControls: vi.fn(),
+  recordAcceptedCompanionFeedback: vi.fn(),
   taskLearningRevision: vi.fn(),
   taskLessons: vi.fn(),
   recordTaskObservation: vi.fn(),
@@ -46,6 +47,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./relationship/relationship-log", () => ({
   getRelationshipStore: () => ({
     getControls: mocks.relationshipControls,
+    recordAcceptedCompanionFeedback: mocks.recordAcceptedCompanionFeedback,
     getTaskLearningRevision: mocks.taskLearningRevision,
     getTaskLessons: mocks.taskLessons,
     recordTaskObservation: mocks.recordTaskObservation,
@@ -1725,6 +1727,69 @@ describe("agui-bridge background shell smoke (mock sessions, isolated SQLite)", 
   });
   const snapshot = (jobId = "job-smoke") => ({ jobId, pid: null, status: "exited" as const, exitCode: 7,
     reason: null, totalBytes: 4, logFile: "fixture.log", command: "fixture", shell: "cmd", startedAt: "2026-01-01", durationMs: 10, tail: "done" });
+  it.each(["shell-read", "run-create", "build", "build-cleanup-fails"])("settles preparation cancellation at %s before returning", async phase => {
+    const { EventEmitter } = await import("node:events");
+    const { ConversationDatabaseClient } = await import("./storage/conversation-database-client");
+    const { ConversationTranscriptStore } = await import("./orchestrator/conversation-transcript-store");
+    const { ShellCompletionDispatcher } = await import("./orchestrator/shell-completion-dispatcher");
+    const { createPendingTurnLifecycle } = await import("./plugin-host/pending-turn-lifecycle");
+    let release!: () => void;
+    let entered = false;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const pause = async () => { entered = true; await gate; };
+    const publisher = { publishTurnStarted: vi.fn(), publishTurnFinished: vi.fn() };
+    const turns = createPendingTurnLifecycle({ publisher: publisher as never });
+    const resume = vi.spyOn(ShellCompletionDispatcher.prototype, "resume");
+    const originalCall = ConversationDatabaseClient.prototype.call;
+    const database = vi.spyOn(ConversationDatabaseClient.prototype, "call").mockImplementation(async function (method, ...args) {
+      const result = await originalCall.call(this, method, ...args);
+      if (phase === "run-create" && method === "runs.create") await pause();
+      return result;
+    });
+    const originalRead = ConversationTranscriptStore.prototype.readShellCompletionEntries;
+    const read = vi.spyOn(ConversationTranscriptStore.prototype, "readShellCompletionEntries").mockImplementation(async function (...args) {
+      const result = await originalRead.apply(this, args);
+      if (phase === "shell-read") await pause();
+      return result;
+    });
+    const mode = phase === "run-create" ? "chat" : "work";
+    mocks.getSession.mockReturnValue({ id: "cancel-preparation", mode, messages: [], workspaceBinding: { workspaceRoot: mocks.userDataRoot, displayName: "test", boundAt: 1 } });
+    bridge.registerAgUiIpc(async () => {
+      if (phase.startsWith("build")) await pause();
+      return { options: { settings: { provider: "test", baseUrl: "", model: "fake", apiKey: "", contextWindowTokens: 256000 }, messages: [], timeoutMs: 1000, toolSystemContent: "", soulSystemBaseContent: "" }, latestUserText: "test" };
+    }, async () => {}, () => null, undefined, undefined, turns);
+    const sender = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: vi.fn() });
+    const call = mocks.handlers.get(IPC.AGUI_RUN)!({ sender }, { sessionId: "cancel-preparation", assistantTurnId: "answer", userTurnId: "user", currentUser: { turnId: "user", text: "test", visibleContent: "test" } }) as Promise<unknown>;
+    void call.catch(() => {});
+    try {
+      await vi.waitFor(() => expect(entered).toBe(true));
+      const runId = bridge.__getSessionActiveRunForTest("cancel-preparation")!;
+      let acceptedAdjustment = phase.startsWith("build");
+      mocks.resetPendingAdjustByRun.mockImplementation(async () => {
+        expect(bridge.__getSessionActiveRunForTest("cancel-preparation")).toBeDefined();
+        if (phase === "build-cleanup-fails") throw new Error("ADJUST_PERSIST_FAILED");
+        acceptedAdjustment = false;
+        return { ok: true, reset: 1 };
+      });
+      await mocks.handlers.get(IPC.AGUI_CANCEL)!({}, { sessionId: "cancel-preparation", assistantTurnId: "answer" });
+      resume.mockClear();
+      const result = phase === "build-cleanup-fails"
+        ? expect(call).rejects.toThrow("ADJUST_PERSIST_FAILED")
+        : expect(call).resolves.toMatchObject({ status: "cancelled" });
+      release();
+      await result;
+      expect(resume).not.toHaveBeenCalled();
+      expect(mocks.resetPendingAdjustByRun).toHaveBeenCalledWith("cancel-preparation", runId);
+      if (phase !== "build-cleanup-fails") expect(acceptedAdjustment).toBe(false);
+      expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
+      expect(publisher.publishTurnStarted).not.toHaveBeenCalled();
+      expect(turns.pendingCount()).toBe(0);
+      expect(sender.listenerCount("destroyed")).toBe(0);
+      expect(sender.listenerCount("did-start-navigation")).toBe(0);
+      expect(bridge.__getSessionActiveRunForTest("cancel-preparation")).toBeUndefined();
+    } finally { release(); await call.catch(() => {}); resume.mockRestore(); database.mockRestore(); read.mockRestore(); }
+  });
+
   async function start() {
     await mocks.handlers.get(IPC.AGUI_RUN)!({ sender: { isDestroyed: () => false, send: vi.fn() } },
       { sessionId: "original", assistantTurnId: "initial" });
@@ -2447,7 +2512,10 @@ describe("agui-bridge background shell smoke (mock sessions, isolated SQLite)", 
     const { EventEmitter } = await import("node:events");
     const { PassThrough } = await import("node:stream");
     const child = Object.assign(new EventEmitter(), { stdout: new PassThrough(), stderr: new PassThrough() });
-    const spawn = vi.fn(() => child);
+    const spawn = vi.fn(() => {
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    });
     vi.doMock("child_process", () => ({ spawn }));
     const manager = await import("./orchestrator/tools/builtin-tools/shell-job-manager");
     try {
@@ -2466,10 +2534,10 @@ describe("agui-bridge background shell smoke (mock sessions, isolated SQLite)", 
     } finally { await manager.disposeAllShellJobs(); }
   });
 
-  it("cancellation, deleted conversations and shutdown cannot restart the agent", async () => {
+  it.each([false, true])("cancellation (targeted=%s), deletion and shutdown cannot restart the agent", async (targeted) => {
     mocks.skipDefaultRunFinished = true; mocks.neverComplete = true; mocks.completeOnAbort = true;
     const original = await start();
-    mocks.handlers.get(IPC.AGUI_CANCEL)!({}, original.runId);
+    await mocks.handlers.get(IPC.AGUI_CANCEL)!({}, targeted ? { sessionId: "original", assistantTurnId: "initial" } : original.runId);
     await expect.poll(() => bridge.__getSessionActiveRunForTest("original")).toBeUndefined();
     original.onShellJobComplete!(snapshot());
     const { getConversationTranscriptStore } = await import("./orchestrator/conversation-transcript-store");
@@ -2683,6 +2751,7 @@ describe("agui-bridge transcript dispatch", () => {
     mocks.getPendingDispatch.mockReset();
     mocks.composeSession.mockReset();
     mocks.relationshipControls.mockReset().mockReturnValue({ learningRevision: 12 });
+    mocks.recordAcceptedCompanionFeedback.mockReset();
     mocks.taskLearningRevision.mockReset().mockReturnValue(4);
     mocks.taskLessons.mockReset().mockReturnValue([]);
     mocks.recordTaskObservation.mockReset();
@@ -2790,6 +2859,8 @@ describe("agui-bridge transcript dispatch", () => {
         assistantTurnId: "a1",
         currentUser: { turnId: "u1", text: "模型输入", visibleContent: "原文" },
         companionReply: { mode: "help", correction: "不可信的渲染进程值" },
+        memoryScope: "peer:renderer-test",
+        speechScope: "peer:renderer-test",
       })).resolves.toMatchObject({ success: true });
 
       if (scope === "matching-claim" || scope === "settings-unavailable") {
@@ -2804,10 +2875,15 @@ describe("agui-bridge transcript dispatch", () => {
       if (scope === "group-binding") {
         expect(onFinished.mock.calls[0][2]).not.toHaveProperty("companionFeedback");
         expect(mocks.relationshipControls).not.toHaveBeenCalled();
+        expect(mocks.recordAcceptedCompanionFeedback).not.toHaveBeenCalled();
+        expect(seenInputs[0]).not.toHaveProperty("memoryScope", "peer:renderer-test");
       } else if (scope === "settings-unavailable") {
         expect(onFinished.mock.calls[0][2]).not.toHaveProperty("companionFeedback");
       } else {
-        expect(onFinished.mock.calls[0][2]).toHaveProperty("companionFeedback", { text: "原文", userTurnId: "u1", revision: 12 });
+        expect(onFinished.mock.calls[0][2]).toMatchObject({ memoryScope: "owner", companionFeedback: { text: "原文", userTurnId: "u1", revision: 12, source: { userRevision: 1 } } });
+        expect(mocks.recordAcceptedCompanionFeedback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+          speechScope: "owner", text: "原文", userEntryId: expect.any(String), userRevision: 1,
+        }));
       }
       const { getConversationTranscriptStore } = await import("./orchestrator/conversation-transcript-store");
       const transcript = (await getConversationTranscriptStore(root).read("companion-test")).entries;
@@ -2815,6 +2891,63 @@ describe("agui-bridge transcript dispatch", () => {
       expect(JSON.stringify(transcript)).not.toContain("不可信的渲染进程值");
     },
   );
+
+  it("records an accepted direct instruction before model preparation fails", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-accepted-companion-"));
+    roots.push(root);
+    mocks.userDataRoot = root;
+    const { runHandler, onFinished } = await setupBridge(async () => { throw new Error("fixture model unavailable"); });
+    mocks.getSession.mockReturnValue({ id: "companion-unavailable", mode: "chat", messages: [] });
+    const currentUser = { turnId: "u1", text: "以后少问我问题", visibleContent: "以后少问我问题" };
+    await expect(runHandler({ sender: makeSender() }, { sessionId: "companion-unavailable", assistantTurnId: "a1", currentUser })).rejects.toThrow("fixture model unavailable");
+    expect(mocks.recordAcceptedCompanionFeedback).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      conversationId: "companion-unavailable", text: currentUser.visibleContent, userTurnId: "u1", userRevision: 1, speechScope: "owner",
+    }));
+    expect(onFinished).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])("projects captured reply references only on a successful run (%s)", async success => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-companion-references-"));
+    roots.push(root);
+    mocks.userDataRoot = root;
+    const references = [
+      { kind: "preference", topic: "length", conversationId: "source", userTurnId: "source-user" },
+      { kind: "expression", quote: "抱抱", conversationId: "source", userTurnId: "source-other" },
+      { kind: "expression", quote: "慢慢来", conversationId: "source-2" },
+    ];
+    const saved = [references[0], { ...references[1], appeared: true }, { ...references[2], appeared: false }];
+    const { bridge, runHandler } = await setupBridge(async () => ({
+      options: { messages: [] }, latestUserText: "今天很累", companionReferences: references,
+    }));
+    const sessionId = "reference-test";
+    mocks.getSession.mockReturnValue({ id: sessionId, mode: "chat", messages: [] });
+    const send = vi.fn();
+    const previous = { neverComplete: mocks.neverComplete, skipDefaultRunFinished: mocks.skipDefaultRunFinished };
+    mocks.neverComplete = true;
+    mocks.skipDefaultRunFinished = true;
+    try {
+      const { runId } = await runHandler({ sender: { ...makeSender(), send } }, {
+        sessionId, assistantTurnId: "a1", currentUser: { turnId: "u1", text: "今天很累", visibleContent: "今天很累" },
+      });
+      const { transcriptSink } = mocks.runCyreneAgent.mock.calls.at(-1)![0] as {
+        transcriptSink: import("./orchestrator/transcript-sink").TranscriptSink;
+      };
+      await transcriptSink.appendAssistant({ message: { role: "assistant", content: "抱抱你" } });
+      if (success) mocks.finishRuns.get(runId)!({ status: "success" });
+      else mocks.failRuns.get(runId)!();
+      await expect.poll(() => bridge.__getSessionActiveRunForTest(sessionId)).toBeUndefined();
+      const { getConversationTranscriptStore } = await import("./orchestrator/conversation-transcript-store");
+      const { reduceTranscriptProjection } = await import("./orchestrator/conversation-transcript-projection");
+      const snapshot = await getConversationTranscriptStore(root).read(sessionId);
+      const message = reduceTranscriptProjection(snapshot.entries).messages.find(item => item.id === "a1");
+      const live = send.mock.calls.flatMap(([, event]) => event?.name === "cyrene.companion.references" ? [event.value] : []);
+      expect(message).toBeDefined();
+      expect(message?.companionReferences).toEqual(success ? saved : undefined);
+      expect(live).toEqual(success ? [saved] : []);
+    } finally {
+      Object.assign(mocks, previous);
+    }
+  });
 
   it.each(["keep_user", "replace_user"] as const)("rejects stale %s before model startup and releases the session guard", async (disposition) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-stale-"));
@@ -2946,6 +3079,7 @@ describe("agui-bridge transcript dispatch", () => {
 
     await runHandler({ sender }, { assistantTurnId: "fixture-65643",
       messages: [{ role: "user", content: "channel text" }],
+      modelContext: { recipientIsolated: true, messages: [{ role: "user", content: "renderer bypass" }] },
       sessionId: "chat-plain",
     });
 
@@ -3114,7 +3248,8 @@ describe("agui-bridge transcript dispatch", () => {
     expect(model.messages.filter((message) => message.role === "user").map((message) => message.content)).toEqual(["edited"]);
     expect(mocks.retainCompanionFeedbackTurns).toHaveBeenCalledWith("rewind-session", new Set());
     await expect.poll(() => onFinished.mock.calls.length).toBe(1);
-    expect(onFinished.mock.calls[0][2]).not.toHaveProperty("companionFeedback");
+    expect(onFinished.mock.calls[0][2]).toMatchObject({ companionFeedback: { text: "展示编辑", source: { userRevision: 2 } } });
+    expect(mocks.recordAcceptedCompanionFeedback).toHaveBeenCalledWith(expect.objectContaining({ text: "展示编辑", userRevision: 2 }));
     mocks.userDataRoot = "";
   });
 

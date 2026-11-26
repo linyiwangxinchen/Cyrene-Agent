@@ -5,6 +5,8 @@ import { normalizeModelMarkdown } from "./markdown-normalize";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import { useCyreneAvatar } from "../../../hooks/useCyreneAvatar";
 import type { AgentRoundRecord, ChatMessage, ChatMessageChannelSource, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
+import type { CompanionReference } from "../../../../../shared/companion-references";
+import { AssistantCompanionReferences } from "./AssistantCompanionReferences";
 import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import type { CacheDiagnostic } from "../../../../../shared/cache-diagnostic";
 import type { GeneratedImageAttachment } from "../../../../../shared/generated-image";
@@ -93,6 +95,7 @@ export interface ChatMessageItem {
   attachments?: ChatMessageAttachment[];
   /** 上下文容量快照：运行中为每轮 preRequest 实时值，run 结束后为终态快照。 */
   contextUsage?: ContextUsageSnapshot;
+  companionReferences?: CompanionReference[];
   /** 当前运行的非敏感缓存结构诊断；只用于开发/诊断展示，不进入模型上下文。 */
   cacheDiagnostic?: CacheDiagnostic;
   /** 渠道群聊的发送者/引用等隐藏模型上下文；不直接渲染。 */
@@ -212,7 +215,7 @@ export function LastTurnEditAction({ messageId, content, disabled, onBeginEdit }
 }
 
 /** 助手消息 footer：重生成目标经 context 匹配（点击时读最新值），TTS/复制/回复时间与本轮无关 */
-export function AssistantMessageFooter({ content, messageId, streaming, at, conversationId, mode, preferredAddress, revisionBusy, onTtsCacheKey, onRegenerateLastResponse }: {
+export function AssistantMessageFooter({ content, messageId, streaming, at, conversationId, mode, preferredAddress, revisionBusy, onTtsCacheKey, onRegenerateLastResponse, companionReferences }: {
   content: string;
   messageId?: string;
   streaming: boolean;
@@ -221,6 +224,7 @@ export function AssistantMessageFooter({ content, messageId, streaming, at, conv
   mode: ConversationMode;
   preferredAddress: string;
   revisionBusy: boolean;
+  companionReferences?: readonly CompanionReference[];
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void;
   onRegenerateLastResponse?: (userMessageId: string, assistantMessageId: string) => Promise<boolean>;
 }) {
@@ -228,7 +232,8 @@ export function AssistantMessageFooter({ content, messageId, streaming, at, conv
   const cleanText = content.trim();
   const canRegenerate = Boolean(messageId && messageId === lastTurnIds.assistantMessageId);
   if (streaming || (!cleanText && !canRegenerate)) return null;
-  return (
+  return <>
+    {cleanText && <AssistantCompanionReferences references={companionReferences} />}
     <div className="cy-message-actions">
       {cleanText && messageId && conversationId && (
         <TtsButton
@@ -257,7 +262,7 @@ export function AssistantMessageFooter({ content, messageId, streaming, at, conv
         />
       )}
     </div>
-  );
+  </>;
 }
 
 class MarkdownRenderBoundary extends Component<{
@@ -1157,7 +1162,7 @@ function createRoles(
         attachments={info.extraInfo?.attachments}
       />
     ),
-    footer: (content: string, info: { extraInfo?: { messageId?: string; streaming?: boolean; at?: number } }) => (
+    footer: (content: string, info: { extraInfo?: { messageId?: string; streaming?: boolean; at?: number; companionReferences?: CompanionReference[] } }) => (
       <AssistantMessageFooter
         content={content}
         messageId={info.extraInfo?.messageId}
@@ -1169,6 +1174,7 @@ function createRoles(
         revisionBusy={revisionBusy}
         onTtsCacheKey={onTtsCacheKey}
         onRegenerateLastResponse={onRegenerateLastResponse}
+        companionReferences={info.extraInfo?.companionReferences}
       />
     ),
   },
@@ -1431,6 +1437,7 @@ function convertMessage(message: ChatMessageItem, enabledStickers: readonly Enab
         stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
         channelSource: message.channelSource,
         attachments: message.attachments,
+        companionReferences: message.companionReferences,
       },
     });
   }

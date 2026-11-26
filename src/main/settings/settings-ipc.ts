@@ -1,3 +1,4 @@
+import { registerSurfaceSettingsIpc } from "./surface-settings-ipc";
 import { app, BrowserWindow, shell } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
@@ -23,12 +24,13 @@ import { broadcastChatsChanged } from "../chats/chats-ipc";
 import { registerDataDirIpc } from "./data-dir-ipc";
 import { getBrowserPanelController } from "../browser/browser-panel-runtime";
 import { normalizeMemoryMode, type MemoryMode } from "../memory/memory-mode";
-import { getEffectiveUiTheme, watchSystemUiTheme } from "../system-ui-theme";
+import { watchSystemUiTheme } from "../system-ui-theme";
 import { getModelInstallStatus } from "../rag/model-status";
 
 export interface SettingsIpcDependencies {
   get windowManager(): WindowManager | null;
   getGeneralSettings: () => GeneralSettings;
+  surfaceRegistered?: boolean;
   saveGeneralSettings: (settings: Partial<GeneralSettings>) => GeneralSettings;
   getModelSettings: () => ModelSettings;
   saveModelSettings: (settings: Partial<ModelSettings>) => ModelSettings;
@@ -91,11 +93,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeStateService.getState());
   }
 
-  ipc.handle(IPC.SETTINGS_GET_CONFIG, () => getModelSettings());
-  ipc.handle(IPC.SETTINGS_MODEL_PROFILES_LIST, () => ({
-    profiles: listSavedModelProfiles(getModelSettings()),
-    defaultModelProfileId: getModelSettings().defaultModelProfileId,
-  }));
+  if (!deps.surfaceRegistered) registerSurfaceSettingsIpc(ipc, deps);
   ipc.handle(IPC.SETTINGS_MODEL_PROFILE_SAVE, (_event, profile) => {
     const saved = saveModelProfile(profile as Parameters<typeof saveModelProfile>[0]);
     if (saved.added) {
@@ -119,8 +117,6 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     return { profiles: listSavedModelProfiles(saved), defaultModelProfileId: saved.defaultModelProfileId };
   });
 
-  ipc.handle(IPC.SETTINGS_GET_GENERAL, () => getGeneralSettings());
-
   ipc.handle(IPC.SETTINGS_GET_PROACTIVE_STATUS, () => deps.proactiveLifecycle.getProactiveStatus?.() ?? ({
     candidateScore: null,
     targetScore: getGeneralSettings().proactiveTargetScore ?? 60,
@@ -134,10 +130,6 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   ipc.handle(IPC.SETTINGS_SAVE_TIMEOUT_SETTINGS, (_event, settings: Partial<TimeoutSettings>) =>
     saveTimeoutSettings(settings),
   );
-
-  ipc.handle(IPC.UI_THEME_GET, () => getEffectiveUiTheme(getGeneralSettings().uiTheme));
-
-  ipc.handle(IPC.UI_THEME_RADIUS_GET, () => getGeneralSettings().uiThemeRadius);
 
   async function saveGeneralWithEffects(tts: Partial<GeneralSettings>) {
     const before = getGeneralSettings();
@@ -198,8 +190,6 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     const saved = saveGeneralSettings({ ...getGeneralSettings(), petZoom: Number(value) });
     deps.windowManager?.applyPetWindowZoom(saved.petZoom);
   });
-
-  ipc.handle(IPC.MODEL_CONFIG_GET, () => getPublicModelConfig());
 
   ipc.handle(IPC.RUNTIME_STATE_GET, () => runtimeStateService.getState());
 

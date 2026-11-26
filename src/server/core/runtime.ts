@@ -58,7 +58,7 @@ import { formatMemoryLlmError } from "../../main/memory/memory-llm-errors";
 import { createWikiChatSourceReader } from "../../main/memory/wiki-source";
 import { createConversationSessionMigration } from "../../main/orchestrator/conversation-session-migration";
 import { loadSummaryMemoryContext } from "../../main/memory/summary-memory-context";
-import { setMemoryMode, isMemoryEnabled, isSummaryMemoryEnabled } from "../../main/memory/memory-mode";
+import { setMemoryMode, isMemoryEnabled, isPersonalMemoryEnabled, isSummaryMemoryEnabled } from "../../main/memory/memory-mode";
 import { initWorldbook, initVectorMemory, disposeVectorMemory, flushRAGStore, isUserMemoryVectorStoreReady, getEntriesBySource, addL2MemoryVector, deleteUserMemoryVectors } from "../../main/rag";
 import { initReranker, resetReranker } from "../../main/rag/reranker";
 import { memoryStore } from "../../main/memory/memory-store";
@@ -123,7 +123,7 @@ export async function startHeadlessCore() {
   const social = createSocialContextService({ llmClient, enqueueLLMTask });
   const proactive = createProactiveLifecycle({
     loadGeneralSettings, conversationJournal: journal,
-    listPersonMemory: (conversationId, now) => social.store.listActive(conversationId, now),
+    listPersonMemory: (conversationId, now, scope) => social.store.listActive(conversationId, now, scope),
   });
   proactive.initializeProactiveChatService();
   const cita = createCitaService({ llmClient });
@@ -162,6 +162,7 @@ export async function startHeadlessCore() {
   }
   const knowledge = initializeKnowledgeBase(root);
   setMemoryMode(loadModelSettings().memoryMode);
+  await social.scheduler.resumePending().catch(error => console.warn("[SocialMemory] recovery failed", formatMemoryLlmError(error)));
   initializeSummaryMemoryScheduler({ userDataRoot: root, sessions: chatsStore, onError: (conversationId, error) => console.error("[SummaryMemory]", conversationId, formatMemoryLlmError(error)) });
   enableSummaryMemoryScheduler(isSummaryMemoryEnabled());
   const migration = createConversationSessionMigration(root);
@@ -169,9 +170,11 @@ export async function startHeadlessCore() {
   await enableWikiMemoryScheduler(loadModelSettings().memoryMode === "wiki");
   await initWorldbook();
   async function switchMemoryMode(mode: any) {
+    if (mode !== "off" && !isPersonalMemoryEnabled()) await social.scheduler.discardPending();
+    setMemoryMode(mode);
+    if (mode === "off") await social.scheduler.discardPending();
     enableSummaryMemoryScheduler(mode === "summary");
     await enableWikiMemoryScheduler(mode === "wiki");
-    setMemoryMode(mode);
     if (mode === "vector") {
       const settings = loadModelSettings();
       await initVectorMemory("auto", undefined, undefined, settings.embeddingModel, settings.embeddingDimensions);
@@ -208,7 +211,7 @@ export async function startHeadlessCore() {
     citaService: cita, socialContextScheduler: social.scheduler, chatsStore,
     buildSummaryMemoryContext: id => loadSummaryMemoryContext({ conversationId: id, userDataRoot: root, getSessionRecord: chatsStore.getSessionRecord }),
     scheduleSummaryTurn, scheduleWikiTurn, socialAtomStore: social.store,
-    buildPluginPromptContext: (input, scope) => pluginPromptRegistry.build(input, input.privateCompanion && input.conversationId ? getRelationshipStore().blockedExpressions(input.conversationId, input.userText, scope) : undefined),
+    buildPluginPromptContext: (input, scope) => pluginPromptRegistry.build(input, input.privateCompanion && input.conversationId ? getRelationshipStore().blockedExpressions(input.conversationId, input.userText, scope) : undefined, loadGeneralSettings().conversationExpressionSources),
     publishPluginHostEvent: (event, payload) => plugins ? plugins.publishHostEvent(event, payload) : Promise.resolve(),
     publishToolFinished: event => lifecycle.publishToolFinished(event), transcriptCompactor,
   });

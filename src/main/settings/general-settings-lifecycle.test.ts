@@ -4,6 +4,7 @@ import type { GeneralSettings } from "./general-settings";
 import type { WindowManager } from "../windows/window-manager";
 import { applyGeneralSettings, handleGeneralSettingsChanged } from "./general-settings-lifecycle";
 import { syncLaunchAtLogin } from "./launch-at-login";
+import { addMcpServer, listMcpServers, removeMcpServer } from "../orchestrator/mcp-manager";
 
 const themeMock = vi.hoisted(() => ({ dark: false }));
 
@@ -15,10 +16,10 @@ vi.mock("../windows/broadcast", () => ({ broadcastToAllWindows: vi.fn() }));
 vi.mock("../windows/window-state", () => ({ setGetCurrentAppIconPath: vi.fn() }));
 vi.mock("../locale-context", () => ({ updateLocaleContext: vi.fn() }));
 vi.mock("../orchestrator/mcp-manager", () => ({
-  addMcpServer: vi.fn(), listMcpServers: () => [], removeMcpServer: vi.fn(),
+  addMcpServer: vi.fn(), listMcpServers: vi.fn(() => []), removeMcpServer: vi.fn(),
 }));
 vi.mock("../app-icon", () => ({ getAppIconPath: vi.fn() }));
-vi.mock("../orchestrator/tools/registry/tool-registration", () => ({ syncBuiltInToolToggles: vi.fn() }));
+vi.mock("../orchestrator/tools/registry/tool-toggles", () => ({ syncBuiltInToolToggles: vi.fn() }));
 vi.mock("./model-settings", () => ({ loadModelSettings: vi.fn(), getPublicModelConfig: vi.fn() }));
 vi.mock("./launch-at-login", () => ({ syncLaunchAtLogin: vi.fn() }));
 
@@ -67,6 +68,15 @@ describe("general settings window lifecycle", () => {
     handleGeneralSettingsChanged(h.settings, { ...h.settings, asrEngine: "local" }, h.deps);
     expect(h.isVisible()).toBe(true);
     expect(h.windowManager.hidePetWindow).not.toHaveBeenCalled();
+  });
+
+  it("leaves the search MCP alone when companion preferences change", () => {
+    const h = createHarness();
+    const before: GeneralSettings = { ...h.settings, searchEngine: "minimax", searchMinimaxKey: "fixture-minimax-key" };
+    handleGeneralSettingsChanged(before, { ...before, proactiveChatMode: "on" }, h.deps);
+    expect(listMcpServers).not.toHaveBeenCalled();
+    expect(removeMcpServer).not.toHaveBeenCalled();
+    expect(addMcpServer).not.toHaveBeenCalled();
   });
 
   it.each([true, false])("applies an explicit visibility change to %s", (visible) => {

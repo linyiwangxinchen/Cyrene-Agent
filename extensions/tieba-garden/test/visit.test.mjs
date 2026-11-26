@@ -57,6 +57,27 @@ test("evidence-backed speaking style persists across reload and follows learning
   assert.equal(speakingStyle(plugin.restart().learnedExpressions(), input), "");
 });
 
+test("imported evidence keeps its provenance and a forgotten phrase cannot return on a public reread", async () => {
+  const plugin = fixture({
+    fetch: () => '<div id="post_content_34">慢慢，来</div>',
+    generate: async messages => {
+      const quote = JSON.parse(messages[1].content).floors[0].body;
+      return JSON.stringify({ summary: "留一点空间接话", evidence: [quote], expressions: [{ quote, scene: "赶工", style: "pacing" }] });
+    },
+  });
+  await plugin.invoke("save", { learn: true });
+  await plugin.invoke("read", { url: "/p/61", excerpt: "慢慢来" });
+  const imported = plugin.learnedExpressions()[0];
+  assert.equal(imported.origin.kind, "imported_excerpt");
+  await plugin.invoke("read", { url: "/p/62" });
+  assert.equal(plugin.learnedExpressions().find(item => item.tid === "62").origin.kind, "forum_public");
+  assert.equal(plugin.learnedExpressions().find(item => item.tid === "61").origin.kind, "imported_excerpt");
+  await plugin.invoke("forget", { id: imported.id });
+  const restarted = plugin.restart();
+  await restarted.invoke("read", { url: "/p/61", refresh: true });
+  assert.equal(restarted.learnedExpressions().some(item => item.tid === "61"), false);
+});
+
 test("manual visit stores one completed post, skips previously seen posts and rotates after restart", async () => {
   const clock = { at: 1000 };
   const plugin = fixture({ clock, fetch: path => path.startsWith("/f?") ? listing(path.includes("first") ? [10, 11] : [20, 21]) : note });

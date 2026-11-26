@@ -1,5 +1,6 @@
 import { createForum } from "./lib/forum.mjs";
 import { speakingStyle } from "./lib/speaking-style.mjs";
+import { tiebaExpressionEvidence } from "./lib/notes.mjs";
 import { registerReadingContext } from "./reading-context.mjs";
 export { floorsFromHtml, repliesFromHtml, threadId } from "./lib/public-pages.mjs";
 
@@ -10,6 +11,7 @@ export function register(ctx) {
     privateCompanionOnly: true,
     sources: ["conversation"],
     listExpressions: forum.learnedExpressions,
+    listExpressionEvidence: ({ limit }) => tiebaExpressionEvidence(forum.learnedExpressions(), limit),
     provide: input => speakingStyle(forum.learnedExpressions(), input),
   });
   registerReadingContext(ctx, forum.readings, forum.learningEnabled);

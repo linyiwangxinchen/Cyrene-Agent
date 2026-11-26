@@ -66,12 +66,16 @@ export interface ProactiveEvaluationStatus {
 /** Durable intent captured before delivery; retries must replay this exact payload. */
 export interface ProactiveDeliveryContext {
   relationshipRevision: number;
+  memoryMode?: string;
   composedAt?: number;
   timezone?: string;
   conversationId?: string;
   sessionId?: string;
   targetId?: string;
   threadId?: string;
+  recipientScope?: string;
+  bindingUpdatedAt?: number;
+  expression?: { query: string; evidenceKey: string };
   followupId?: string;
 }
 export interface ProactiveCommitIntent {

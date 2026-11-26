@@ -8,7 +8,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import WebSocket from "ws";
 import { GardenStore } from "../../extensions/bili-garden/lib/store.mjs";
-import { rememberExpression } from "../../extensions/bili-garden/lib/expressions.mjs";
+import { locateVideoExpression, rememberExpression } from "../../extensions/bili-garden/lib/expressions.mjs";
 import {
   responseBody,
   streamEvents,
@@ -21,12 +21,19 @@ const {
 const dataDir = await mkdtemp(path.join(os.tmpdir(), "cyrene-expression-"));
 const garden = new GardenStore(path.join(dataDir, "plugin-data/bili-garden"));
 garden.saveConfig({ learnExpressions: true });
+const biliFixtureId = "BV1JcnW6pEFT";
+const biliEvidence = { bvid: biliFixtureId, source: "subtitle", text: "今天轮到花盆加班",
+  segments: [{ from: 8, to: 12, text: "今天轮到花盆加班" }] };
+garden.put("evidence", biliFixtureId, biliEvidence);
+const biliExcerpt = locateVideoExpression(biliFixtureId, "花盆加班", { video: biliEvidence });
 rememberExpression(
   garden,
-  "https://www.bilibili.com/video/BV1JcnW6pEFT",
+  biliExcerpt.source.url,
   "花盆加班",
   "阳台浇水",
-  "今天轮到花盆加班",
+  biliExcerpt.text,
+  {},
+  biliExcerpt.source,
 );
 garden.close();
 const captured = [];
@@ -36,8 +43,8 @@ const liveThreadTitle = "夜景摄影讨论";
 const liveThreadQuote = "试试等日落后半小时再拍。";
 const liveThreadSummary = "建议在傍晚光线渐暗时拍夜景。";
 const importedThreadUrl = "https://tieba.baidu.com/p/12345";
-const styleHeader = "贴吧读帖里积累的接话习惯";
-const styleTechnique = "先顺着对方刚提到的事回应";
+const styleHeader = "外部阅读中积累的接话方式";
+const styleTechnique = "先接住对方表达的感受或进展";
 const readingHeader = "近期实读的贴吧手记";
 const styleReply = "原来如此。你想从哪儿聊起？";
 
@@ -66,11 +73,29 @@ async function seedTiebaLearning(root) {
     source,
     at,
     scene: "夜景摄影",
-    delivery: "先接住对方分享的经验，再谈自己的感受",
+    style: "acknowledge",
+    origin: { kind: "forum_public", id: "23456:post:456", unit: "23456", url: source },
+  }, {
+    id: "second-style",
+    tid: "34567",
+    quote: "你终于把那段路走完啦。",
+    source: "https://tieba.baidu.com/p/34567#post_content_678",
+    at,
+    scene: "进展与庆祝",
+    style: "acknowledge",
+    origin: { kind: "forum_public", id: "34567:post:678", unit: "34567", url: "https://tieba.baidu.com/p/34567#post_content_678" },
   }]));
 }
 
 const gateway = createServer(async (req, res) => {
+  if (req.method === "GET") {
+    if (req.url === "/browser-screenshot-fixture") {
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      return res.end('<!doctype html><title>Screenshot fixture</title><h1>Local fixture page</h1>');
+    }
+    res.statusCode = 404;
+    return res.end();
+  }
   const parts = [];
   for await (const chunk of req) parts.push(chunk);
   const body = JSON.parse(Buffer.concat(parts).toString());
@@ -94,13 +119,31 @@ const gateway = createServer(async (req, res) => {
         ? "好家伙，周末想去哪逛逛？"
         : "已经收到。";
   const transport = req.url.includes("/responses") ? "responses" : "openai";
+  let fixtureTool;
+  if (transport === "responses" && prompt.includes("DESKTOP_BROWSER_IMAGE_CHECK")) {
+    const requests = (body.input ?? []).filter(item => item.type === "function_call");
+    const wanted = ["browser_control_start", "browser_screenshot", "browser_control_stop"]
+      .find(name => !requests.some(item => item.name === name));
+    const available = (body.tools ?? []).map(tool => tool.name);
+    const searched = requests.some(item => item.name === "tool_search" && JSON.parse(item.arguments).query === `select:${wanted}`);
+    if (wanted && available.includes(wanted)) fixtureTool = { name: wanted, args: {}, id: wanted };
+    else if (wanted && available.includes("tool_search") && !searched) {
+      fixtureTool = { name: "tool_search", args: { query: `select:${wanted}` }, id: `search_${wanted}` };
+    }
+  }
+  const fixtureOptions = fixtureTool ? { tool: true, toolInput: fixtureTool.args, text: answer } : { text: answer };
+  const encode = (value) => {
+    const json = JSON.stringify(value);
+    return fixtureTool ? json.replace(/"weather"/g, JSON.stringify(fixtureTool.name))
+      .replace(/"(call|fc)_test"/g, (_match, prefix) => JSON.stringify(`${prefix}_${fixtureTool.id}`)) : json;
+  };
   res.writeHead(200, {
     "Content-Type": body.stream ? "text/event-stream" : "application/json",
   });
   if (!body.stream)
-    return res.end(JSON.stringify(responseBody(transport, { text: answer })));
-  for (const e of streamEvents(transport, { text: answer }))
-    res.write("data: " + JSON.stringify(e) + "\n\n");
+    return res.end(encode(responseBody(transport, fixtureOptions)));
+  for (const e of streamEvents(transport, fixtureOptions))
+    res.write("data: " + encode(e) + "\n\n");
   res.end("data: [DONE]\n\n");
 });
 const listen = (server) =>
@@ -239,7 +282,8 @@ try {
     const { verifyDesktop } = await import(
       "./companion-expressions-desktop.mjs"
     );
-    await verifyDesktop(profile, captured, { seedTiebaLearning, liveThreadQuote, styleHeader });
+    await verifyDesktop(profile, captured, { seedTiebaLearning, liveThreadQuote, styleHeader,
+      browserFixtureUrl: `http://127.0.0.1:${gateway.address().port}/browser-screenshot-fixture` });
   }
   await listen(handle.server);
   await http(
@@ -276,9 +320,11 @@ try {
     return reply.data;
   };
   await panel("save", { learn: true });
+  await invoke("settings:save-general", { conversationExpressionSources: [] });
   const beforeLearning = await ask("chat", "你今天过得怎么样？");
   assert.ok(!beforeLearning.modelInput.includes(styleHeader));
   assert.ok(beforeLearning.modelInput.includes(liveThreadSummary));
+  await invoke("settings:save-general", { conversationExpressionSources: ["tieba-garden", "bili-garden"] });
   const fixtureCookie = "__bid_n=web_tieba_fixture_browser; BDUSS=web_tieba_fixture~session; ab_sr=web_tieba_fixture=";
   assert.equal((await panel("auth-save", { cookie: fixtureCookie })).auth.hasCookie, true);
   const secretsDir = path.join(dataDir, "plugin-data", "tieba-garden", "secrets");
@@ -317,6 +363,11 @@ try {
         { name: cookie.slice(0, i), value: cookie.slice(i + 1), url: base },
       ]);
       const page = await context.newPage();
+      page.on("response", (response) => {
+        if (response.status() !== 403 || !/\/api\/core\/(?:invoke|send)$/u.test(new URL(response.url()).pathname)) return;
+        const channel = response.request().postDataJSON()?.channel;
+        if (typeof channel === "string") console.warn("Web fixture core request rejected", channel);
+      });
       const visits = [];
       const replyActions = [];
       const draftContent = "等日落后半小时的建议很实用。";
@@ -525,6 +576,9 @@ try {
   assert.ok(resumed.modelInput.includes(styleHeader));
   assert.ok(!resumed.modelInput.includes(quote));
   await panel("forget", { id: newSample.id });
+  assert.ok(!(await graph()).nodes.some((n) => n.label === quote));
+  assert.ok((await ask("chat", "今天有什么想聊的？")).modelInput.includes(styleHeader));
+  await panel("forget", { id: "second-style" });
   const forgot = await ask("chat", "今天有什么想聊的？");
   assert.ok(!forgot.modelInput.includes(styleHeader));
   console.log("PASS persisted Tieba style, recent reading, explicit sources and private chat isolation");

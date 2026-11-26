@@ -28,7 +28,7 @@ test("the bundled Bili Garden Python scripts are unpacked for external interpret
 test("the assisted installer stores launch preferences under the application package name", () => {
   assert.match(
     installerInclude,
-    /\$APPDATA\\\$\{APP_PACKAGE_NAME\}\\installer-options\.json/,
+    /!insertmacro CyreneSaveLaunchAtLoginSelection "\$APPDATA\\\$\{APP_PACKAGE_NAME\}"/,
   );
   assert.doesNotMatch(
     installerInclude,

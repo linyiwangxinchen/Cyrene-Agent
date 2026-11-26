@@ -47,6 +47,10 @@ import { closeConversationDatabases } from "../storage/conversation-database-cli
 import { createProactiveLifecycle } from "./proactive-lifecycle";
 import { loadProactiveState } from "./proactive-state-store";
 import type { GeneralSettings } from "../settings/general-settings";
+import { resolveChannelMemoryScope } from "../channels/memory-scope";
+
+const sender = { channel: "wechat", chatType: "private", accountId: "fixture-bot", senderId: "wx-owner" } as const;
+const channelSource = { channel: sender.channel, chatType: sender.chatType, recipientScope: resolveChannelMemoryScope(sender)! };
 
 afterEach(async () => {
   await fixture.adapter?.stop();
@@ -66,7 +70,8 @@ function createBoundWechatJournal(lastAt: number): ConversationJournalService {
   fs.writeFileSync(path.join(fixture.directory, "weixin", "credentials.json"), JSON.stringify(credentials));
   new WechatReplyContextStore(path.join(fixture.directory, "weixin", "reply-context.json")).remember(credentials, "wx-owner", "restored-context");
   fixture.bindings = new ChannelConversationBindingStore(path.join(fixture.directory, "channels", "context-bindings.json"));
-  fixture.bindings.observe({ sessionId: "wx-session", channel: "wechat", chatId: "wx-owner", chatType: "private", lastAt });
+  fixture.bindings.observe({ sessionId: "wx-session", channel: "wechat", chatId: "wx-owner", chatType: "private", lastAt,
+    accountId: sender.accountId, recipientScope: channelSource.recipientScope });
   fixture.bindings.bind("wx-session", "bound-local-chat");
   return new ConversationJournalService(new ConversationTranscriptStore(fixture.directory));
 }
@@ -124,13 +129,14 @@ describe("assembled proactive WeChat delivery", () => {
     const priorText = "今天人家整理收到的故事时，有一小段还没想明白，就先留一点空白，等下次再接着试……♪";
     const repeatedText = "今天在村边散步时，我又把那条没想明白的问题写进手记了。先留一点空白，等下次有了新线索再继续写♪";
     const freshText = "刚刚翻旧书，掉出来一张晒干的银杏叶。夹在那一页太久，连叶脉都印在纸上了。";
-    await journal.appendUser("bound-local-chat", { turnId: "question", text: userText, at: priorAt });
+    const question = await journal.appendUser("bound-local-chat", { turnId: "question", text: userText, at: priorAt });
+    await journal.appendPresentationNext("bound-local-chat", question.id, "test:channel-user", { channelSource });
     async function appendDeliveredProactive(conversationId: string, runId: string, content: string) {
       const assistantTurnId = `${runId}:assistant`;
       const sink = journal.createRunSink({ conversationId, runId, assistantTurnId });
       const messageId = await sink.appendAssistant({ message: { role: "assistant", content }, roundId: "proactive" });
       await journal.appendPresentationNext(conversationId, messageId, `${runId}:presentation`, {
-        content, channelSource: { channel: "wechat", chatType: "private" },
+        content, channelSource,
         runSnapshot: { runId, status: "terminal", updatedAt: priorAt },
       });
       await journal.appendDeliveryReceipt(conversationId, { assistantTurnId, channel: "wechat", runId, status: "delivered" });
@@ -195,7 +201,8 @@ describe("assembled proactive WeChat delivery", () => {
     vi.setSystemTime(priorAt);
     const journal = createBoundWechatJournal(priorAt);
     const userText = "我今天准备考试，有一点紧张";
-    await journal.appendUser("bound-local-chat", { turnId: "exam", text: userText, at: priorAt });
+    const exam = await journal.appendUser("bound-local-chat", { turnId: "exam", text: userText, at: priorAt });
+    await journal.appendPresentationNext("bound-local-chat", exam.id, "test:channel-user", { channelSource });
     vi.setSystemTime(beforeMidnight);
 
     const freshText = "想到你说准备考试的时候有点紧张。现在感觉好一点了吗？";

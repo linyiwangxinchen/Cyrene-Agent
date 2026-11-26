@@ -139,6 +139,7 @@ export class QqBotAdapter implements ChannelAdapter {
   onMessageAccepted: ((msg: IncomingMessage) => Promise<void>) | null = null;
 
   private api: QqBotApiClient | null = null;
+  private memoryAccountId?: string;
   private ws: QqBotWsClient | null = null;
   private status: ChannelStatus = { enabled: false, phase: "offline", message: "未启用" };
   private botNickname = "";
@@ -165,13 +166,16 @@ export class QqBotAdapter implements ChannelAdapter {
       return;
     }
     this.setStatus({ enabled: true, phase: "starting", message: "正在连接 QQ 开放平台网关" });
-    this.api = new QqBotApiClient({ appId: config.appId, clientSecret: config.appSecret });
+    const api = this.api = new QqBotApiClient({ appId: config.appId, clientSecret: config.appSecret });
+    this.memoryAccountId = config.appId;
     try {
       const gatewayUrl = await this.api.getGatewayUrl();
       this.ws = new QqBotWsClient({
         gatewayUrl,
         getAccessToken: () => this.api!.getAccessToken(),
-        onDispatch: (type, data) => this.handleDispatch(type, data),
+        onDispatch: (type, data) => {
+          if (this.api === api) this.handleDispatch(type, data);
+        },
         onReadyChange: (ready) => {
           this.wsReady = ready;
           this.setStatus({
@@ -215,6 +219,11 @@ export class QqBotAdapter implements ChannelAdapter {
     const config = loadChannelsSettings().qqbot;
     if (!config.enabled) return { enabled: false, phase: "offline", message: "未启用" };
     return this.status;
+  }
+
+  getMemoryAccountId(): string | undefined {
+    const configured = loadChannelsSettings().qqbot.appId;
+    return this.api && this.memoryAccountId === configured ? this.memoryAccountId : undefined;
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; detail?: Record<string, unknown> }> {
@@ -329,12 +338,14 @@ export class QqBotAdapter implements ChannelAdapter {
       });
     }
 
-    void this.deliverIncoming(incoming);
+    const accountId = this.getMemoryAccountId();
+    void this.deliverIncoming({ ...incoming, accountId });
   }
 
   private async deliverIncoming(incoming: IncomingMessage): Promise<void> {
     try {
       await this.downloadAttachments(incoming);
+      if (incoming.accountId && incoming.accountId !== this.getMemoryAccountId()) return;
       if (this.onMessageAccepted) await this.onMessageAccepted(incoming);
       else await this.onMessage?.(incoming);
     } catch (error) {

@@ -7,11 +7,15 @@
 //
 // 复用现有 RAG 引擎（addMemory / searchHistoryEntries），不另建存储层。
 
-import { addMemory, searchHistoryEntries } from "../../rag";
+import { addMemory, getEntriesBySource, searchHistoryEntries } from "../../rag";
 import { toolRegistry } from "./registry/tool-registry";
 import { currentUserTimezone } from "./built-in-tools";
 import { getDateLocale } from "../../locale-context";
-import { isMemoryEnabled } from "../../memory/memory-mode";
+import { getMemoryModeVersion, isMemoryEnabled } from "../../memory/memory-mode";
+import { isOwnerMemoryScope } from "../../memory/memory-scope";
+import { activeMemorySourceEntry, activeOwnerSourceKeys } from "../../memory/memory-owner-recall";
+import { isForgottenSource, memorySourceKey } from "../../memory/memory-source-policy";
+import { memoryStore } from "../../memory/memory-store";
 
 const LOG_PREFIX = "[History]";
 
@@ -24,19 +28,35 @@ export async function indexConversationTurn(
   sessionId: string,
   userText: string,
   assistantText: string,
+  source?: { memoryScope?: string; userTurnId?: string; assistantEntryId?: string },
 ): Promise<void> {
-  if (!isMemoryEnabled()) return;
+  if (!isMemoryEnabled() || !isOwnerMemoryScope(source?.memoryScope) || !source?.userTurnId || !source.assistantEntryId) return;
+  const version = getMemoryModeVersion();
   const ts = Date.now();
   try {
+    const userEntryId = await activeMemorySourceEntry(sessionId, { userTurnId: source.userTurnId, assistantEntryId: source.assistantEntryId });
+    if (!userEntryId?.startsWith("user:v1:") || getMemoryModeVersion() !== version) return;
+    const metadata = { sessionId, userEntryId, memoryScope: source.memoryScope, ts };
     if (userText) {
-      await addMemory(userText, "chat_history", { sessionId, role: "user", ts });
+      await addMemory(userText, "chat_history", { ...metadata, role: "user" });
     }
-    if (assistantText) {
-      await addMemory(assistantText, "chat_history", { sessionId, role: "assistant", ts });
+    if (assistantText && getMemoryModeVersion() === version) {
+      await addMemory(assistantText, "chat_history", { ...metadata, role: "assistant" });
     }
   } catch (e) {
     console.warn(LOG_PREFIX, "索引对话失败:", e);
   }
+}
+
+async function getVisibleHistoryIds(): Promise<string[]> {
+  const entries = getEntriesBySource("chat_history").flatMap(entry => {
+    const { sessionId, userEntryId, memoryScope } = entry.metadata ?? {};
+    return typeof sessionId === "string" && typeof userEntryId === "string" && memoryScope === "owner"
+      ? [{ id: entry.id, source: { conversationId: sessionId, messageId: userEntryId } }] : [];
+  });
+  const active = await activeOwnerSourceKeys(entries.map(entry => entry.source));
+  const state = await memoryStore.load();
+  return entries.filter(({ source }) => active.has(memorySourceKey(source)) && !isForgottenSource(state, source)).map(entry => entry.id);
 }
 
 /** 注册 recall_history 工具。在 startup 调一次。 */
@@ -56,6 +76,8 @@ export function registerRecallHistoryTool(): void {
       "- 用户从没提过的事（查不到就老实说不知道）\n\n" +
       "参数：query（必填，检索关键词或自然语言问题），days（可选，限制最近 N 天，默认 30）。",
     enabled: true,
+    privateContextOnly: true,
+    needsContext: true,
     risk: "safe",
     effectKind: "read" as const,
     verificationPolicy: "none" as const,
@@ -67,8 +89,9 @@ export function registerRecallHistoryTool(): void {
       },
       required: ["query"],
     },
-    execute: async (args) => {
-      if (!isMemoryEnabled()) return "[recall_history] 记忆模式已关闭，历史召回当前不可用";
+    execute: async (args, context) => {
+      if (!isMemoryEnabled() || !isOwnerMemoryScope(context?.memoryScope)) return "[错误] 当前上下文不能召回私人聊天记录";
+      const version = getMemoryModeVersion();
       const query = String(args.query || "").trim();
       if (!query) return "[错误] query 不能为空";
 
@@ -77,10 +100,13 @@ export function registerRecallHistoryTool(): void {
 
       let hits;
       try {
-        hits = await searchHistoryEntries(query, 5);
+        hits = await searchHistoryEntries(query, 5, await getVisibleHistoryIds());
+        const active = new Set(await getVisibleHistoryIds());
+        hits = hits.filter(hit => active.has(hit.id));
       } catch (e) {
         return "[recall_history] 检索失败：" + (e instanceof Error ? e.message : String(e));
       }
+      if (getMemoryModeVersion() !== version) return "[错误] 记忆模式已变更，未读取历史记录";
 
       const filtered = hits.filter(h => h.createdAt >= cutoff);
 

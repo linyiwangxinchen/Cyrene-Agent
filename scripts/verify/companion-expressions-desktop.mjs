@@ -6,7 +6,7 @@ import { _electron as electron } from "playwright";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 
-export async function verifyDesktop(profile, captured, { seedTiebaLearning, liveThreadQuote, styleHeader }) {
+export async function verifyDesktop(profile, captured, { seedTiebaLearning, liveThreadQuote, styleHeader, browserFixtureUrl }) {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "cyrene-expression-desktop-"),
   );
@@ -88,7 +88,7 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
     }
     assert.ok(page, "desktop chat window");
     await page.waitForFunction(() => !!window.pluginPanel);
-    const check = await page.evaluate(async () => {
+    const check = await page.evaluate(async ({ browserFixtureUrl, temporaryWorkspace }) => {
       await window.plugins.setEnabled("tieba-garden", true);
       const panel = (...args) =>
         window.pluginPanel.invoke("tieba-garden", "forum", args);
@@ -109,11 +109,15 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
         throw Error(read.data.reading?.analysisError || "桌面读帖手记未生成");
       }
       const graph = await window.memoryPanel.getGraph();
-      async function ask(text) {
+      async function ask(text, mode = "chat") {
         const session = await window.chatStore.create({
-          mode: "chat",
+          mode,
           title: "desktop fixture",
         });
+        if (mode === "work") {
+          const binding = await window.chatStore.setWorkspace(session.id, temporaryWorkspace);
+          if (!binding.ok) throw Error(JSON.stringify(binding));
+        }
         let stopListening;
         let timeout;
         const outcome = new Promise((resolve) => {
@@ -139,13 +143,15 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
           stopListening();
         }
       }
-      return {
-        source: graph.nodes.some((n) => n.label === "气泡锚点"),
-        everyday: await ask("周末准备做点什么？ DESKTOP_STYLE_CHECK"),
-        explicit: await ask("你最近在贴吧看了什么？ DESKTOP_READING_CHECK"),
-      };
-    });
-    assert.deepEqual(check, { source: true, everyday: "RUN_FINISHED", explicit: "RUN_FINISHED" });
+      const everyday = await ask("周末准备做点什么？ DESKTOP_STYLE_CHECK");
+      const explicit = await ask("你最近在贴吧看了什么？ DESKTOP_READING_CHECK");
+      await window.browserPanel.setBounds({ x: 0, y: 0, width: 500, height: 440 });
+      const navigation = await window.browserPanel.navigate(browserFixtureUrl);
+      if (!navigation.ok) throw Error(JSON.stringify(navigation));
+      const browser = await ask("查看已打开的本地测试页截图。DESKTOP_BROWSER_IMAGE_CHECK", "work");
+      return { source: graph.nodes.some((n) => n.label === "气泡锚点"), everyday, explicit, browser };
+    }, { browserFixtureUrl, temporaryWorkspace: paths.documents });
+    assert.deepEqual(check, { source: true, everyday: "RUN_FINISHED", explicit: "RUN_FINISHED", browser: "RUN_FINISHED" });
     const secretsDir = path.join(paths.userData, "plugin-data", "tieba-garden", "secrets");
     const secretFiles = await readdir(secretsDir);
     assert.equal(secretFiles.length, 1);
@@ -170,6 +176,13 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
     const explicit = inputs("DESKTOP_READING_CHECK");
     assert.match(explicit, /plugin:tieba-garden:readings/);
     assert.ok(explicit.includes("https://tieba.baidu.com/p/54321"));
+    const screenshot = captured.filter(body => JSON.stringify(body.input).includes("DESKTOP_BROWSER_IMAGE_CHECK"))
+      .flatMap(body => (body.input ?? []).filter(item => item.type === "function_call_output" && item.call_id === "call_browser_screenshot"))
+      .flatMap(item => Array.isArray(item.output) ? item.output : [])
+      .find(part => part.type === "input_image" && part.image_url?.startsWith("data:image/png;base64,"));
+    assert.ok(screenshot, "Windows browser viewport reaches the Responses model as an actual tool image");
+    assert.ok(Buffer.from(screenshot.image_url.split(",")[1], "base64").subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
+    console.log("PASS Windows Electron browser screenshot reaches the Responses tool result");
     console.log(
       "PASS Windows Electron main, plugin panel IPC, graph and real Responses request",
     );

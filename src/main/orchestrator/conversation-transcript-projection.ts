@@ -40,6 +40,8 @@ export interface MaterializedTranscript {
   continuity?: import("./harness/task-continuity").TaskContinuity;
   todoItemsSource?: "transcript" | "legacy_run_store" | "legacy_presentation";
   throughSeq: number;
+  /** A channel recipient can see this projection only. Never reload a shared checkpoint. */
+  recipientIsolated?: true;
 }
 
 /** Canonical messages plus the active transcript row that produced each one. */

@@ -67,19 +67,27 @@ const fixture = createServer(async (req, res) => {
     modelRequests.push(body);
     const messages = body.messages || [], index = messages.findLastIndex(m => m.role === 'user' && typeof m.content === 'string' && m.content.startsWith('case:'));
     const user = messages[index]?.content || '', tools = body.tools?.map(t => t.function?.name) || [];
+    const toolCalls = messages.slice(index + 1).flatMap(message => message.tool_calls ?? []);
+    const called = name => toolCalls.some(call => call.function?.name === name);
     let name, args;
     if (user.includes('case:mcp-browser')) {
-      const called = messages.slice(index + 1).flatMap(message => message.tool_calls ?? []).map(call => call.function?.name);
-      if (!called.includes('playwright-mcp-browser_navigate')) {
+      if (!called('playwright-mcp-browser_navigate')) {
         name = 'playwright-mcp-browser_navigate'; args = { url: fixtureUrl + '/mcp-browser-fixture' };
-      } else if (!called.includes('playwright-mcp-browser_evaluate')) {
+      } else if (!called('playwright-mcp-browser_evaluate')) {
         name = 'playwright-mcp-browser_evaluate'; args = { function: '() => document.body.innerText' };
       }
-      if (name) assert.ok(tools.includes(name), `Tool ${name} missing from model request`);
-    } else if (!messages.slice(index + 1).some(m => m.role === 'tool') && user.includes('case:mcp-')) {
+    } else if (user.includes('case:mcp-')) {
       const id = user.includes('unknown') ? 'accept-http-unknown' : user.includes('http') ? 'accept-http-echo' : user.includes('sse') ? 'accept-sse-echo' : 'filesystem-mcp-read_text_file';
-      assert.ok(tools.includes(id), `Tool ${id} missing from model request`);
-      name = id; args = id.endsWith('unknown') ? {} : id.endsWith('echo') ? { value: user } : { path: path.join(workspace, 'read-proof.txt') };
+      if (!called(id)) {
+        name = id; args = id.endsWith('unknown') ? {} : id.endsWith('echo') ? { value: user } : { path: path.join(workspace, 'read-proof.txt') };
+      }
+    }
+    if (name && !tools.includes(name)) {
+      const query = `select:${name}`;
+      const searched = toolCalls.some(call => call.function?.name === 'tool_search' && JSON.parse(call.function.arguments).query === query);
+      if (!tools.includes('tool_search') || searched) logs.push(`Tool ${name} missing from model request`);
+      name = tools.includes('tool_search') && !searched ? 'tool_search' : undefined;
+      args = { query };
     }
     const content = '昔涟在这里，语音和 MCP 验收完成。';
     if (!body.stream) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ id: 'fixture', choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 30, completion_tokens: 10, total_tokens: 40 } })); return; }
@@ -120,6 +128,8 @@ async function run(session, text, timeout = 20000) {
   const start = events.length; const ack = await invoke('agui:run', { sessionId: session.id, currentUser: { turnId: randomUUID(), text, visibleContent: text }, assistantTurnId: randomUUID(), styleId: 'default' }); assert.equal(ack.success, true);
   await waitFor(() => events.slice(start).some(event => event.channel === 'agui:event' && event.args[0]?.runId === ack.runId && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.args[0]?.type)), 'agent finished', timeout);
   const runEvents = events.slice(start).filter(e => e.channel === 'agui:event' && e.args[0]?.runId === ack.runId).map(e => e.args[0]); assert.ok(!runEvents.some(e => e.type === 'RUN_ERROR'), JSON.stringify(runEvents));
+  const finished = runEvents.find(event => event.type === 'RUN_FINISHED');
+  assert.equal(finished?.result?.status, 'success', JSON.stringify(finished));
   return runEvents;
 }
 try {

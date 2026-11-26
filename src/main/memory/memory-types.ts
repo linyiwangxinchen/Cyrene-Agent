@@ -221,10 +221,12 @@ export interface MemoryStore {
   conflictLogs?: ConflictLog[]
   /** L2 热层 DMAE 运行时状态（V5） */
   l2DmaeStates?: L2DmaeState[]
-  profileSources?: Record<string, { content: string; sources: import("../../shared/memory-governance").MemorySourceLocator[] }>
+  profileSources?: Record<string, { content: string; sources: import("../../shared/memory-governance").MemorySourceLocator[]; ownerManaged?: true }>
   forgetting?: {
     memoryIds: string[]
     sourceKeys: string[]
+    factKeys?: string[]
+    socialFactKeys?: string[]
     wikiClaimKeys: string[]
     profileRecords?: Array<{ key: string; sourceKeys: string[] }>
   }

@@ -20,6 +20,8 @@ export interface PluginListEntry {
   defaultEnabled: boolean;
   configuredEnabled: boolean;
   enabled: boolean;
+  /** A running provider registered the structured expression evidence API. */
+  expressionEvidenceAvailable?: boolean;
   status: PluginRuntimeStatus;
   error?: string;
   hasUnregister: boolean;

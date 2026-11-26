@@ -111,10 +111,12 @@ describe("proactive lifecycle on a headless host", () => {
   it("uses the bound WeChat conversation and journals actual proactive delivery there", async () => {
     vi.setSystemTime(Date.UTC(2026, 9, 14, 6)); // Shanghai 14:00
     const ctx = setup(); ctx.settings.proactiveDeliveryTarget = "wechat";
-    const recipient = { targetId: "wx-user", sessionId: "channel:wechat:one", conversationId: "bound-chat", updatedAt: Date.now() };
+    const recipientScope = `peer:${"a".repeat(64)}`;
+    const recipient = { targetId: "wx-user", sessionId: "channel:wechat:one", conversationId: "bound-chat", updatedAt: Date.now(), recipientScope };
     mocks.route = { available: true, recipient };
     mocks.listSessions.mockResolvedValue([{ id: "unrelated-chat" }, { id: "local-proactive", purpose: "proactive-chat" }]);
-    mocks.readProjection.mockImplementation(async id => ({ messages: [{ role: "user", content: id === "bound-chat" ? "我今天在准备考试" : "无关任务", at: Date.now() - 3 * 60 * 60 * 1000 }] }));
+    mocks.readProjection.mockImplementation(async id => ({ messages: [{ role: "user", content: id === "bound-chat" ? "我今天在准备考试" : "无关任务", at: Date.now() - 3 * 60 * 60 * 1000,
+      channelSource: { channel: "wechat", chatType: "private", recipientScope } }] }));
     mocks.sendChannel.mockImplementation(async input => {
       expect(input.canContinue()).toBe(true);
       await input.recordDelivery(input.recipient, input.text);

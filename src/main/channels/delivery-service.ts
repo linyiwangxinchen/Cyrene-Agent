@@ -36,8 +36,14 @@ export async function resumeChannelDelivery(
       if (part.status === "unknown" || part.status === "sending") return { ok: false, error: "delivery_unknown_review_required", status: "unknown", ...progress(item) };
       if (part.status === "cancelled") return { ok: false, error: "delivery_cancelled", status: "cancelled", ...progress(item) };
       const adapter = manager.getAdapter(item.channel);
-      const error = options?.signal?.aborted || (options?.canContinue && !options.canContinue()) ? "delivery_cancelled"
+      let error = options?.signal?.aborted || (options?.canContinue && !options.canContinue()) ? "delivery_cancelled"
         : !adapter ? "adapter_not_found" : !adapter.getStatus().enabled ? "channel_disabled" : adapter.getStatus().phase !== "running" ? "channel_offline" : null;
+      if (!error && item.channel === "qq") {
+        // Each part starts in the adapter's current connection scope. A retry may
+        // reconnect on the original account, but must never bind to a new sender.
+        if (!item.qqAccountId) error = "qq_delivery_account_missing";
+        else if (adapter?.getMemoryAccountId?.() !== item.qqAccountId) error = "qq_delivery_account_mismatch";
+      }
       if (error) {
         const cancelled = error === "delivery_cancelled" || error === "channel_disabled";
         if (cancelled) { store.cancel(id); item = store.get(id) as ChannelOutboxRecord; }
@@ -75,7 +81,8 @@ export function createChannelDeliveryService(
       const store = storeOption ?? getChannelRecoveryStore();
       if (store) {
         try {
-          const item = store.prepareOutbox(message, options);
+          const qqAccountId = message.channel === "qq" ? manager.getAdapter("qq")?.getMemoryAccountId?.() : undefined;
+          const item = store.prepareOutbox(message, options, qqAccountId);
           return await resumeChannelDelivery(manager, store, item.id, options);
         } catch (error) {
           return { ok: false, error: error instanceof Error ? error.message : String(error), status: "failed" };

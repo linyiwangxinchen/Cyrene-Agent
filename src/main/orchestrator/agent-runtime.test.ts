@@ -1,5 +1,7 @@
 import { closeConversationDatabases } from "../storage/conversation-database-client";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
@@ -9,6 +11,9 @@ import type { PluginRuntime } from "../../plugins/context";
 import type { ScheduledTask } from "../scheduler/types";
 import { createAgentRuntime, type AgentRuntimeDeps } from "./agent-runtime";
 import { InitiativeOpportunityStore } from "../proactive/initiative-opportunities";
+import { resolveChannelMemoryScope } from "../channels/memory-scope";
+import { getRelationshipStore } from "../relationship/relationship-log";
+import { CyreneAgent } from "./cyrene-agent";
 
 const mocks = vi.hoisted(() => ({
   onAgentRunFinished: vi.fn(),
@@ -42,6 +47,8 @@ function createDeps(
   publishPluginHostEvent: AgentRuntimeDeps["publishPluginHostEvent"],
 ): AgentRuntimeDeps {
   return {
+    waitForPromptSkills: async () => {},
+    waitForStartup: vi.fn(async () => {}),
     runtimeStateService: {
       getState: () => ({ status: "idle", expression: 0, updatedAt: 0 }),
     },
@@ -301,6 +308,8 @@ function modelSettingsFixture() {
 /** 覆盖装配链路的完整依赖桩：所有外部依赖都是可控的 vi.fn。 */
 function createFullDeps(overrides?: Partial<AgentRuntimeDeps>): AgentRuntimeDeps {
   return {
+    waitForPromptSkills: async () => {},
+    waitForStartup: vi.fn(async () => {}),
     runtimeStateService: {
       getState: () => ({ status: "idle", expression: 0, updatedAt: 0 }),
       smoothFeeling: vi.fn(),
@@ -456,8 +465,8 @@ describe("AgentRuntime buildOptions 依赖装配", () => {
       expect(deps.buildPluginPromptContext).toHaveBeenCalledWith({ source: "desktop", mode: "chat" });
 
       // 社会背景：listActive 按会话查询，无活跃原子时返回空块
-      const social = await captured!.buildChatSocialContext({ conversationId: "conversation-1", query: "最近在忙什么" });
-      expect(deps.socialAtomStore.listActive).toHaveBeenCalledWith("conversation-1", expect.any(Number));
+      const social = await captured!.buildChatSocialContext({ conversationId: "conversation-1", memoryScope: "owner", query: "最近在忙什么" });
+      expect(deps.socialAtomStore.listActive).toHaveBeenCalledWith("conversation-1", expect.any(Number), "owner");
       expect(social).toEqual({ contextBlock: "", retrievedAtoms: [] });
 
       // 图片兜底：纯文本主模型且未配独立视觉模型时明确拒绝而不是给出注定失败的配置
@@ -468,6 +477,109 @@ describe("AgentRuntime buildOptions 依赖装配", () => {
       spy.mockRestore();
     }
   });
+});
+
+it("分别向两个已验证私聊发送各自习惯，并保留公开人设、语种和时区", async () => {
+  const root = mkdtempSync(path.join(os.tmpdir(), "cyrene-runtime-peer-prompt-"));
+  electronMocks.userDataRoot = root;
+  const prompts: string[] = [];
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const { messages } = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    prompts.push(JSON.stringify(messages));
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const answer = { id: "local-wire-fixture", choices: [{ index: 0, delta: { content: "知道了" }, finish_reason: null }] };
+    const done = { ...answer, choices: [{ index: 0, delta: {}, finish_reason: "stop" }] };
+    response.end(`data: ${JSON.stringify(answer)}\n\ndata: ${JSON.stringify(done)}\n\ndata: [DONE]\n\n`);
+  });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  try {
+    const [peerA, peerB] = ["alice", "bob"].map(senderId => resolveChannelMemoryScope({
+      channel: "wechat", accountId: "fixture-active-account", senderId, chatType: "private",
+    })!);
+    expect(peerA).not.toBe(peerB);
+    const store = getRelationshipStore();
+    const ownerProfile = {
+      nickname: "桃园主人暗号", birthday: "1988-11-08", defaultCity: "主人专用天气城",
+      gender: "female", replyLanguage: "ja-JP", timezone: "America/Toronto",
+    };
+    const publicTaste = "观察星图和维护小灯";
+    await store.updatePreferences({
+      userLabel: "主人专用关系称呼", sharedGoals: ["主人私下目标"], milestones: ["主人私下纪念日"],
+      boundaries: ["主人专用边界"], tasteNotes: [publicTaste], relationshipMode: "partner",
+      learnPrivateExpressions: true,
+    });
+    await store.command({ type: "repair", expectedRevision: store.getControls().revision, note: "主人全局纠正" });
+    const conversationId = "wire-fixture-bound-conversation";
+    await store.command({ type: "repair", expectedRevision: store.getControls().revision, note: "主人旧会话纠正", conversationId });
+    for (const [speechScope, phrase, correction] of [
+      ["owner", "主人宵夜暗号", "纠正：以后别用主人专用结尾"],
+      [peerA, "甲的宵夜暗号", "纠正：以后别用甲专用结尾"],
+      [peerB, "乙的宵夜暗号", "纠正：以后别用乙专用结尾"],
+    ]) {
+      for (const [index, text] of [`以后把宵夜叫作“${phrase}”`, correction].entries()) {
+        const id = `${speechScope}-${index}`;
+        store.recordAcceptedCompanionFeedback({
+          conversationId, userEntryId: id, userTurnId: id, userRevision: 1, speechScope,
+          channel: speechScope === "owner" ? "desktop" : "wechat", text,
+        });
+      }
+    }
+    const runtime = createAgentRuntime(createFullDeps({
+      loadUserProfile: () => ownerProfile,
+      loadGeneralSettings: () => ({ chatToolsEnabled: false }) as never,
+    }));
+    const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/v1`;
+    for (const scope of [peerA, peerB, undefined]) {
+      const text = "今天吃什么宵夜";
+      const { options } = await runtime.buildOptions({
+        sessionId: conversationId, mode: "chat", executionMode: "chat",
+        ...(scope ? { channel: "wechat" as const, memoryScope: scope, speechScope: scope } : {}),
+        workspaceBindingSessionId: null,
+        privateRelationshipContext: true,
+        sessionModelSettings: {
+          provider: "ChatGPT", model: "gpt-fixture", baseUrl, apiKey: "local-fixture",
+          explicitTransport: "openai", memoryMode: "off", modelRequestMaxRetries: 0,
+        },
+        currentUser: { turnId: `current-${scope ?? "owner"}`, text, visibleContent: text },
+        modelContext: { messages: [{ role: "user", content: text }], uncertainEffects: [], throughSeq: 1 },
+      });
+      const agent = new CyreneAgent({ threadId: `fixture-${scope ?? "owner"}` });
+      await new Promise<void>((resolve, reject) => agent.runWithEvents(options).subscribe({ complete: resolve, error: reject }));
+      expect(agent.lastResult?.reply).toBe("知道了");
+    }
+    expect(prompts).toHaveLength(3);
+    const privateItems = [
+      ownerProfile.nickname, ownerProfile.birthday, ownerProfile.defaultCity, "性别：女",
+      "主人专用关系称呼", "主人私下目标", "主人私下纪念日", "主人专用边界", "主人全局纠正", "主人旧会话纠正",
+      "主人宵夜暗号", "主人专用结尾", "伴侣式相处", "内部亲近度 ", "当前用户名",
+    ];
+    const [a, b, owner] = prompts;
+    for (const item of privateItems) {
+      expect(a).not.toContain(item);
+      expect(b).not.toContain(item);
+      expect(owner).toContain(item);
+    }
+    for (const prompt of prompts) {
+      expect(prompt).toContain(publicTaste);
+      expect(prompt).toContain("America/Toronto");
+      expect(prompt).toContain("日本語");
+    }
+    expect(a).toContain("甲的宵夜暗号");
+    expect(a).toContain("甲专用结尾");
+    expect(a).not.toMatch(/乙的宵夜暗号|乙专用结尾/);
+    expect(b).toContain("乙的宵夜暗号");
+    expect(b).toContain("乙专用结尾");
+    expect(b).not.toMatch(/甲的宵夜暗号|甲专用结尾/);
+    expect(owner).not.toMatch(/[甲乙]的宵夜暗号|[甲乙]专用结尾/);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    await closeConversationDatabases();
+    electronMocks.userDataRoot = "";
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 describe("AgentRuntime 暂存念头的会话边界", () => {

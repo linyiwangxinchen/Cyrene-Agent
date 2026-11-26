@@ -58,6 +58,7 @@ export function prepareModelCall(input: {
     for (const key of ["reasoning", "reasoning_effort", "thinking", "enable_thinking"]) delete controls[key];
   }
   const delegate = input.onStreamActivity ? createStreamActivityFetch(input.onStreamActivity, fetch) : fetch;
+  const toolImageData = new Set<string>();
   const compatibilityFetch: typeof fetch = async (url, init) => {
     const original = new Request(url, init);
     const body = JSON.parse(await original.text()) as Record<string, unknown>;
@@ -75,7 +76,12 @@ export function prepareModelCall(input: {
       name === "send_email" || name === "email_create_draft" || name.startsWith("gmail_"));
     // Requests and responses in a run with email tools can contain private mail data.
     // Do not write either side of that exchange to the optional prompt dump.
-    input.onRequest?.(hasEmailTools ? "" : dumpRequest({ transport: adapter.transport, endpoint: policyHttp.url, body }));
+    if (input.onRequest) {
+      const traceId = hasEmailTools ? "" : dumpRequest({ transport: adapter.transport, endpoint: policyHttp.url, body,
+        redactedImageData: toolImageData });
+      // Some providers echo their request in responses or errors.
+      input.onRequest(toolImageData.size ? "" : traceId);
+    }
     const headers = new Headers(original.headers);
     for (const [name, value] of Object.entries(policyHttp.headers)) headers.set(name, value);
     const response = await delegate(policyHttp.url, { method: "POST", headers, body: JSON.stringify(body), signal: original.signal });
@@ -84,7 +90,11 @@ export function prepareModelCall(input: {
   };
   const baseURL = new URL(policyHttp.url).origin;
   const origin = modelMessageOrigin(adapter, { ...config, model: request.model });
-  const messages = projectModelHistory(request.messages, origin, input.onHistoryDiagnostic);
+  const messages = projectModelHistory(request.messages, origin, input.onHistoryDiagnostic, image => {
+    const loaded = request.resolveToolImage?.(image);
+    if (loaded) toolImageData.add(loaded.data);
+    return loaded;
+  });
   applyAnthropicCache(messages, adapter, request.model);
   const openai = adapter.transport === "responses"
     ? createOpenAI({ baseURL, apiKey: config.apiKey, fetch: compatibilityFetch })

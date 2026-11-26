@@ -1413,7 +1413,7 @@
   text-align: center;
 }
 
-.cy-mermaid svg {
+.cy-mermaid img {
   max-width: 100%;
   height: auto;
 }
@@ -1441,7 +1441,7 @@
   padding: 8px;
 }
 
-.cy-svg-preview-modal .cy-svg-preview svg {
+.cy-svg-preview-modal .cy-svg-preview img {
   max-width: none;
   height: auto;
 }
@@ -1478,7 +1478,7 @@
   text-align: center;
 }
 
-.cy-svg-card svg {
+.cy-svg-card img {
   max-width: 100%;
   height: auto;
   border-radius: 12px;
@@ -1710,6 +1710,21 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.cy-companion-references {
+  font-size: 12px;
+  margin-block-start: 8px;
+  overflow-wrap: anywhere;
+}
+
+.cy-companion-references summary {
+  cursor: pointer;
+  width: fit-content;
+}
+
+.cy-companion-references button {
+  margin-inline-start: 8px;
 }
 
 /* 回复时间：复制按钮右侧的轻提示，与动作按钮同高对齐；随动作条一起悬浮淡入 */

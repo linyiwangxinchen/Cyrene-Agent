@@ -54,6 +54,14 @@ export type OpenAIContentBlock =
 
 export type ChatMessageContent = string | OpenAIContentBlock[];
 
+/** Opaque in-memory capture handle. It is never interpreted as a path. */
+export interface ToolResultImage {
+  fileName: string;
+  mediaType: "image/png";
+  width: number;
+  height: number;
+}
+
 /** 统一工具调用描述（项目内部），与 OpenAI/Anthropic wire 格式解耦。 */
 export interface ToolCall {
   id: string;
@@ -96,6 +104,7 @@ export interface ChatMessage {
   /** 旧历史兼容输入。无来源原始数据不得直接发送给厂商。 */
   rawAssistant?: unknown;
   providerReplay?: ProviderReplay;
+  toolImages?: ToolResultImage[];
   /** 已落盘的模型生成图片引用；编码数据不得出现在此字段。 */
   attachments?: GeneratedImageAttachment[];
   /** canonical 用户附件引用；请求装配按视觉路由读取，Adapter 不直接序列化本字段。 */
@@ -143,6 +152,8 @@ export type StructuredOutputRequest =
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
+  /** Host-only resolver for this live run. No auxiliary requests resolve screenshots. */
+  resolveToolImage?: import("../tool-result-images").ToolResultImageResolver;
   tools?: ToolSpec[];
   /** Runtime semantic intent; the active Adapter maps it to named/required/any/auto/omitted wire syntax. */
   toolChoiceIntent?: { mode: "must_call"; toolName: string };

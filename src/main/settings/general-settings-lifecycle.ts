@@ -6,7 +6,7 @@ import { updateLocaleContext } from "../locale-context";
 import { validateSearchApiKey } from "../orchestrator/search-backend-filter";
 import { addMcpServer, listMcpServers, removeMcpServer } from "../orchestrator/mcp-manager";
 import { getAppIconPath } from "../app-icon";
-import { syncBuiltInToolToggles } from "../orchestrator/tools/registry/tool-registration";
+import { syncBuiltInToolToggles } from "../orchestrator/tools/registry/tool-toggles";
 import { loadModelSettings, getPublicModelConfig } from "./model-settings";
 import type { GeneralSettings } from "./general-settings";
 import type { UiIcon } from "../../shared/ui-icon";
@@ -177,5 +177,5 @@ export function handleGeneralSettingsChanged(
     deps.proactiveLifecycle.getProactiveChatService()?.invalidate();
   }
   setGetCurrentAppIconPath(() => getAppIconPath(after.uiIcon));
-  void syncVolcanoSearchMcp(after);
+  // 搜索配置的设置 IPC 已同步 MCP。窗口、陪伴和语音等配置不需要重连搜索。
 }

@@ -1,6 +1,10 @@
 import { rankSocialAtoms } from "./retrieval";
 import type { SocialAtom } from "./types";
 
+export function socialAtomDisplayText(atom: SocialAtom): string {
+  return atom.quoteOnly ? `原话 ${JSON.stringify(atom.evidenceQuote)}` : atom.content;
+}
+
 export function compileSocialContextBlock(atoms: readonly SocialAtom[]): string {
   if (atoms.length === 0) return "";
   const past = atoms.filter((atom) => atom.type !== "open_loop").slice(0, 5);
@@ -62,8 +66,9 @@ export function buildPersonMemoryContext(
     "【你记得的关于对方的事】",
     "这是对方亲口说过的事，日期是对方说起的那天。相关时自然地接上，像本来就记得；不要复述清单，也不要说“我记得”“根据记录”。和对方现在说的冲突时，以现在说的为准。",
   ];
-  if (facts.length) lines.push("对方是怎样的人：", ...facts.map((atom) => `- ${atom.content}`));
-  if (recent.length) lines.push("对方最近的事：", ...recent.map((atom) => `- ${dateLabel(atom.createdAt, options.timezone)}说：${atom.content}`));
-  if (open.length) lines.push("还没有下文、之后可以问问的：", ...open.map((atom) => `- ${dateLabel(atom.createdAt, options.timezone)}说：${atom.content}`));
+  if (facts.length) lines.push(facts.some(atom => atom.quoteOnly) ? "与对方相关的长期背景：" : "对方是怎样的人：",
+    ...facts.map((atom) => `- ${socialAtomDisplayText(atom)}`));
+  if (recent.length) lines.push("对方最近的事：", ...recent.map((atom) => `- ${dateLabel(atom.createdAt, options.timezone)}说：${socialAtomDisplayText(atom)}`));
+  if (open.length) lines.push("还没有下文、之后可以问问的：", ...open.map((atom) => `- ${dateLabel(atom.createdAt, options.timezone)}说：${socialAtomDisplayText(atom)}`));
   return { contextBlock: lines.join("\n"), retrievedAtoms };
 }

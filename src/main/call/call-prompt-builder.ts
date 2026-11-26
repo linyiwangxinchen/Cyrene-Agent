@@ -9,6 +9,7 @@ import { searchMemoryEntries } from "../rag";
 import { memoryStore } from "../memory/memory-store";
 import { l2DmaeManager } from "../memory/l2-dmae-manager";
 import { isMemoryEnabled } from "../memory/memory-mode";
+import { selectOwnerL2Memories } from "../memory/memory-owner-recall";
 
 /**
  * 通话共享人设与记忆，使用专用口语约定。
@@ -24,8 +25,8 @@ export async function buildCallSystemPrompt(
   // 先向量召回，再更新 L2 激活状态。
   if (isMemoryEnabled()) {
     try {
-      const allL2 = await memoryStore.getAllL2();
-      const recalled = await searchMemoryEntries(userText, "user_memory", 4);
+      const allL2 = await selectOwnerL2Memories(await memoryStore.load());
+      const recalled = await searchMemoryEntries(userText, "user_memory", 4, { allowedL2Ids: new Set(allL2.map(memory => memory.id)) });
       const recalledIds = recalled
         .map((r) => r.metadata?.l2Id)
         .filter((id): id is string => typeof id === "string" && id.length > 0);

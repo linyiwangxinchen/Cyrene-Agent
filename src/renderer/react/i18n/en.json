@@ -1322,6 +1322,26 @@
       "feishu": {
         "description": "Create a custom app on the Feishu Open Platform and enable bot capabilities, then enter its App ID and App Secret. Long connections do not require a public callback URL."
       },
+      "qqModule": {
+        "tokenPolicy": "The independent QFCA module requires a nonblank Access Token matching the backend, even on loopback. This does not change the built-in QQ driver or generate or rewrite tokens.",
+        "tokenRequired": "The saved token is missing or blank, so switching to the independent module is blocked. Configure the same token in the original QQ settings and backend first.",
+        "tokenAvailable": "A nonblank token was read. This does not prove backend authentication. Credentials and secure storage must be checked again when migration is confirmed.",
+        "tokenUnresolved": "The saved token could not be checked. Check credentials and secure storage before switching; the original configuration is unchanged.",
+        "loopbackPolicy": "The first independent module accepts numeric loopback IPs only, not localhost / DNS names, bracketed IPv6 or scope IDs. A token does not enable remote access. Auto resolving to WSL, explicit WSL and LAN addresses are incompatible and will not be silently rewritten.",
+        "listenReady": "Listen preflight: loopback. Release trust and other installation requirements remain incomplete.",
+        "listenUnsupported": "Listen preflight: unsupported address. The first independent module accepts numeric loopback IPs only. Explicitly update settings before a future switch.",
+        "listenUnresolved": "Listen preflight: address unresolved. Module compatibility cannot be confirmed.",
+        "title": "Optional QQ module",
+        "summary": "The independent QQ module installation entry is being prepared.",
+        "entry": "View installation requirements",
+        "close": "Close",
+        "unavailable": "Release source and signing trust roots are not configured. Download and installation are unavailable.",
+        "failed": "Installation status could not be verified. Installation remains disabled. Close and try again.",
+        "legacy": "This version retains the built-in QQ connection and existing settings below. The independent module is not enabled.",
+        "safety": "Installation requires publisher signature, file integrity, host/API version and platform checks. It will require explicit confirmation and will not automatically download or run an external backend.",
+        "data": "Chat history, QQ settings and conversation bindings stay in the host. Installing a module does not migrate data or switch accounts.",
+        "install": "Download and install (unavailable)"
+      },
       "qq": {
         "description": "Configure a NapCat OneBot 11 reverse WebSocket connection. Group chats only respond to mentions from allowlisted groups; tools are disabled in groups.",
         "listenMode": "Listen mode",
@@ -1664,8 +1684,8 @@
               "kind": "list",
               "items": [
                 "[GitHub Issues](https://github.com/linyiwangxinchen/Cyrene-Agent/issues);",
-                "Email: [ky2569ly@gmail.com](mailto:ky2569ly@gmail.com), preferably with “反馈” (feedback) or “Bug” in the subject;",
-                "A Bilibili private message to [Playa0](https://space.bilibili.com/260670644), beginning with “反馈/Bug” (feedback/bug)."
+                "Email: [Liang_zh_@outlook.com](mailto:Liang_zh_@outlook.com), preferably with “反馈” (feedback) or “Bug” in the subject;",
+                "A Bilibili private message to [CCOLD-AS-ICEE](https://space.bilibili.com/1098067913), beginning with “反馈/Bug” (feedback/bug)."
               ]
             },
             {
@@ -2612,6 +2632,10 @@
       "proactiveChatDescription": "Cyrene may reach out about her experiences, interests, or something on her mind. New openings pause during a conversation, quiet hours, or after two unanswered messages.",
       "companionPluginSharing": "Share plugin discoveries",
       "companionPluginSharingDescription": "Let enabled plugins offer sanitized interesting findings for Cyrene to decide whether to share. Off by default.",
+      "expressionSources": "Plugin expression permissions",
+      "expressionSourcesDescription": "Applies to plugins that have collected expression samples. Proactive messages can borrow a conversational technique.",
+      "expressionChat": "Private chat",
+      "expressionProactive": "Proactive messages",
       "deliveryTarget": "Send proactive messages to",
       "deliveryTargetDescription": "If a mobile channel is unavailable, the proactive message is canceled instead of being redirected locally.",
       "proactiveScoreStatus": "Latest candidate score",

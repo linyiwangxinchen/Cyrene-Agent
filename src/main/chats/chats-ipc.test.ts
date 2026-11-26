@@ -332,6 +332,7 @@ describe("chats IPC mode filtering", () => {
       registries: {
         activeRuns: { current: {} }, checkpointTriggers: { current: {} },
         cancelRequestedSessions: { current: new Set<string>() }, eventUnsubscribers: { current: new Set<() => void>() },
+        cancelRequestedTurns: { current: new Set<string>() },
       },
       startRun: vi.fn(async () => undefined),
     });
@@ -504,6 +505,23 @@ describe("chats IPC mode filtering", () => {
       expect.objectContaining({ userMessageId: "first-code", text: "处理code问题" }),
       expect.objectContaining({ userMessageId: "first-learn", text: "处理learn问题" }),
     ]);
+  });
+
+  it("keeps the head withdrawable while its conversation dependencies are starting", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    const beforePendingClaim = vi.fn((_mode: string, signal: AbortSignal) => new Promise<void>((_, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+    await registerChatsIpc(undefined, { beforePendingClaim });
+    const event = { sender: {} };
+    const session = await mocks.handlers.get(IPC.CHATS_CREATE)!(event, { mode: "chat" }) as { id: string };
+    const entry = { id: "q1", rawContent: "hello", visibleContent: "hello", enqueuedAt: 1 };
+    await mocks.handlers.get(IPC.CHATS_PENDING_ENQUEUE)!(event, { sessionId: session.id, entry });
+    const claiming = mocks.handlers.get(IPC.CHATS_PENDING_CLAIM)!(event, session.id);
+    await vi.waitFor(() => expect(beforePendingClaim).toHaveBeenCalledWith("chat", expect.any(AbortSignal)));
+    expect(await mocks.handlers.get(IPC.CHATS_PENDING_LIST)!(event, session.id)).toMatchObject([{ id: "q1" }]);
+    await mocks.handlers.get(IPC.CHATS_PENDING_REMOVE)!(event, { sessionId: session.id, messageId: "q1" });
+    await expect(claiming).resolves.toEqual({ ok: true, claimed: false });
   });
 
   it("pending remove 先写 journal 墓碑，不能绕过轨迹直接删除", async () => {
@@ -931,6 +949,26 @@ describe("chats IPC mode filtering", () => {
     // 不存在的绝对路径 → NOT_FOUND
     await expect(shellFile(event, { sessionId: session.id, relPath: path.join(outsideDir, "missing.cmd"), action: "open" }))
       .resolves.toEqual({ ok: false, error: "NOT_FOUND" });
+  });
+
+  it.runIf(process.platform === "win32")("rejects network and device paths before touching the filesystem", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    await registerChatsIpc();
+    const handler = mocks.handlers.get(IPC.CHATS_SHELL_FILE)!;
+    const realpath = vi.spyOn(fs.promises, "realpath").mockResolvedValue("C:\\local.txt");
+    try {
+      for (const relPath of ["//host/share/file.txt", "/\\host/share/file.txt", "//?/UNC/host/share/file.txt", "//./pipe/example", "/??/C:/test"]) {
+        for (const action of ["open", "reveal"]) {
+          expect(await handler({}, { sessionId: "chat", relPath, action }))
+            .toEqual({ ok: false, error: "invalid-payload" });
+        }
+      }
+      expect(realpath).not.toHaveBeenCalled();
+      expect(mocks.openPath).not.toHaveBeenCalled();
+      expect(mocks.showItemInFolder).not.toHaveBeenCalled();
+    } finally {
+      realpath.mockRestore();
+    }
   });
 
   // ── 会话级模型状态（Invariant B/D 的 IPC 层）──────────────────

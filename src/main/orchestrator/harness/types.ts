@@ -7,7 +7,7 @@
  * - ToolCallResult 来自 orchestrator/types
  */
 
-import type { ChatMessage, ToolCall, ToolSpec } from "../vendors/types";
+import type { ChatMessage, ToolCall, ToolResultImage, ToolSpec } from "../vendors/types";
 import type { ToolDefinition } from "../tools/registry/tool-registry";
 import type { CyreneRunTerminalResult } from "../../../shared/run-terminal";
 import type { TodoItem } from "../../../shared/task-session";
@@ -20,6 +20,9 @@ import type { ToolOutputRef, ToolOutputStore } from "./tool-output/tool-output-s
 import { createHash } from "node:crypto";
 export type { ToolErrorCategory } from "../tools/registry/tool-execution-error";
 export type { TodoItem, TodoStatus } from "../../../shared/task-session";
+
+/** 保留布尔权限回调兼容性；结构化结果只承载拒绝，不能授予执行权限。 */
+export type ToolPermissionResult = boolean | { allowed: false; reason: string };
 
 // ── 工具调用结果 ──────────────────────────────────────────
 
@@ -60,6 +63,7 @@ export interface ToolObservation {
   toolOutputRef?: ToolOutputRef;
   /** 面向 UI 的专用呈现数据；由 Harness 白名单事件转发，不混入工具结果正文。 */
   presentation?: { type: "mail_draft_card"; data: Record<string, unknown> };
+  images?: ToolResultImage[];
   /** 工具活动面板可见的短摘要；敏感工具不得从原始输出推导预览。 */
   activityPreview?: string;
   /** 工具返回的原始输出（未截断前），可能被截断后只保留 preview */
@@ -327,8 +331,9 @@ export interface HarnessInput {
   planState?: import("../plan-mode").PlanStateName;
   /** 工具上下文（权限检查等） */
   toolContext?: import("../tools/registry/tool-context").ToolContext;
+  resolveToolImage?: import("../tool-result-images").ToolResultImageResolver;
   /** 权限检查函数 */
-  checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
+  checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<ToolPermissionResult>;
   /** ExecutionLedger：可选的同进程工具去重缓存（用于副作用重复执行防护） */
   executionLedger?: import("../execution-ledger").ExecutionLedger;
   /** ToolOutputStore：生产 Harness 注入的完整工具结果存储。 */

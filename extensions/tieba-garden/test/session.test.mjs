@@ -10,7 +10,7 @@ const CONFIG = { bar: "摄影" };
 const LISTING = '<a class="j_th_tit" href="/p/3">光圈</a>';
 const POST = '<title>光圈_百度贴吧</title><div class="content">试试对着天空拍。</div>';
 
-function setup(postReply) {
+function setup(postReply, expressions = []) {
   const encryptedFixture = new Map();
   const secrets = {
     get: async (key) => encryptedFixture.get(key),
@@ -29,7 +29,7 @@ function setup(postReply) {
       llm: { generateText: async (messages, { purpose }) => {
         modelInputs.push(messages);
         if (purpose === "forum-reply-draft") return "我也想试试这样拍天空。";
-        return JSON.stringify({ summary: "在练习拍天空。", evidence: ["天空"], expressions: [] });
+        return JSON.stringify({ summary: "在练习拍天空。", evidence: ["天空"], expressions });
       } },
     },
   };
@@ -83,7 +83,7 @@ test("reading-session credentials stay in the secrets service and are absent fro
 });
 
 test("signed-in reads take nested replies from the mobile page without calling the desktop comment route", async () => {
-  const fixture = setup();
+  const fixture = setup(undefined, [{ quote: "等云散了再拍", scene: "拍摄天空", style: "detail" }]);
   const mobile = POST + `<li class="j_post_list_item" data-info='{"pid":1234567890123456789,"floor_num":1}'>
     <div class="content">试试对着天空拍。</div>
     <div class="fr_list j_floor_panel" data-list-count="1"><ul class="flist">
@@ -95,15 +95,18 @@ test("signed-in reads take nested replies from the mobile page without calling t
     return mobile;
   });
   await fixture.forum.invoke("auth-save", { cookie: TEST_COOKIE });
-  await fixture.forum.invoke("save", { replies: true });
+  await fixture.forum.invoke("save", { replies: true, learn: true });
   await fixture.forum.invoke("read", { url: "/p/3" });
-  const result = await fixture.start().invoke("read", { url: "/p/3" });
+  const restarted = fixture.start();
+  const result = await restarted.invoke("read", { url: "/p/3" });
   assert.equal(fixture.requests.length, 2);
   assert.equal(result.reading.replyStatus, "");
   assert.equal(result.reading.limited, false);
   assert.deepEqual(result.reading.floors.filter(row => row.reply).map(row => [row.post, row.body]), [
     ["1234567890123456789", "等云散了再拍。"],
   ]);
+  assert.equal(restarted.learnedExpressions()[0].origin.kind, "forum_authenticated");
+  assert.equal(restarted.learnedExpressions()[0].origin.id, "3:reply:12");
 });
 
 test("drafting uses saved floors and only a deliberate send with posting enabled and a cookie reaches transport", async () => {

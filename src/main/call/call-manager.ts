@@ -93,7 +93,7 @@ let ttsSettingsGetter: (() => {
 }) | null = null;
 
 /** index.ts 启动时注入模型配置、TTS 配置和 system prompt 构建器。 */
-let systemPromptBuilder: ((userText: string, messages: CallHistoryMessage[]) => Promise<string>) | null = null;
+let systemPromptBuilder: ((userText: string, messages: CallHistoryMessage[], signal: AbortSignal) => Promise<string>) | null = null;
 let weatherHandler: ((userText: string) => Promise<string | null>) | null = null;
 
 export function setCallSettings(
@@ -112,7 +112,7 @@ export function setCallSettings(
     ttsMimoKey: string; ttsMimoVoiceAudioPath: string; ttsMimoStylePrompt: string;
   ttsMosslandKey?: string; ttsMosslandVoiceId?: string; ttsMosslandModel?: string; ttsMosslandFormat?: "mp3" | "wav";
   },
-  systemPromptFn: (userText: string, messages: CallHistoryMessage[]) => Promise<string>,
+  systemPromptFn: (userText: string, messages: CallHistoryMessage[], signal: AbortSignal) => Promise<string>,
   weatherFn: (userText: string) => Promise<string | null>,
 ): void {
   modelSettingsGetter = modelGetter;
@@ -544,7 +544,7 @@ async function runAgentTurn(userText: string, signal: AbortSignal, generation: n
 
     stage = "通话提示词构建";
     const conversation: CallHistoryMessage[] = [...callHistory, { role: "user", content: userText }];
-    const systemPrompt = await systemPromptBuilder?.(userText, conversation) ?? "";
+    const systemPrompt = await systemPromptBuilder?.(userText, conversation, signal) ?? "";
     if (!isCurrentCall(generation) || signal.aborted) return null;
     const messages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
       { role: "system", content: systemPrompt },

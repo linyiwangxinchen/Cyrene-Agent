@@ -61,6 +61,8 @@ export interface ChannelAttachment {
 /** 入站消息。adapters → dispatcher。 */
 export interface IncomingMessage {
   channel: ChannelId;
+  /** Active, authenticated service account that received the message. */
+  accountId?: string;
   /** 私聊或群聊。旧渠道未声明时按 private 处理。 */
   chatType?: ChannelChatType;
   /** 平台原始消息 ID。 */
@@ -140,6 +142,11 @@ export interface ChannelStatus {
 export type MessageHandler = (
   msg: IncomingMessage,
 ) => Promise<OutgoingMessage | null>;
+
+export type TrackChannelWork = (completion: ReturnType<MessageHandler>) => void;
+
+/** Resolves at durable receipt. An adapter can also observe the queued turn's lifetime. */
+export type MessageAcceptance = (msg: IncomingMessage, trackWork?: TrackChannelWork) => Promise<void>;
 
 /** inbound-server 拿到入站请求后转交给 manager 路由时的回调签名 */
 export interface InboundRouteContext {

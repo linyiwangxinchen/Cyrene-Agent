@@ -131,6 +131,8 @@ export interface ChatMessageChannelSource {
   channel: ChatMessageChannel;
   chatType?: "private" | "group";
   senderName?: string;
+  /** 服务端渠道入口确认的私人对端范围。 */
+  recipientScope?: string;
 }
 
 /**
@@ -189,6 +191,8 @@ export interface ChatMessage {
   emailDraftCards?: MailDraftCardData[];
   /** 上下文容量快照（run 终态落盘）；运行中被每轮 preRequest 快照实时覆盖（纯内存）。 */
   contextUsage?: ContextUsageSnapshot;
+  /** 来源由主进程根据实际提示选择保存，仅用于展示。 */
+  companionReferences?: import("./companion-references").CompanionReference[];
   /** 当前运行的非敏感缓存结构诊断；普通持久化投影会忽略该字段。 */
   cacheDiagnostic?: CacheDiagnostic;
 }
@@ -211,7 +215,7 @@ export interface ChatPresentationDelta {
 export type ChatPresentationCheckpointPatch = Partial<Pick<ChatMessage,
   "content" | "reasoning" | "reasoningBlocks" | "processMessages" | "agentRounds" |
   "taskDelegations" | "channelSource" | "sticker" | "toolExecutions" | "runActivity" |
-  "runSnapshot" | "ttsCacheKey" | "ttsCacheVersion" | "musicCard" | "emailDraftCards" | "contextUsage"
+  "runSnapshot" | "ttsCacheKey" | "ttsCacheVersion" | "musicCard" | "emailDraftCards" | "contextUsage" | "companionReferences"
 >> & { delta?: ChatPresentationDelta };
 
 export type MessageAttachment = ImageMessageAttachment | GeneratedImageAttachment | DocumentMessageAttachment | WebElementMessageAttachment;

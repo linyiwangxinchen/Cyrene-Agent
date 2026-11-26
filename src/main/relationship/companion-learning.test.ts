@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyCompanionFeedback,
+  classifyCompanionPragmatics,
   type CompanionLearningPreference,
   type CompanionLearningTopic,
 } from "./companion-learning";
@@ -89,5 +90,29 @@ describe("classifyCompanionFeedback", () => {
     expect(classifyCompanionFeedback("这轮短一点，以后你可以正常回复我。")).toEqual([
       { topic: "length", preference: "default", explicit: true },
     ]);
+  });
+});
+
+describe("classifyCompanionPragmatics", () => {
+  it.each([
+    ["这次先听我说", "listen"],
+    ["我只想倾诉一下", "listen"],
+    ["陪我捋一捋", "reflect"],
+    ["请直接给我一个建议", "help"],
+    ["咱们聊聊。先换个话题。", "light"],
+  ])("uses the user’s immediate request %s only this turn", (text, mode) => {
+    expect(classifyCompanionPragmatics(text)).toEqual({ responseMode: mode });
+    expect(classifyCompanionFeedback(text).filter(item => item.explicit)).toEqual([]);
+  });
+
+  it.each([
+    "如果我说先听我说，该怎么回应？",
+    "朋友说：先听我说",
+    "「先听我说」",
+    "这不是说要你先听我说",
+    "请把“先听我说”翻译成英文",
+    "先听我说，再给我一个建议",
+  ])("does not assign a private reply mode to %s", text => {
+    expect(classifyCompanionPragmatics(text)).toEqual({});
   });
 });

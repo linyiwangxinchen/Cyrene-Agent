@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { RelationshipLogStore } from "./relationship-log-core";
 import { addDesireSample, desireSignal } from "./partner-desire";
 import { desireValue, type DesireSample } from "../../shared/companion";
+import type { CompanionReference } from "../../shared/companion-references";
 
 describe("private conversation expressions and partner state", () => {
   let dir: string, file: string, store: RelationshipLogStore;
@@ -59,6 +60,56 @@ describe("private conversation expressions and partner state", () => {
     expect(store.privateExpressions()).toHaveLength(0);
     await turn("2", "又到开工时间，“鱼力全开”");
     expect(await context("one", "准备开工")).toContain("鱼力全开");
+  });
+  it("reports only learned context applied to this reply, with the original source turns", async () => {
+    await store.updatePreferences({ learnPrivateExpressions: true });
+    for (const [id, text] of [
+      ["phrase", "以后把夜宵叫作“月亮补给”"],
+      ["pref", "以后少问我问题"],
+    ]) store.recordAcceptedCompanionFeedback({
+      conversationId: "source-chat", userTurnId: id, userEntryId: id, userRevision: 1, speechScope: "owner", channel: "desktop", text,
+    });
+    const references: CompanionReference[] = [];
+    const build = (text: string, scope = "owner") => store.buildContext("chat", true, text, true, false, scope,
+      item => references.push(item));
+    const prompt = await build("今天吃什么夜宵");
+    expect(prompt).toContain("月亮补给");
+    expect(prompt).toContain("少用问句收尾");
+    expect(references.splice(0)).toEqual([
+      { kind: "expression", quote: "月亮补给", conversationId: "source-chat", userTurnId: "phrase" },
+      { kind: "preference", topic: "questions", conversationId: "source-chat", userTurnId: "pref" },
+    ]);
+    await build("以后可以追问我。聊点别的吧。");
+    await build("今天吃什么夜宵", "peer:different-account");
+    expect(references).toEqual([]);
+  });
+  it("does not learn an expression from repeated disapproval or mixed historical and current sentiment", async () => {
+    await store.updatePreferences({ learnPrivateExpressions: true });
+    await turn("one", "我不喜欢‘月亮补给’，这词有点怪。");
+    await turn("two", "以前不喜欢‘月亮补给’，现在倒是能接受。");
+    await turn("three", "听起来很别扭，尤其是‘月亮补给’。");
+    expect(store.privateExpressions()).toEqual([]);
+    expect(store.blockedExpressions("one", "")).toEqual([]);
+  });
+  it("applies direct word corrections without a model response, and can explicitly restore a word", async () => {
+    await store.updatePreferences({ learnPrivateExpressions: true });
+    const accepted = (id: string, text: string) => store.recordAcceptedCompanionFeedback({
+      conversationId: "one", userEntryId: id, userTurnId: id, userRevision: 1, channel: "desktop", speechScope: "owner", text,
+    });
+    accepted("definition", "以后把宵夜叫作“月亮补给”");
+    accepted("quoted", "朋友说：“以后别用‘月亮补给’”");
+    accepted("temporary", "这次先别用“月亮补给”");
+    expect(store.blockedExpressions("one", "这次先别用“月亮补给”")).toEqual(["月亮补给"]);
+    expect(store.blockedExpressions("one", "")).toEqual([]);
+    expect(await context("two", "点宵夜")).toContain("月亮补给");
+    accepted("block", "以后别再用“月亮补给”");
+    expect(store.blockedExpressions("two", "")).toEqual(["月亮补给"]);
+    accepted("restore", "以后可以重新用“月亮补给”");
+    store = new RelationshipLogStore(file);
+    expect(store.blockedExpressions("two", "")).toEqual([]);
+    expect(await context("two", "点宵夜")).toContain("月亮补给");
+    store.retainCompanionFeedbackTurns("one", new Set(["definition", "block"]));
+    expect(store.blockedExpressions("two", "")).toEqual(["月亮补给"]);
   });
   it("learns unquoted conversational habits across sessions, respects speaker identity, retractions and pause", async () => {
     await store.updatePreferences({ learnPrivateExpressions: true });

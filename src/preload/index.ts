@@ -1,4 +1,5 @@
-import { contextBridge, ipcRenderer, webUtils } from "electron";
+import { startupIpc as ipcRenderer } from "./startup-ipc";
+import { contextBridge, webUtils } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import type { ContextCompactionPhaseEvent } from "../shared/context-usage";
 import type { ChannelRecoveryApi } from "../shared/channel-recovery";
@@ -13,7 +14,7 @@ import type {
 import type { UiTheme } from "../shared/ui-theme";
 import type { PluginPanelApi } from "../shared/plugin-management";
 import type { ReasoningPreference } from "../shared/reasoning";
-import type { AguiRunAck } from "../shared/run-terminal";
+import type { AguiCancelTarget, AguiRunAck } from "../shared/run-terminal";
 import type { ReviewSnapshot, ReviewRestoreOutcome } from "../shared/review-types";
 import type { WorkspaceListResult, WorkspaceReadResult } from "../shared/workspace-files-types";
 import type { OpenInAppListResult, OpenInAppOpenResult } from "../shared/open-in-app-types";
@@ -195,7 +196,7 @@ const aguiApi = {
     ipcRenderer.on(IPC.AGUI_EVENT, listener);
     return () => ipcRenderer.off(IPC.AGUI_EVENT, listener);
   },
-  cancel: (runId?: string) => ipcRenderer.invoke(IPC.AGUI_CANCEL, runId),
+  cancel: (target?: AguiCancelTarget) => ipcRenderer.invoke(IPC.AGUI_CANCEL, target),
   // 落盘确认（单向通知）：本轮 run 的终态消息已写入会话存储，
   // 主进程据此发布桌面轮次结束事件（插件生命周期观察）。
   reportRunPersisted: (payload: { runId: string; finalMessageId?: string }) => {
@@ -429,6 +430,8 @@ const settingsApi = {
   channelsFeishuTestConnection: () => ipcRenderer.invoke(IPC.CHANNELS_FEISHU_TEST_CONNECTION),
   channelsFeishuTestWebhookReachable: () => ipcRenderer.invoke(IPC.CHANNELS_FEISHU_TEST_WEBHOOK_REACHABLE),
   channelsQqTestConnection: () => ipcRenderer.invoke(IPC.CHANNELS_QQ_TEST_CONNECTION),
+  channelsQqModuleInstallationStatus: (input: import("../shared/qq-module-installation").QqModuleListenInput): Promise<import("../shared/qq-module-installation").QqModuleInstallationStatus> =>
+    ipcRenderer.invoke(IPC.CHANNELS_QQ_MODULE_INSTALLATION_STATUS, input),
   // 权威鉴权预检：监听地址能否解析、是否必须配 token 只有主进程知道
   channelsQqResolveAuthRequirement: (input: { listenMode: string; customHost?: string }) =>
     ipcRenderer.invoke(IPC.CHANNELS_QQ_RESOLVE_AUTH_REQUIREMENT, input) as Promise<QqListenAuthRequirement>,

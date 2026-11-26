@@ -93,6 +93,14 @@ describe("React chat sticker messages", () => {
 });
 
 describe("formal answer visibility", () => {
+  it("forwards saved companion references to the assistant footer", () => {
+    const companionReferences = [{ kind: "preference", topic: "questions", conversationId: "source" }] as const;
+    const items = createMessageItems([{
+      id: "answer", role: "assistant", content: "先休息一下。", companionReferences: [...companionReferences],
+    }], []);
+    expect(items.find(item => item.role === "assistant")?.extraInfo?.companionReferences).toEqual(companionReferences);
+  });
+
   it("attaches transient retry status to the visible waiting state", () => {
     const message: ChatMessageItem = {
       id: "assistant-retrying",

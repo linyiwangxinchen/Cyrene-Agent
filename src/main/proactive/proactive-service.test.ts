@@ -225,6 +225,29 @@ describe("proactive chat service", () => {
     expect(ctx.state.pendingCommitIntent).toBeUndefined();
   });
 
+  it("reconciles an already delivered intent after the epoch changes without sending again", async () => {
+    const commitMessage = vi.fn(async (_input: ProactiveCommitInput) => {
+      throw new Error("receipt write failed after send");
+    });
+    const recoverCommittedIntent = vi.fn(async () => ({ kind: "committed" as const }));
+    const ctx = setup({
+      commitMessage, recoverCommittedIntent,
+      requiresDurableIntent: () => true,
+      getDeliveryTarget: () => "wechat",
+    });
+    await expect(ctx.service.evaluateCandidate(candidate)).rejects.toThrow("receipt write failed after send");
+    const intent = structuredClone(ctx.state.pendingCommitIntent);
+    ctx.service.invalidateForUserMessage();
+    ctx.setSnapshot({ enabled: false });
+    await ctx.service.evaluateCandidate(candidate);
+
+    expect(recoverCommittedIntent).toHaveBeenCalledExactlyOnceWith(intent);
+    expect(commitMessage).toHaveBeenCalledOnce();
+    expect(ctx.runModel).toHaveBeenCalledOnce();
+    expect(ctx.state.pendingCommitIntent).toBeUndefined();
+    expect(ctx.state.unansweredCount).toBe(0);
+  });
+
   it("passes the frozen delivery route to model generation after message building", async () => {
     let target: "local" | "wechat" = "local";
     const runModel = vi.fn(async () => ({ kind: "send" as const, text: "固定本地消息" }));

@@ -44,6 +44,7 @@ export const IPC = {
   COMPANION_WORLD_SUGGESTION_WITHDRAW: "companion:world:suggestion:withdraw",
   COMPANION_UPDATE: "companion:update",
   COMPANION_EXPORT: "companion:export",
+  APP_RUNTIME_IPC_READY: "app:runtime-ipc-ready",
   // pet window
   WINDOW_MINIMIZE: "window:minimize",
   WINDOW_CLOSE: "window:close",
@@ -519,6 +520,7 @@ export const IPC = {
   CHANNELS_FEISHU_TEST_CONNECTION: "channels:feishu:test-connection",
   CHANNELS_FEISHU_TEST_WEBHOOK_REACHABLE: "channels:feishu:test-webhook-reachable",
   CHANNELS_QQ_TEST_CONNECTION: "channels:qq:test-connection",
+  CHANNELS_QQ_MODULE_INSTALLATION_STATUS: "channels:qq-module:installation-status",
   /**
    * QQ 监听鉴权预检：主进程按 listenMode/customHost 解析真实监听地址，并判定是否
    * 必须配置 Access Token。渲染进程看不到网络接口，因此该判定只能由主进程给出。

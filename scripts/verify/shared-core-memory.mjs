@@ -15,6 +15,8 @@ import { responseBody, streamEvents } from '../../src/main/orchestrator/vendors/
 const require = createRequire(import.meta.url);
 const { createWebServer } = require('../../dist/server/server/index.js');
 const { CURRENT_DISCLAIMER_VERSION } = require('../../dist/server/shared/disclaimer.js');
+const { resolveSummaryMemoryPaths } = require('../../dist/server/main/memory/summary-memory-paths.js');
+const { writeSummaryFileAtomic } = require('../../dist/server/main/memory/summary-memory-store.js');
 const dataDir = await mkdtemp(path.join(os.tmpdir(), 'cyrene-memory-'));
 const sessionId = 'wiki-backfill-fixture';
 const model = 'gpt-6.1-sol';
@@ -28,6 +30,16 @@ const vectorTurns = [
   '上周我在河边拍到了第一张星轨照片。',
 ];
 const vectorReply = '听起来挺有意思，愿意多聊聊吗？';
+const recallQuestions = [
+  '你还记得我那次拍下的星轨吗？（恢复后）',
+  '你还记得我那次拍下的星轨吗？（已关闭）',
+  '你还记得我那次拍下的星轨吗？（来源已删除）',
+  '这段聊天之前在做什么？（摘要开启）',
+  '这段聊天之前在做什么？（摘要关闭）',
+  '这次在杨木码头集合，把手绘罗盘带上。',
+  '这段聊天之前在做什么？（已验证来源）',
+  '更正，集合点改为白水桥，手绘罗盘取消。',
+];
 const vectorCandidates = [
   { layer: 'L0', field: 'preferredName', content: '小屿', evidenceIndex: 0 },
   { layer: 'L1', field: 'currentProject', content: '制作夜景摄影集', evidenceIndex: 1 },
@@ -37,11 +49,12 @@ const previousNodeOptions = process.env.NODE_OPTIONS;
 // Do not let an inherited warning-only policy hide a rejected background tail.
 process.env.NODE_OPTIONS = `${previousNodeOptions ?? ''} --unhandled-rejections=strict`.trim();
 const results = [], logs = [], requests = [], ignoredRequests = [], aguiEvents = [], vectorRequests = [];
+const recallPrompts = new Map();
 let mode = 'unauthorized', handle, socket, baseUrl, cookie = '', clientToken = '';
 let vectorDataDir, vectorSessionId;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Bound the acceptance run even if the child process dies with an unresolved IPC.
-const watchdog = setTimeout(() => { console.error('FAIL memory acceptance exceeded 45 seconds'); process.exit(1); }, 45_000);
+const watchdog = setTimeout(() => { console.error('FAIL memory acceptance exceeded 60 seconds'); process.exit(1); }, 60_000);
 
 function strings(value) {
   if (typeof value === 'string') return [value];
@@ -75,6 +88,9 @@ function respondVector(request, response, body) {
     });
   } else if (prompt.includes('保守的聊天连续性信息提取器')) {
     text = JSON.stringify({ operations: [] });
+  } else {
+    const question = recallQuestions.findLast(question => prompt.includes(question));
+    if (question) recallPrompts.set(question, prompt);
   }
   const transport = request.url === '/v1/responses' ? 'responses' : 'openai';
   if (!body.stream) {
@@ -286,6 +302,130 @@ async function verifyVectorMemory() {
   assert.equal(vectorRequests.length, 1);
   assert.ok(!logs.some(line => String(line).includes('Fixture error:')), 'fixture assertions must all pass');
   console.log(`Vector store: L2 ${entry.syncStatus}; isolated memory: ${memoryPath}`);
+  async function ask(question, conversationId, transcriptRewind) {
+    const targetId = conversationId ?? (await invoke('chats:create', { mode: 'chat', title: question })).id;
+    const run = await invoke('agui:run', {
+      sessionId: targetId, styleId: 'default',
+      currentUser: { turnId: transcriptRewind?.anchorUserTurnId ?? randomUUID(), text: question, visibleContent: question }, assistantTurnId: randomUUID(),
+      ...(transcriptRewind ? { transcriptRewind } : {}),
+    });
+    assert.ok(run.success, JSON.stringify(run));
+    const terminal = () => aguiEvents.find(event => event.runId === run.runId && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type));
+    await waitFor(terminal, question);
+    assert.equal(terminal().result?.status, 'success', JSON.stringify(terminal()));
+    const prompt = recallPrompts.get(question);
+    assert.ok(prompt, 'the fixture must capture the actual outgoing model request');
+    return prompt;
+  }
+  const fact = vectorCandidates[2].content;
+  function withVectorDatabase(run) {
+    const database = new DatabaseSync(path.join(vectorDataDir, 'cyrene.sqlite'));
+    try { database.exec('PRAGMA busy_timeout=1000'); return run(database); }
+    finally { database.close(); }
+  }
+  function seedPendingSocialJob(jobId) {
+    withVectorDatabase(database => {
+      const record = database.prepare("SELECT entry_json FROM transcript_entries WHERE conversation_id=? ORDER BY seq").all(session.id)
+        .map(row => JSON.parse(row.entry_json));
+      const activeUser = record.find(entry => entry.kind === 'user' && entry.turnId === turnIds[5]);
+      assert.ok(activeUser);
+      const activeAssistant = record.find(entry => entry.kind === 'assistant' && entry.seq > activeUser.seq);
+      assert.ok(activeAssistant);
+      const input = {
+        conversationId: session.id, memoryScope: 'owner', now: Date.now(), retrievedAtoms: [],
+        source: { userTurnId: activeUser.turnId, assistantEntryId: activeAssistant.id },
+        userTurn: { id: activeUser.turnId, role: 'user', text: vectorTurns[5] },
+        assistantTurn: { id: activeAssistant.turnId, role: 'assistant', text: activeAssistant.payload.content },
+      };
+      database.prepare("INSERT INTO memory_social_jobs VALUES(?,?,?,?,'pending')").run(jobId, session.id, activeUser.id, JSON.stringify(input));
+    });
+  }
+  function socialJobStatus(id) {
+    return withVectorDatabase(database => ({
+      ...database.prepare('SELECT status,payload_json FROM memory_social_jobs WHERE job_id=?').get(id),
+    }));
+  }
+  await check('A fresh Chat after restart receives the sourced L2 episode in the model request', async () => {
+    await close(); await launch(false, vectorDataDir);
+    const prompt = await ask(recallQuestions[0]);
+    assert.ok(prompt.includes('【相关事件记忆】'));
+    assert.ok(prompt.includes(fact));
+    assert.ok(!prompt.includes(vectorTurns[0]), 'the original transcript must not be carried into the fresh Chat');
+  });
+  await check('Explicit off suppresses personal memory in the model request while retaining stored data', async () => {
+    seedPendingSocialJob('before-off-fixture');
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'off' })).memoryMode, 'off');
+    assert.deepEqual(socialJobStatus('before-off-fixture'), { status: 'obsolete', payload_json: null });
+    const prompt = await ask(recallQuestions[1]);
+    assert.ok(!prompt.includes(fact));
+    assert.ok(!prompt.includes('【相关事件记忆】'));
+    assert.ok(!prompt.includes('称呼：小屿'));
+    assert.ok((await readMemory()).l2.some(item => item.id === entry.id));
+  });
+  await check('Starting with memory off discards existing extraction retries before re-enabling memory', async () => {
+    // Represent a retry left on disk by an earlier build that did not discard pending work.
+    seedPendingSocialJob('startup-off-fixture');
+    await close(); await launch(false, vectorDataDir);
+    assert.deepEqual(socialJobStatus('startup-off-fixture'), { status: 'obsolete', payload_json: null });
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'vector' })).memoryMode, 'vector');
+    await close(); await launch(false, vectorDataDir);
+    assert.deepEqual(socialJobStatus('startup-off-fixture'), { status: 'obsolete', payload_json: null });
+  });
+  await check('After the source conversation is deleted the old episode cannot enter another request', async () => {
+    await invoke('chats:delete', session.id);
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'vector' })).memoryMode, 'vector');
+    const prompt = await ask(recallQuestions[2]);
+    assert.ok(!prompt.includes(fact));
+    assert.ok(!prompt.includes('【相关事件记忆】'));
+  });
+  await check('Summary mode reads an existing session summary and off keeps it out of the next request', async () => {
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'summary' })).memoryMode, 'summary');
+    const summarySession = await invoke('chats:create', { mode: 'chat', title: 'Summary memory compatibility' });
+    const { sessionPath } = resolveSummaryMemoryPaths({ conversationId: summarySession.id, userDataRoot: vectorDataDir });
+    const existingSummary = '已经为秋天的徒步路线画完手绘地图。';
+    await mkdir(path.dirname(sessionPath), { recursive: true });
+    await writeFile(sessionPath, existingSummary, 'utf8');
+    const included = await ask(recallQuestions[3], summarySession.id);
+    assert.ok(included.includes('当前会话摘要') && included.includes(existingSummary));
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'off' })).memoryMode, 'off');
+    const excluded = await ask(recallQuestions[4], summarySession.id);
+    assert.ok(!excluded.includes(existingSummary));
+    assert.equal(await readFile(sessionPath, 'utf8'), existingSummary);
+  });
+  await check('Editing a canonical source hides its tracked summary from an authenticated Chat request', async () => {
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'summary' })).memoryMode, 'summary');
+    const sourceSession = await invoke('chats:create', { mode: 'chat', title: 'Tracked summary memory' });
+    const sourceFor = question => withVectorDatabase(database => {
+      const entries = database.prepare('SELECT entry_json FROM transcript_entries WHERE conversation_id=? ORDER BY seq').all(sourceSession.id)
+        .map(row => JSON.parse(row.entry_json));
+      const sourceUser = entries.find(entry => entry.kind === 'user' && entry.payload.text === question);
+      const sourceAssistant = sourceUser && entries.find(entry => entry.kind === 'assistant' && entry.seq > sourceUser.seq);
+      assert.ok(sourceUser?.id.startsWith('user:v1:') && sourceAssistant?.turnId);
+      return {
+        source: { conversationId: sourceSession.id, userTurnId: sourceUser.turnId, userEntryId: sourceUser.id, assistantEntryId: sourceAssistant.id },
+        assistantTurnId: sourceAssistant.turnId,
+      };
+    });
+    await ask(recallQuestions[5], sourceSession.id);
+    const original = sourceFor(recallQuestions[5]);
+    const { sessionPath } = resolveSummaryMemoryPaths({ conversationId: sourceSession.id, userDataRoot: vectorDataDir });
+    const summary = '旧行程摘要指向杨木码头与手绘罗盘。';
+    await writeSummaryFileAtomic(sessionPath, summary, 800, vectorDataDir, undefined, [original.source]);
+    const included = await ask(recallQuestions[6], sourceSession.id);
+    assert.ok(included.includes('当前会话摘要') && included.includes(summary));
+    // A rewrite affects the last Chat turn. Include the completed probe among
+    // the tracked sources, leaving the first authentic source active.
+    const latest = sourceFor(recallQuestions[6]);
+    await writeSummaryFileAtomic(sessionPath, summary, 800, vectorDataDir, undefined, [original.source, latest.source]);
+    const excluded = await ask(recallQuestions[7], sourceSession.id, {
+      anchorUserTurnId: latest.source.userTurnId, expectedAssistantMessageId: latest.assistantTurnId, disposition: 'replace_user',
+    });
+    assert.ok(!excluded.includes(summary) && !excluded.includes(sessionPath));
+    assert.ok(excluded.includes('有摘要来源无法确认'));
+    assert.ok((await readFile(sessionPath, 'utf8')).endsWith(summary), 'the original summary must remain on disk');
+    assert.ok(await invoke('chats:get', sourceSession.id), 'the original conversation must still exist');
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'off' })).memoryMode, 'off');
+  });
 }
 
 try {

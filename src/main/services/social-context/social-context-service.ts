@@ -15,6 +15,11 @@ import {
 import { createSocialContextScheduler } from "../../social-context/scheduler";
 import { createSocialAtomStore } from "../../social-context/store";
 import type { LlmClient } from "../llm/llm-client";
+import { activeMemorySourceEntry, filterActiveSocialAtoms } from "../../memory/memory-owner-recall";
+import { isForgottenSocialFact, isForgottenSource } from "../../memory/memory-source-policy";
+import { memoryStore } from "../../memory/memory-store";
+import { getConversationDatabase } from "../../storage/conversation-database-client";
+import type { SocialExtractionInput } from "../../social-context/types";
 
 export interface SocialContextService {
   store: ReturnType<typeof createSocialAtomStore>;
@@ -30,11 +35,32 @@ export interface SocialContextServiceDeps {
   ) => Promise<unknown>;
 }
 
+export function discardPendingSocialContextJobs(): Promise<void> {
+  return getConversationDatabase(app.getPath("userData")).call("memory.socialDiscardPending");
+}
+
 export function createSocialContextService(deps: SocialContextServiceDeps): SocialContextService {
   const store = createSocialAtomStore(path.join(app.getPath("userData"), "chat-social-atoms.json"));
+  const database = () => getConversationDatabase(app.getPath("userData"));
 
   const scheduler = createSocialContextScheduler({
     store,
+    jobs: {
+      record: input => database().call<string | undefined>("memory.socialRecord", input),
+      pending: () => database().call<Array<{ id: string; input: SocialExtractionInput }>>("memory.socialPending"),
+      complete: id => database().call("memory.socialComplete", id),
+      discardPending: discardPendingSocialContextJobs,
+    },
+    refreshAtoms: ({ conversationId, memoryScope, now }) => filterActiveSocialAtoms(store.listActive(conversationId, now, memoryScope)),
+    isAllowedAtom: async atom => Boolean(atom.sourceEntryId && !isForgottenSocialFact(await memoryStore.load(), {
+      conversationId: atom.conversationId, messageId: atom.sourceEntryId,
+    }, atom.content)),
+    resolveSourceEntry: async ({ conversationId, source }) => {
+      if (!source) return undefined;
+      const messageId = await activeMemorySourceEntry(conversationId, source);
+      if (!messageId || isForgottenSource(await memoryStore.load(), { conversationId, messageId })) return undefined;
+      return messageId;
+    },
     enqueue: (label, task) =>
       deps.enqueueLLMTask(label, task, {
         log: false,

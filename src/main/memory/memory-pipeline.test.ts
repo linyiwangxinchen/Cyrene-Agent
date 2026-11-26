@@ -131,6 +131,11 @@ it("writes all three vector memory layers after six canonical private chat turns
   expect(overview).toContain("对话记忆（L2，共 1 条")
   expect(overview).toContain("河边拍星轨")
   expect(l2[0].sourceQuote).toBe(userTexts[5])
+  const { buildVectorMemoryContext } = await import("../orchestrator/index")
+  expect(await buildVectorMemoryContext("你还记得我拍过星轨照片吗？")).toContain("第一张星轨照片")
+  await client.call("transcript.append", conversationId, { id: "withdraw-episode", kind: "turn_tombstone", at: Date.now(),
+    payload: { targetUserTurnId: "user-5", reason: "pending_withdrawn" } })
+  expect(await buildVectorMemoryContext("你还记得我拍过星轨照片吗？")).toBe("")
 })
 
 it("passes completion through the real scheduler, worker and memory writer while rejecting a superseded judge result", async () => {

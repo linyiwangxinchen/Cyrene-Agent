@@ -1,3 +1,4 @@
+import { waitForStartupTask } from "./application/startup-cancellation";
 import type {
   PluginAgentEvent,
   PluginAgentRunOptions,
@@ -206,7 +207,11 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
       signals.signal.throwIfAborted();
       await deps.journal.appendUser(conversationId, { turnId: `plugin:${runId}`, runId, text: goal });
     }
-    const built = await deps.agentRuntime.buildOptions({
+    let built: Awaited<ReturnType<AgentRuntime["buildOptions"]>>;
+    try {
+      signals.signal.throwIfAborted();
+      const building = deps.agentRuntime.buildOptions({
+      signal: signals.signal,
       sessionId: conversationId,
       ...(deps.journal ? { modelContext: await deps.journal.buildModelContext(conversationId) } : {}),
       workspaceBindingSessionId: null,
@@ -216,7 +221,18 @@ export function createPluginAgentRunner(deps: PluginAgentRunnerDeps): NonNullabl
       promptChannel: deps.pluginId === "minecraft-bot" ? "minecraft" : `plugin:${deps.pluginId}`,
       ...(options.modelProfileId ? { modelProfileId: options.modelProfileId } : {}),
       currentUser: { turnId: `plugin:${runId}`, text: goal, visibleContent: goal },
-    });
+    }, []);
+      await waitForStartupTask(building, signals.signal);
+      signals.signal.throwIfAborted();
+      built = await building;
+    } catch (error) {
+      if (!signals.signal.aborted) throw error;
+      const timeout = signals.firstAbortSource() === "deadline";
+      return { text: "", rounds: 0, terminal: {
+        status: timeout ? "timeout" : "cancelled",
+        reason: timeout ? "timeout" : "user_cancelled", externalEffectsMayContinue: false,
+      } } as PluginAgentRunResult;
+    }
     const toolSystemContent = buildToolSystemPrompt(mode, tools);
     const promptLayers = buildHarnessPromptLayers({
       ...built.options,

@@ -53,7 +53,7 @@ export interface PluginRuntimeDeps {
   getPanelHostWebContents?: () => readonly Electron.WebContents[];
 }
 
-export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<PluginManager> {
+export function createPluginRuntime(deps: PluginRuntimeDeps): PluginManager {
   const userPluginRoot = path.join(app.getPath("userData"), "plugins");
   const pluginDataRoot = path.join(app.getPath("userData"), "plugin-data");
   const journal = new ConversationJournalService({
@@ -70,6 +70,7 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
     commitBridge: createSpeechInputCommitBridge(deps.ipc),
     callController: createSpeechInputCallController(),
   });
+  const pluginChannels = channelManager.createPluginPort();
   const manager = new PluginManager({
     scanRoots: [
       { path: path.join(__dirname, "..", "plugins"), source: "builtin" },
@@ -87,9 +88,9 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
       // 宿主渠道管理器端口：同样在宿主侧完成 PluginChannelAdapter → ChannelAdapter 的适配
       channelManager: {
         has: (id) => channelManager.has(id as ChannelId),
-        register: (adapter) => channelManager.register(adapter as unknown as ChannelAdapter),
-        unregister: (id) => channelManager.unregister(id as ChannelId),
-        startOne: (id) => channelManager.startOne(id as ChannelId),
+        register: (adapter) => pluginChannels.register(adapter as unknown as ChannelAdapter),
+        unregister: (id) => pluginChannels.unregister(id as ChannelId),
+        startOne: (id) => pluginChannels.startOne(id as ChannelId),
       },
       registerIpc: (channel, handler) => {
         // 两条调用来源（既有 ipcMain 直达 + 面板转发）共用同一张路由表
@@ -201,7 +202,7 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
   // pluginId 语法与通道归属由路由器校验，面板无法构造跨插件通道。
   deps.ipc.handle(
     IPC.PLUGINS_PANEL_INVOKE,
-    (event: Electron.IpcMainInvokeEvent, pluginId: unknown, channel: unknown, args: unknown) => {
+    async (event: Electron.IpcMainInvokeEvent, pluginId: unknown, channel: unknown, args: unknown) => {
       if (typeof pluginId !== "string" || typeof channel !== "string" || !Array.isArray(args)) {
         return { ok: false, error: "面板调用参数格式非法" };
       }
@@ -209,11 +210,18 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
       if (!hosts.includes(event.sender)) {
         return { ok: false, error: "面板调用来源窗口不受信任" };
       }
+      await manager.waitForStartupTools(id => id === pluginId);
       return router.dispatch({ pluginId, channel, args, caller: "panel" });
     },
   );
   // 设置面板静态资源协议：禁用插件立即 404，查询实时反映启停状态
   installPluginPanelProtocol((pluginId) => manager.getSettingsPanelDir(pluginId));
+  return manager;
+}
+
+/** The authenticated Web host finishes startup only after the plugin registry settles. */
+export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<PluginManager> {
+  const manager = createPluginRuntime(deps);
   await manager.start();
   return manager;
 }

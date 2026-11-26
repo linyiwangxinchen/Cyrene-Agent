@@ -4,6 +4,12 @@ import type { ChannelRecoveryApi, ChannelRecoveryItem } from "../../../../shared
 export type { ChannelRecoveryApi, ChannelRecoveryItem } from "../../../../shared/channel-recovery";
 const labels: Record<string, string> = { queued: "等待处理", running: "处理中", completed: "已完成", failed: "失败", unknown: "待确认", cancelled: "已取消", cancelling: "取消中，等待当前处理结束", pending: "待发送", sending: "发送中", sent: "已送达", corrupt: "记录损坏" };
 
+function recoveryError(error: string): string {
+  if (error === "qq_delivery_account_missing") return "该记录没有可验证的原发送 QQ 账号，无法恢复发送。你仍可核对送达状态或取消后续发送。";
+  if (error === "qq_delivery_account_mismatch") return "请连接原发送 QQ 账号后再恢复发送。";
+  return error;
+}
+
 export function ChannelRecoveryPanel({ api }: { api: ChannelRecoveryApi }) {
   const [items, setItems] = useState<ChannelRecoveryItem[]>([]);
   const [error, setError] = useState<string>();
@@ -15,7 +21,7 @@ export function ChannelRecoveryPanel({ api }: { api: ChannelRecoveryApi }) {
   useEffect(() => { void refresh(); }, [refresh]);
   const run = async (task: () => Promise<unknown>) => {
     setBusy(true);
-    try { const result = await task() as { ok?: boolean; error?: string }; if (result?.ok === false) throw new Error(result.error || "恢复未完成"); await refresh(); }
+    try { const result = await task() as { ok?: boolean; error?: string }; if (result?.ok === false) throw new Error(recoveryError(result.error || "恢复未完成")); await refresh(); }
     catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)); }
     finally { setBusy(false); }
   };
@@ -40,7 +46,7 @@ export function ChannelRecoveryPanel({ api }: { api: ChannelRecoveryApi }) {
             <Button size="small" disabled={busy} onClick={() => Modal.confirm({ title: "确认这个片段已送达？", content: "请先在微信/飞书/QQ 对话中核对。确认后会跳过这个片段。", okText: "已核对，已送达", onOk: () => run(() => api.resolve({ id: item.id, index: part.index, outcome: "sent", confirmed: true })) })}>确认已送达</Button>
             <Button size="small" disabled={busy} onClick={() => Modal.confirm({ title: "确认这个片段没有送达？", content: "只有核对远端对话确实未收到后，才允许后续重新发送。", okText: "已核对，未送达", onOk: () => run(() => api.resolve({ id: item.id, index: part.index, outcome: "not_sent", confirmed: true })) })}>确认未送达</Button>
           </>}
-        </Space>{part.error && <small style={{ display: "block" }}>{part.error}</small>}
+        </Space>{part.error && <small style={{ display: "block" }}>{recoveryError(part.error)}</small>}
       </div>)}
       {item.kind !== "corrupt" && !item.active && !["completed", "cancelled"].includes(item.status) && <Space wrap style={{ marginTop: 12 }}>
         <Button disabled={busy || item.parts.some(part => part.status === "unknown" || part.status === "sending")} onClick={() => Modal.confirm({ title: item.kind === "inbox" ? "确认恢复这条消息的处理？" : "恢复未送达片段？", content: item.kind === "inbox" ? "请先核对这条任务先前的工具执行结果，避免重复修改文件、操作账户等副作用。会保持原会话绑定；已有 CTA 回复不会重新生成。" : "只发送未完成片段，跳过已确认送达的内容。", okText: "已核对，恢复", onOk: () => run(() => api.retry({ id: item.id, confirmed: true })) })}>恢复</Button>

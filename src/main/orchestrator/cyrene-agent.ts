@@ -95,6 +95,8 @@ export interface AgentLoopSettings {
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
   manualReasoning?: import("../../shared/manual-reasoning").ManualReasoningConfig;
   imageGeneration?: import("./vendors/types").ImageGenerationRequestConfig;
+  multimodal?: boolean;
+  vision?: import("./image-router").ImageRouteSettings["vision"];
   /** 用户设置的模型上下文窗口（Token）。用于非 code 模式的对话压缩触发阈值。 */
   contextWindowTokens: number;
   /** 主模型请求的额外重试次数；旧调用回退到 5。 */
@@ -128,6 +130,9 @@ export interface CyreneRunOptions {
   /** 原始消息（不含 system）。system 由 chat-loop / harness-adapter 按 promptLayers 组装，不随消息持久化。 */
   messages: ChatMessage[];
   conversationId?: string;
+  memoryScope?: string;
+  memoryUserTurnId?: string;
+  memoryModeVersion?: number;
   /** 当前外部渠道消息的可信回信目标，供提醒等渠道工具绑定原会话。 */
   channelContext?: {
     channel: ChannelId;
@@ -273,6 +278,7 @@ export interface CyreneRunResult {
   soulPhaseReason?: "no_tool" | "max_rounds" | "timeout" | "tool_error";
   executionMode?: AgentExecutionMode;
   socialContext?: CyreneRunOptions["socialContext"];
+  memoryModeVersion?: number;
   /**
    * Canonical 终态结算（exactly-once，见 run-settlement.ts）。
    * 桥层据此决定是否跑成功收尾副作用、是否走 RUN_ERROR 兜底等。
@@ -552,7 +558,7 @@ export class CyreneAgent extends AbstractAgent {
                   reason: notice,
                   externalEffectsMayContinue: false,
                 };
-                this.lastResult = { reply: notice, toolResults: [], executionMode, socialContext: options.socialContext, terminal };
+                this.lastResult = { reply: notice, toolResults: [], executionMode, socialContext: options.socialContext, memoryModeVersion: options.memoryModeVersion, terminal };
                 try {
                   await options.transcriptSink?.closeInterruption({ reason: "runtime_error", runSession: null });
                 } catch (closureError) {
@@ -614,6 +620,8 @@ export class CyreneAgent extends AbstractAgent {
             const executeTool = (tc: Parameters<typeof executeToolCall>[0], runnableToolIds: Set<string>) => executeToolCall(tc, runnableToolIds, {
               userQuery: extractLastUserQuery(options.messages),
               conversationId: options.conversationId ?? "default",
+              memoryScope: options.memoryScope,
+              memoryUserTurnId: options.memoryUserTurnId,
               runId,
               contextRefs: contextRefRegistry,
               signal: abortController.signal,
@@ -641,6 +649,7 @@ export class CyreneAgent extends AbstractAgent {
             soulPhaseReason: result.completionReason,
             executionMode,
             socialContext: options.socialContext,
+            memoryModeVersion: options.memoryModeVersion,
             ...(result.modelFailure ? { modelFailure: result.modelFailure } : {}),
             // 优先使用 harness-adapter 上报的 terminal；否则按 completionReason 推断
             terminal: result.terminal ?? terminalFromCompletionReason(result.completionReason),

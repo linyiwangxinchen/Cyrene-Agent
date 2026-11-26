@@ -67,7 +67,7 @@ export async function runHarnessWithAdapter(
   } = prepared;
 
   const toolRuntime = await prepareToolRuntime({ options, signal, prepared, sendBaseEvent });
-  const { toolContext, checkPermission, toolOutputStore, taskExecutor, closeTaskExecutor, openTaskCompanions } = toolRuntime;
+  const { toolContext, checkPermission, toolOutputStore, taskExecutor, closeTaskExecutor, openTaskCompanions, toolResultImages } = toolRuntime;
 
   // ── 构建 HarnessInput ──
   const harnessInput: HarnessInput = {
@@ -111,6 +111,7 @@ export async function runHarnessWithAdapter(
     includeInteractiveTools: options.harnessInteractiveTools,
     planState,
     toolContext,
+    resolveToolImage: toolResultImages.resolve,
     browserControlState: () => getBrowserPanelController()?.getControlState(toolContext.conversationId, runId) ?? "inactive",
     toolOutputStore,
     executionLedger: options.executionLedger,
@@ -124,7 +125,7 @@ export async function runHarnessWithAdapter(
 
   // ── 运行 Harness ──
   // 这是唯一的真实执行边界。事件回调只负责同步转发，业务状态仍由各自的所有者维护。
-  const result = await runCyreneHarness(harnessInput);
+  const result = await runCyreneHarness(harnessInput).finally(toolResultImages.close);
 
   // ── 转换结果 ──
   const completionReason = mapTerminateReason(result.terminateReason);

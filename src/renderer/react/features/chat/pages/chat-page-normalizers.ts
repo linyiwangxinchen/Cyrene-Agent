@@ -100,6 +100,7 @@ export function toUiMessages(session: ChatSession): ChatMessageItem[] {
       emailDraftCards: message.emailDraftCards?.map((card) => card.status === "sending" ? { ...card, status: "unknown" } : card),
       attachments: message.attachments,
       contextUsage: message.contextUsage,
+      companionReferences: message.companionReferences,
       runId: message.runSnapshot?.runId,
       runSnapshot: message.runSnapshot,
     };

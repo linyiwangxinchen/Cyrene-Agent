@@ -23,6 +23,8 @@ describe("完整条款与本地化", () => {
     expect(html.match(/<h3>/g)).toHaveLength(3);
     expect(html).toContain(terms.sections[8].title); // 未成年人限制不能仅留在外部文档。
     expect(html).toContain('href="mailto:ky2569ly@gmail.com"');
+    expect(html).toContain('href="mailto:Liang_zh_@outlook.com"');
+    expect(html).toContain('href="https://space.bilibili.com/1098067913"');
     expect(html).toContain('href="https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/CONTRIBUTORS.md"');
     expect(html).toContain('href="https://github.com/linyiwangxinchen/Cyrene-Agent/blob/master/docs/MAINTAINERS.md"');
     expect(html).not.toContain("Playa-0v0");

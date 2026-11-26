@@ -18,6 +18,8 @@ export interface ToolContext {
   userQuery: string;
   /** 当前聊天会话 ID；需要跨轮隔离状态的工具必须使用该字段。 */
   conversationId?: string;
+  memoryScope?: string;
+  memoryUserTurnId?: string;
   /** 外部渠道入站消息的可信投递目标。 */
   channelContext?: {
     channel: ChannelId;

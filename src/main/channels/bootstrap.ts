@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { resolve as resolvePath } from "node:path";
 import type { CustomEvent, ToolCallArgsEvent, ToolCallStartEvent } from "@ag-ui/core";
 import type { GeneratedImageAttachment } from "../../shared/generated-image";
@@ -16,11 +16,11 @@ import { resolveCaptionVisionConfig, resolveImageRoute } from "../orchestrator/i
 import { ConversationJournalService } from "../orchestrator/conversation-journal-service";
 import { getConversationTranscriptStore } from "../orchestrator/conversation-transcript-store";
 import { getHarnessRunStore } from "../orchestrator/harness/run-store";
-import { indexConversationTurn } from "../orchestrator/tools/history-tools";
 import type { AgentRunFinishedContext, AgentRuntime } from "../orchestrator/agent-runtime";
 import { getRelationshipStore } from "../relationship/relationship-log";
 import type { TtsSynthesisService } from "../services/tts/tts-synthesis-service";
 import { buildChannelAttachmentInputs } from "./agent-input";
+import { resolveChannelMemoryScope } from "./memory-scope";
 import { isChannelToolAuthorized, loadChannelsSettings, resolveChannelToolSandbox } from "./settings-store";
 import { enforceChannelAgentPolicy, resolveChannelAgentPolicy } from "./agent-policy";
 import { listSessions, getSessionRecord } from "../chats/chats-store";
@@ -91,12 +91,17 @@ export function createChannelsSubsystem(
       runReader: getHarnessRunStore(app.getPath("userData")),
     });
 
+  const resolveTrustedRecipientScope: NonNullable<DispatcherDeps["resolveTrustedRecipientScope"]> = (msg) => msg.accountId
+    && channelManager.getAdapter(msg.channel)?.getMemoryAccountId?.() === msg.accountId
+    ? resolveChannelMemoryScope(msg) : undefined;
   const observeExternalChat: DispatcherDeps["observeExternalChat"] = (sessionId, msg) => {
+    const scope = resolveTrustedRecipientScope(msg);
     getChannelConversationBindingStore().observe({
       sessionId,
       channel: msg.channel,
       chatId: msg.chatId,
       chatType: msg.chatType ?? "private",
+      ...(scope ? { recipientScope: scope, accountId: msg.accountId } : {}),
       ...(msg.senderName ? { senderName: msg.senderName } : {}),
       lastAt: msg.at.getTime(),
     });
@@ -156,10 +161,10 @@ export function createChannelsSubsystem(
       ? await getSessionRecord(channelInput.target.conversationId)
       : null;
     let companionFeedback: AgentRunFinishedContext["companionFeedback"];
-    let useLearnedCompanionStyle = false;
+    let memoryScope: string | undefined;
     // 开放工具的私聊仍是私聊：纠正和表达习惯照常学习。
-    if ((msg.chatType ?? "private") === "private" && msg.text?.trim()
-      && (!isBound || (boundSession?.mode === "chat" && !boundSession.purpose))) {
+    const trustedRecipientScope = resolveTrustedRecipientScope(msg);
+    if (trustedRecipientScope && (!isBound || (boundSession?.mode === "chat" && !boundSession.purpose))) {
       try {
         const conversationId = channelInput.target.conversationId;
         const wasShared = isGroupBoundConversation(conversationId) || (boundSession
@@ -167,17 +172,21 @@ export function createChannelsSubsystem(
             .some(message => message.channelSource?.chatType === "group")
           : false);
         if (!wasShared) {
-          useLearnedCompanionStyle = true;
-          const revision = getRelationshipStore().getControls().learningRevision;
-          if (typeof revision === "number") {
-            companionFeedback = { text: msg.text, userTurnId: channelInput.userTurnId, revision };
+          memoryScope = trustedRecipientScope;
+          if (memoryScope && msg.text?.trim() && channelInput.userEntryId && channelInput.userRevision === 1) {
+            const store = getRelationshipStore();
+            const source = { userEntryId: channelInput.userEntryId, userRevision: channelInput.userRevision };
+            store.recordAcceptedCompanionFeedback({
+              conversationId, userTurnId: channelInput.userTurnId, ...source,
+              speechScope: memoryScope, text: msg.text, channel: msg.channel,
+            });
+            companionFeedback = { text: msg.text, userTurnId: channelInput.userTurnId, revision: store.getControls().learningRevision, source };
           }
         }
       } catch {
         // 读取关系设置失败时仍照常回复。
       }
     }
-    const speechScope = companionFeedback && msg.senderId ? "peer:"+createHash("sha256").update(JSON.stringify([msg.channel,msg.senderId])).digest("hex") : undefined;
     const channelModelSettings = boundSession
       ? resolveSessionModelSettings(loadModelSettings(), boundSession)
       : resolveModelSettingsProfile(loadModelSettings());
@@ -193,6 +202,7 @@ export function createChannelsSubsystem(
     });
     const agentUserText = formatChannelUserText(msg);
     const { options } = await deps.agentRuntime.buildOptions({
+      ...(channelInput.signal ? { signal: channelInput.signal } : {}),
       modelContext: channelInput.modelContext,
       currentUser: {
         turnId: channelInput.userTurnId,
@@ -203,9 +213,10 @@ export function createChannelsSubsystem(
       sessionId: channelInput.target.conversationId,
       // 渠道绑定只共享文字上下文，不继承桌面对话的工作区权限。
       workspaceBindingSessionId: null,
-      privateRelationshipContext: msg.chatType !== "group",
-      skipLearnedCompanionStyle: !speechScope,
-      speechScope,
+      privateRelationshipContext: memoryScope !== undefined,
+      skipLearnedCompanionStyle: !memoryScope,
+      speechScope: memoryScope,
+      memoryScope,
       attachments: attachmentInputs.attachments,
       imageAttachments: attachmentInputs.imageAttachments,
       channel: msg.channel,
@@ -320,21 +331,23 @@ export function createChannelsSubsystem(
         // 显式附件发送（包括失败/未确认）由工具报告结果，不能在轮次结束后自动重发。
         for (const filePath of explicitImagePaths) generatedImages.delete(filePath);
         if (generatedImages.size > 0) channelResult.attachments = [...generatedImages.values()];
+        const finishedScope = memoryScope && channelManager.getAdapter(msg.channel)?.getMemoryAccountId?.() === msg.accountId
+          && !isGroupBoundConversation(channelInput.target.conversationId) ? memoryScope : undefined;
         const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, {
           source: "channel",
-          speechScope,
-          privateRelationshipContext: msg.chatType !== "group",
+          speechScope: finishedScope,
+          memoryScope: finishedScope,
+          privateRelationshipContext: finishedScope !== undefined,
           runId,
           mode,
           conversationId: channelInput.target.conversationId,
           channel: msg.channel,
           userTurnId: channelInput.userTurnId,
           assistantEntryId: options.transcriptSink?.getLastAssistantEntryId?.(),
-          ...(mode === "chat" && !channelInput.signal?.aborted && companionFeedback ? { companionFeedback } : {}),
+          ...(finishedScope && mode === "chat" && !channelInput.signal?.aborted && companionFeedback ? { companionFeedback } : {}),
         });
         channelResult.sticker = finished.sticker;
       }
-      void indexConversationTurn(channelInput.target.conversationId, agentUserText, reply);
       return channelResult;
     } finally {
       // 无论成功、超时还是异常退出，轮次结束事件都要发布一次
@@ -400,6 +413,9 @@ export function createChannelsSubsystem(
     loadSettings: loadChannelsSettings,
     loadGeneralSettings,
     observeExternalChat,
+    resolveTrustedRecipientScope,
+    hasOtherBinding: (conversationId, sessionId) => getChannelConversationBindingStore().list().bindings
+      .some(binding => binding.conversationId === conversationId && binding.sessionId !== sessionId),
     broadcastChat,
     isControlAllowed: (msg) => {
       const settings = loadChannelsSettings();
@@ -431,7 +447,7 @@ export function createChannelsSubsystem(
     initialize: () => initializeChannels({
       ipc: deps.ipc,
       handleIncoming: (msg) => durableInbox.handleIncoming(msg),
-      acceptIncoming: (msg) => durableInbox.accept(msg),
+      acceptIncoming: (msg, trackWork) => durableInbox.accept(msg, trackWork),
       reloadDispatcherSettings: () => dispatcher.reloadSettings(),
     }),
     start: (signal?: AbortSignal) => startChannels(signal),

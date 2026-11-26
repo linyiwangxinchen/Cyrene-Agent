@@ -37,32 +37,35 @@ const fixtureModel = createServer(async (req, res) => {
   const tools = body.tools?.map(tool => tool.function?.name || tool.name) ?? [];
   const caseIndex = body.messages?.findLastIndex(message => message.role === 'user' && typeof message.content === 'string' && message.content.startsWith('case:')) ?? -1;
   const userText = JSON.stringify(body.messages?.[caseIndex]?.content || '');
-  const toolMessages = body.messages?.slice(caseIndex + 1).filter(message => message.role === 'tool') ?? [];
+  const roundMessages = body.messages?.slice(caseIndex + 1) ?? [];
+  const toolMessages = roundMessages.filter(message => message.role === 'tool');
+  const toolCalls = roundMessages.flatMap(message => message.tool_calls ?? []);
+  const called = name => toolCalls.some(call => call.function?.name === name);
   let name, args;
   if (tools.length && /case:write-(work|code)/.test(userText) && !toolMessages.length) {
     name = tools.includes('Write') ? 'Write' : 'write_file';
     const mode = userText.includes('case:write-code') ? 'code' : 'work';
     args = { ...(name === 'Write' ? { file_path: path.join(workspace, `proof-${mode}.txt`) } : { path: path.join(workspace, `proof-${mode}.txt`) }), content: `shared-core-${mode}` };
-  } else if (tools.includes('parity-plugin_echo') && userText.includes('case:plugin') && !toolMessages.length) { name = 'parity-plugin_echo'; args = { value: 'plugin-executed' }; }
+  } else if (userText.includes('case:plugin') && !called('parity-plugin_echo')) { name = 'parity-plugin_echo'; args = { value: 'plugin-executed' }; }
   else if (tools.includes('channel_send_file') && userText.includes('case:channel-file') && !toolMessages.length) { name = 'channel_send_file'; args = { channel: 'wechat', filePath: path.join(workspace, 'proof-work.txt') }; }
   else if (tools.includes('run_shell') && userText.includes('case:shell-background') && !toolMessages.length) {
     name = 'run_shell'; args = { command: backgroundCommand, cwd: workspace, shell: process.platform === 'win32' ? 'cmd' : 'bash', run_in_background: true };
   }
   const toolResult = toolName => {
-    const call = body.messages?.slice(caseIndex + 1).flatMap(message => message.tool_calls ?? []).find(call => call.function?.name === toolName);
+    const call = toolCalls.find(call => call.function?.name === toolName);
     const message = toolMessages.find(message => message.tool_call_id === call?.id);
     if (!message) return null;
     let value = JSON.parse(message.content);
     if (typeof value.message === 'string') { try { value = JSON.parse(value.message); } catch {} }
     return value;
   };
-  if (tools.includes('learn_exam_create_plan') && userText.includes('case:exam')) {
+  if (userText.includes('case:exam')) {
     const plan = toolResult('learn_exam_create_plan'), added = toolResult('learn_exam_add_single_choice'), published = toolResult('learn_exam_publish');
     if (!plan) { name = 'learn_exam_create_plan'; args = { schemaVersion: 1, title: 'Parity arithmetic', subject: 'Math', durationMinutes: 15, totalPoints: 10, quotas: [{ type: 'single_choice', count: 1, points: 10, learningObjectives: ['arithmetic'] }] }; }
     else if (!added) { name = 'learn_exam_add_single_choice'; args = { draftId: plan.draftId, questions: [{ type: 'single_choice', prompt: '1+1=?', points: 10, learningObjective: 'arithmetic', explanation: 'Two units', options: ['2', '3'], correctIndex: 0 }] }; }
     else if (!published) { name = 'learn_exam_publish'; args = { draftId: plan.draftId }; }
   }
-  if (tools.includes('learn_exam_get_submission') && userText.includes('case:grade')) {
+  if (userText.includes('case:grade')) {
     const examId = String(body.messages[caseIndex].content).split(' ').at(-1), submission = toolResult('learn_exam_get_submission');
     if (!submission) { name = 'learn_exam_get_submission'; args = { examId }; }
     else if (!toolResult('learn_exam_save_grading')) { name = 'learn_exam_save_grading'; args = { examId, result: { totalScore: 10, summary: 'Passed', questionResults: submission.questions.map(question => ({ questionId: question.id, awardedPoints: question.points, feedback: 'Correct' })), abilityAnalysis: [{ ability: 'arithmetic', score: 10, total: 10, feedback: 'Passed' }], nextSteps: ['Practice'] } }; }
@@ -79,10 +82,19 @@ const fixtureModel = createServer(async (req, res) => {
       const text = toolResult('browser_get_page_elements').message ?? toolResult('browser_get_page_elements');
       const observationId = /observationId=([\w-]+)/.exec(text)?.[1], ref = /button "Click fixture" \[ref=([^\]]+)\]/.exec(text)?.[1];
       name = !toolResult('browser_get_element_css') ? 'browser_get_element_css' : 'browser_click'; args = { observationId, ref };
-    } else if (!toolResult('browser_control_stop')) { name = 'browser_control_stop'; args = {}; }
+    } else if (!called('browser_screenshot')) { name = 'browser_screenshot'; args = { question: 'Read the visible local fixture page' }; }
+    else if (!toolResult('browser_control_stop')) { name = 'browser_control_stop'; args = {}; }
   }
   if (userText.includes('case:picker-css') && !toolResult('browser_get_element_css')) {
     name = 'browser_get_element_css'; args = { observationId: /obs=([\w-]+)/.exec(userText)?.[1], ref: /ref=([\w-]+)/.exec(userText)?.[1] };
+  }
+  // 声明可能按需加载。模型先检索缺失规格，等下一次请求实际包含该工具才调用。
+  const wanted = name ?? (userText.includes('case:learn') ? 'learn_exam_create_plan' : undefined);
+  if (wanted && !tools.includes(wanted)) {
+    const query = `select:${wanted}`;
+    const searched = toolCalls.some(call => call.function?.name === 'tool_search' && JSON.parse(call.function.arguments).query === query);
+    name = tools.includes('tool_search') && !searched ? 'tool_search' : undefined;
+    args = { query };
   }
   const content = JSON.stringify(body.messages ?? []).includes('sessionSummary') && JSON.stringify(body.messages ?? []).includes('workspaceSummary')
     ? JSON.stringify({ sessionSummary: '本地验收已完成，后续任务以最新用户指令为准。', workspaceSummary: '这是隔离验收工作区。' })
@@ -148,6 +160,8 @@ async function run(session, text) {
   await waitFor(() => events.slice(prior).some(event => event.channel === 'agui:event' && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.args[0]?.type) && event.args[0]?.runId === ack.runId), 'agent terminal', 45000);
   const stream = events.slice(prior).filter(event => event.channel === 'agui:event' && event.args[0]?.runId === ack.runId).map(event => event.args[0]);
   const error = stream.find(event => event.type === 'RUN_ERROR'); assert.equal(error, undefined, JSON.stringify(error));
+  const finished = stream.find(event => event.type === 'RUN_FINISHED');
+  assert.equal(finished?.result?.status, 'success', JSON.stringify(finished));
   await send('agui:run-persisted', { runId: ack.runId, sessionId: session.id });
   return { ack, stream };
 }
@@ -235,7 +249,16 @@ try {
     const toolMessage = requests.slice(start).flatMap(request => request.messages ?? []).find(message => message.role === 'tool' && String(message.content).includes('没有唯一的渠道收件目标'));
     assert.ok(toolMessage, 'unbound Web send must return the real missing-target error to the model');
   });
-  await check('Learn routes through Harness and exposes exam tools', async () => { const start = requests.length; await run(sessions.learn, 'case:learn'); assert.ok(requests.slice(start).some(request => request.tools?.some(tool => tool.function?.name === 'learn_exam_create_plan'))); });
+  await check('Learn routes through Harness and exposes exam tools after discovery', async () => {
+    const start = requests.length;
+    const result = await run(sessions.learn, 'case:learn');
+    const outgoing = requests.slice(start);
+    const hasExamTool = request => request?.tools?.some(tool => tool.function?.name === 'learn_exam_create_plan');
+    if (!hasExamTool(outgoing[0])) {
+      assert.ok(result.stream.some(event => event.type === 'TOOL_CALL_START' && event.toolCallName === 'tool_search'));
+    }
+    assert.ok(outgoing.some(hasExamTool), 'the exam tool declaration must reach the model');
+  });
   await check('Learn exam is authored, answered with hidden solutions, submitted and graded', async () => {
     const prior = events.length; await run(sessions.learn, 'case:exam');
     const created = events.slice(prior).find(event => event.channel === 'learn-exam:created')?.args[0]; assert.ok(created?.examId, 'exam creation event');
@@ -362,11 +385,27 @@ try {
       const output = await cssOutput(result.ack.runId); assert.ok(output.includes('computedStyle') && output.includes('matchedRules'), 'full CSS remains readable as a tool artifact');
     } finally { await new Promise(resolve => page.close(resolve)); }
   });
-  await check('Browser control exposes action tools and clicks a real page element by ref', async () => {
+  await check('Browser control clicks a real local page and sends its screenshot only during the live run', async () => {
     let clicked = 0;
     const page = createServer((req, res) => { if (req.url === '/clicked') { clicked++; res.end('ok'); } else res.end('<!doctype html><title>Control fixture</title><button onclick="fetch(\'/clicked\')">Click fixture</button>'); });
     await new Promise(resolve => page.listen(0, '127.0.0.1', resolve));
-    try { await invoke('browser-panel:navigate', `http://127.0.0.1:${page.address().port}`); const result = await run(sessions.work, 'case:browser'); assert.equal(clicked, 1); assert.ok((await cssOutput(result.ack.runId)).includes('matchedRules'), 'matched CSS rules are preserved'); } finally { await new Promise(resolve => page.close(resolve)); }
+    try {
+      await invoke('browser-panel:navigate', `http://127.0.0.1:${page.address().port}`);
+      const first = requests.length;
+      const result = await run(sessions.work, 'case:browser');
+      assert.equal(clicked, 1);
+      assert.ok((await cssOutput(result.ack.runId)).includes('matchedRules'), 'matched CSS rules are preserved');
+      const imageRequests = requests.slice(first).filter(request => request.messages?.some(message =>
+        Array.isArray(message.content) && message.content.some(part => part.image_url?.url.startsWith('data:image/png;base64,'))));
+      assert.ok(imageRequests.length > 0, 'the live main model receives a real browser screenshot');
+      const content = imageRequests[0].messages.find(message => Array.isArray(message.content) && message.content.some(part => part.image_url)).content;
+      const url = content.find(part => part.image_url).image_url.url;
+      assert.ok(Buffer.from(url.split(',')[1], 'base64').subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])));
+      assert.equal((await invoke('chats:get', sessions.work.id)).messages.some(message => JSON.stringify(message).includes(url)), false);
+      const next = requests.length;
+      await run(sessions.work, 'case:after-view');
+      assert.ok(requests.slice(next).every(request => !JSON.stringify(request.messages).includes(url)), 'the next run cannot replay the screenshot');
+    } finally { await new Promise(resolve => page.close(resolve)); }
   });
   await check('Authenticated Web agent starts an actual persistent background shell job', async () => {
     await run(sessions.work, 'case:shell-background');

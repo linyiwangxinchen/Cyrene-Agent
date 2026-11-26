@@ -24,16 +24,23 @@ vi.mock("../../../tasks/task-session-store", () => ({ TaskSessionStore: taskStor
 vi.mock("../tool-output/file-tool-output-store", () => ({ FileToolOutputStore: toolOutputStore }));
 vi.mock("./event-mapper", () => ({ sendTaskLifecycleAsAgui: vi.fn() }));
 vi.mock("electron", () => ({ app: { getPath: vi.fn(() => "C:\\cyrene-runtime") } }));
+vi.mock("../../vision-captioner.js", () => ({ captionImage: vi.fn(async () => "fixture caption") }));
 
 import { prepareToolRuntime } from "./tool-runtime";
+import { handleToolScreenshot } from "../../tool-result-images";
+import { captionImage } from "../../vision-captioner.js";
+import type { AgentLoopSettings } from "../../cyrene-agent";
+
+const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 /** 构造一次 code 模式 run 的 tool runtime（Plan Guard 生效条件：code/chat + isPlanReadOnly）。 */
-async function makeRuntime(permissionMode: "prompt" | "allow_all", allowPermissionPrompt?: boolean, harnessInteractiveTools?: boolean) {
+async function makeRuntime(permissionMode: "prompt" | "allow_all", allowPermissionPrompt?: boolean,
+  harnessInteractiveTools?: boolean, imageSettings?: Pick<AgentLoopSettings, "multimodal" | "vision">) {
   return prepareToolRuntime({
     options: {
       conversationId: "thread-1",
       conversationMode: "code",
-      settings: { provider: "test", baseUrl: "", model: "model", apiKey: "" },
+      settings: { provider: "test", baseUrl: "", model: "model", apiKey: "", ...imageSettings },
       messages: [{ role: "user", content: "做个计划" }],
       requestUserClarification: vi.fn(async () => ({ answers: [] })),
       permissionMode,
@@ -54,6 +61,29 @@ async function makeRuntime(permissionMode: "prompt" | "allow_all", allowPermissi
 }
 
 describe("harness tool runtime", () => {
+  it("keeps screenshots available only to the active multimodal run", async () => {
+    const runtime = await makeRuntime("prompt");
+    const output = await handleToolScreenshot(runtime.toolContext, { base64: PNG, question: "what", description: "shot" });
+    const image = JSON.parse(output!).image;
+    expect(runtime.toolResultImages.resolve(image)?.data).toBe(PNG);
+    expect(handleToolScreenshot({ ...runtime.toolContext }, { base64: PNG, question: "what", description: "shot" })).toBeUndefined();
+    runtime.toolResultImages.close();
+    expect(runtime.toolResultImages.resolve(image)).toBeUndefined();
+  });
+
+  it("uses the active profile's configured captioner for a text-only model", async () => {
+    const vision = { baseUrl: "http://127.0.0.1:3210/v1", apiKey: "fixture-key", model: "vision" };
+    const runtime = await makeRuntime("prompt", undefined, undefined, { multimodal: false, vision });
+    await expect(handleToolScreenshot(runtime.toolContext, { base64: PNG, question: "what", description: "shot" }))
+      .resolves.toBe("shot\n视觉模型转述：fixture caption");
+    expect(captionImage).toHaveBeenCalledWith({ base64: PNG, mime: "image/png" }, "what", vision);
+    runtime.toolResultImages.close();
+    const textOnly = await makeRuntime("prompt", undefined, undefined, { multimodal: false });
+    await expect(handleToolScreenshot(textOnly.toolContext, { base64: PNG, question: "what", description: "shot" }))
+      .resolves.toMatch(/^\[错误\]/);
+    textOnly.toolResultImages.close();
+  });
+
   it.each([undefined, true, false])("passes interaction availability independently of allow_all (%s)", async interactive => {
     const runtime = await makeRuntime("allow_all", false, interactive);
     expect(runtime.toolContext.allowUserInteraction).toBe(interactive);

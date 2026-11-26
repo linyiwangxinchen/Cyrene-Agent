@@ -2,6 +2,7 @@ import path from "node:path";
 import type { ChatSessionRecord } from "../../shared/chat-types";
 import { resolveSummaryMemoryPaths } from "./summary-memory-paths";
 import { readSummaryFile } from "./summary-memory-store";
+import { areSummaryMemorySourcesCurrent } from "./summary-memory-sources";
 
 export interface SummaryMemoryContext {
   sessionPath: string;
@@ -28,10 +29,16 @@ export async function loadSummaryMemoryContext(input: {
   const allowedRoot = paths.workspacePath
     ? path.resolve(session!.workspaceBinding!.workspaceRoot)
     : path.resolve(input.userDataRoot);
-  const sessionFile = await readSummaryFile(paths.sessionPath, 800, allowedRoot);
-  const workspaceFile = paths.workspacePath
-    ? await readSummaryFile(paths.workspacePath, 1200, allowedRoot)
-    : undefined;
+  async function readContextFile(filePath: string, limit: number) {
+    const file = await readSummaryFile(filePath, limit, allowedRoot);
+    const hidden = file.sources === null || Boolean(file.sources
+      && !await areSummaryMemorySourcesCurrent(input.userDataRoot, file.sources).catch(() => false));
+    return hidden ? { content: "", truncated: false, hidden: true } : { ...file, hidden: false };
+  }
+  const [sessionFile, workspaceFile] = await Promise.all([
+    readContextFile(paths.sessionPath, 800),
+    paths.workspacePath ? readContextFile(paths.workspacePath, 1200) : undefined,
+  ]);
   // 这里只保留跨会话不变的规则。具体路径、模式和正文属于运行事实，
   // 放在 runtimeContext，避免每个会话的绝对路径切碎 stablePrefix 缓存。
   const stablePrompt = [
@@ -41,20 +48,24 @@ export async function loadSummaryMemoryContext(input: {
   ].join("\n");
   const runtimeParts = [
     "[摘要记忆文件位置与当前规则]",
-    `当前会话记忆文件：${paths.sessionPath}`,
-    ...(paths.workspacePath ? [`项目工作区记忆文件：${paths.workspacePath}`] : []),
-    "记忆文件正文已在本轮动态上下文中提供；需要确认最新内容时再按路径读取。",
+    ...(sessionFile.hidden ? [] : [`当前会话记忆文件：${paths.sessionPath}`]),
+    ...(paths.workspacePath && workspaceFile && !workspaceFile.hidden ? [`项目工作区记忆文件：${paths.workspacePath}`] : []),
+    sessionFile.hidden || workspaceFile?.hidden
+      ? "有摘要来源无法确认，暂时省略相关摘要。请以当前对话为准，勿读取省略的旧文件。"
+      : "记忆文件正文已在本轮动态上下文中提供；需要确认最新内容时再按路径读取。",
     session?.mode === "chat"
       ? "当前 Chat 模式只读记忆文件。用户要求更新记忆时，等后台静默整理，不调用文件写入工具修改记忆。"
       : "用户明确要求更新记忆时，先用 read_file 读取对应文件最新正文，再用 write_file 或 str_replace/apply_patch 修改；会话文件不超过 800 个 Unicode 字符，工作区文件不超过 1,200 个 Unicode 字符。",
-    ...(workspaceFile ? [
+    ...(workspaceFile && !workspaceFile.hidden ? [
       "[项目工作区摘要]",
       workspaceFile.truncated ? "（文件超出注入上限，以下为开头截取内容。）" : "",
       workspaceFile.content || "（暂无工作区摘要。）",
     ] : []),
-    "[当前会话摘要]",
-    sessionFile.truncated ? "（文件超出注入上限，以下为开头截取内容。）" : "",
-    sessionFile.content || "（暂无会话摘要。）",
+    ...(sessionFile.hidden ? [] : [
+      "[当前会话摘要]",
+      sessionFile.truncated ? "（文件超出注入上限，以下为开头截取内容。）" : "",
+      sessionFile.content || "（暂无会话摘要。）",
+    ]),
   ].filter(Boolean);
   return {
     sessionPath: paths.sessionPath,

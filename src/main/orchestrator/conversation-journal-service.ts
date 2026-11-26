@@ -26,6 +26,7 @@ import type {
 import { assertValidPresentationPatch } from "./conversation-transcript-types";
 import { createTranscriptSink, type TranscriptSink } from "./transcript-sink";
 import { recoverLegacyCompactionState } from "./compaction-recovery";
+import { isDesktopBrowserTool } from "../browser/browser-tool-policy";
 
 export interface JournalUserInput {
   turnId: string;
@@ -35,6 +36,12 @@ export interface JournalUserInput {
   at?: number;
   runId?: string;
   attachments?: PendingChatAttachment[];
+}
+
+export interface ChannelRecipientContext {
+  currentUserEntryId: string;
+  recipientScope?: string;
+  otherBinding: boolean;
 }
 
 export interface ChannelTurnState {
@@ -322,12 +329,51 @@ export class ConversationJournalService {
     };
   }
 
-  async buildModelContext(conversationId: string): Promise<MaterializedTranscript> {
-    await this.runReader.refresh?.();
+  async buildModelContext(conversationId: string, recipient?: ChannelRecipientContext): Promise<MaterializedTranscript> {
     await this.store.waitForIdle(conversationId);
+    if (recipient) {
+      const isolated = await this.buildChannelRecipientContext(conversationId, recipient);
+      if (isolated) return isolated;
+    }
+    await this.runReader.refresh?.();
     const snapshot = await this.store.read(conversationId);
     const recovery = await recoverLegacyCompactionState(this.store, conversationId, snapshot.entries, this.runReader);
     return buildModelContextFromCompactedView(snapshot.entries, this.runReader, recovery);
+  }
+
+  private async buildChannelRecipientContext(conversationId: string, recipient: ChannelRecipientContext): Promise<MaterializedTranscript | undefined> {
+    const { currentUserEntryId, recipientScope, otherBinding } = recipient;
+    // The audit includes archived channel turns that may still be represented in a checkpoint.
+    const entries = await this.store.readAuditEntries(conversationId);
+    const projection = reduceTranscriptProjection(entries);
+    const visible = new Map(projection.messages.map(message => [message.id, message]));
+    const hasUnrelatedChannel = projection.messages.some(message => message.id !== currentUserEntryId && message.channelSource
+      && message.channelSource.recipientScope !== recipientScope)
+      || entries.some(entry => (entry.kind === "user" && entry.id.startsWith("channel:") && entry.id !== currentUserEntryId
+        && recipientScope !== undefined && visible.get(entry.id)?.channelSource?.recipientScope !== recipientScope)
+      || (entry.kind === "presentation_patch" && entry.payload.messageId !== currentUserEntryId
+        && entry.payload.patch.channelSource?.recipientScope !== undefined
+        && entry.payload.patch.channelSource.recipientScope !== recipientScope));
+    const isolateRecipient = otherBinding || hasUnrelatedChannel;
+    const hasDesktopBrowserActivity = entries.some(entry =>
+      (entry.kind === "assistant" && entry.payload.toolCalls?.some(call => isDesktopBrowserTool(call.name)))
+      || (entry.kind === "tool_started" && isDesktopBrowserTool(entry.payload.toolName))
+      || (entry.kind === "tool_result" && entry.payload.message.name && isDesktopBrowserTool(entry.payload.message.name)));
+    if (!isolateRecipient && !hasDesktopBrowserActivity) return;
+
+    const current = entries.find(entry => entry.kind === "user" && entry.id === currentUserEntryId);
+    if (current?.kind !== "user" || visible.get(current.id)?.role !== "user") throw new Error("CHANNEL_CURRENT_USER_NOT_ACTIVE");
+    const messages: MaterializedTranscript["messages"] = [];
+    for (const message of projection.messages) {
+      if (message.id === currentUserEntryId) break;
+      if (!message.content.trim()) continue;
+      if (isolateRecipient && (!recipientScope || message.channelSource?.recipientScope !== recipientScope)) continue;
+      // A single explicit binding still shares visible turns. Rebuild from the
+      // audit to leave desktop observations and their checkpoint summary out.
+      messages.push({ role: message.role === "model" ? "assistant" : "user", content: message.content });
+    }
+    messages.push({ role: "user", content: current.payload.text, userAttachments: current.payload.attachments });
+    return { messages, uncertainEffects: [], throughSeq: projection.throughSeq, recipientIsolated: true };
   }
 
   /**

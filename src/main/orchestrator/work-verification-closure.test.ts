@@ -43,6 +43,14 @@ describe("Work run_verification 收口", () => {
 
   beforeEach(() => {
     cwd = fs.mkdtempSync(path.join(process.cwd(), ".tmp-work-verification-"));
+    // Resolver checks real paths under the project's dependency root. Use local
+    // fixtures so the tests also work when the parent checkout uses junctions.
+    fs.writeFileSync(path.join(cwd, "package.json"), JSON.stringify({ private: true }));
+    for (const [dependency, entry] of [["typescript", "bin/tsc"], ["vitest", "vitest.mjs"]]) {
+      const cli = path.join(cwd, "node_modules", dependency, entry);
+      fs.mkdirSync(path.dirname(cli), { recursive: true });
+      fs.writeFileSync(cli, "throw new Error('fixture CLI must not run');\n");
+    }
     fs.writeFileSync(path.join(cwd, "tsconfig.json"), JSON.stringify({
       compilerOptions: { noEmit: true },
       include: ["sample.ts"],

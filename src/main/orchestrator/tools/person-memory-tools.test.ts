@@ -23,7 +23,7 @@ function load(): void {
 }
 
 function ctx(conversationId = "conv-a", extra: Partial<ToolContext> = {}): ToolContext {
-  return { userQuery: "记住我的生日是5月3日", conversationId, runId: "run-1", ...extra };
+  return { userQuery: "记住我的生日是5月3日", conversationId, runId: "run-1", memoryScope: "owner", ...extra };
 }
 
 async function call(id: string, args: Record<string, unknown>, context = ctx()): Promise<string> {
@@ -37,7 +37,7 @@ function idOf(output: string): string {
 }
 
 function injected(conversationId = "conv-a"): string {
-  return buildPersonMemoryContext(store.listActive(conversationId, clock), "", { now: clock, timezone: "Asia/Shanghai" }).contextBlock;
+  return buildPersonMemoryContext(store.listActive(conversationId, clock, "owner"), "", { now: clock, timezone: "Asia/Shanghai" }).contextBlock;
 }
 
 beforeEach(() => {
@@ -68,6 +68,7 @@ describe("显式记忆工具", () => {
     const saved = JSON.parse(fs.readFileSync(file, "utf8")) as { schemaVersion: number; atoms: Array<Record<string, unknown>> };
     expect(saved.schemaVersion).toBe(1);
     expect(saved.atoms.find((atom) => atom.id === first)).toEqual({
+      memoryScope: "owner",
       id: first,
       conversationId: "conv-a",
       type: "long_term",
@@ -88,6 +89,17 @@ describe("显式记忆工具", () => {
     expect(await call("memory_forget", { id }, ctx("conv-b"))).toContain("找不到记忆条目");
     expect(store.getById(id)?.status).toBe("active");
     expect(injected("conv-b")).toBe("");
+  });
+
+  it("共享同一会话的两个可信联系人及缺少身份的外部调用彼此隔离", async () => {
+    const channelContext = { channel: "wechat" as const, chatType: "private" as const, targetId: "shared", conversationId: "conv-a" };
+    const personA = ctx("conv-a", { memoryScope: "peer:contact-A", channelContext });
+    const personB = ctx("conv-a", { memoryScope: "peer:contact-B", channelContext });
+    const id = idOf(await call("memory_remember", { content: "对方养狗" }, personA));
+    expect(await call("memory_recall", {}, personA)).toContain("对方养狗");
+    expect(await call("memory_recall", {}, personB)).not.toContain("对方养狗");
+    expect(await call("memory_forget", { id }, personB)).toContain("找不到记忆条目");
+    expect(await call("memory_recall", {}, ctx("conv-a", { channelContext, memoryScope: undefined }))).toContain("缺少可信的记忆主体");
   });
 
   it("群聊渠道与缺少会话时拒绝，且不写入", async () => {

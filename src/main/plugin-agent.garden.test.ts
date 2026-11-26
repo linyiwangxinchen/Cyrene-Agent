@@ -42,8 +42,10 @@ describe("原生内容插件的共享人格与工具策略", () => {
       tools: [{ id: "bili-garden_read", name: "读视频", description: "只读字幕", enabled: true,
         inputSchema: { type: "object", properties: {} }, effectKind: "read", execute: async () => "字幕" }] });
     expect(buildOptions).toHaveBeenCalledWith(expect.objectContaining({ mode: "chat", executionMode: "chat",
-      modelProfileId: "saved-profile", promptSource: "plugin-agent", promptChannel: "plugin:bili-garden" }));
+      modelProfileId: "saved-profile", promptSource: "plugin-agent", promptChannel: "plugin:bili-garden",
+      signal: expect.any(AbortSignal) }), []);
     const input = runHarness.mock.calls[0][0];
+    expect(input.tools.map((tool: { id: string }) => tool.id)).toEqual(["bili-garden_read"]);
     expect(input.promptLayers.stablePrefix).toContain("用户修改过的昔涟人格");
     expect(input.promptLayers.stablePrefix).not.toContain("这次想看园艺");
     expect(input.promptLayers.runtimeContext).toContain("共享关系上下文");

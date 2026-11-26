@@ -16,7 +16,9 @@ import { parseObserverFeeling } from "../chat-stream-utils";
 import { captionImageSafe, IMAGE_CAPTION_PROMPT } from "../chat/image-caption";
 import { buildEnvironmentContext } from "./environment";
 import { buildToneInjection } from "./tone-injector";
-import { buildAlwaysOnContext, scheduleMemoryWrite } from "./index";
+import { buildAlwaysOnContext, buildVectorMemoryContext, scheduleMemoryWrite } from "./index";
+import { filterActiveSocialAtoms } from "../memory/memory-owner-recall";
+import { isOwnerMemoryScope, resolvePersonalMemoryScope } from "../memory/memory-scope";
 import { scheduleSummaryTurn } from "../memory/summary-memory-scheduler";
 import { scheduleWikiTurn } from "../memory/wiki-memory-scheduler";
 import { matchSticker } from "../sticker-text-matcher";
@@ -42,6 +44,8 @@ import type { CitaService } from "../cita";
 import type { SocialAtom, SocialExtractionInput } from "../social-context/types";
 import type { ToolDefinition, ToolModeOverrides } from "./tools/registry/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
+import type { CompanionReference } from "../../shared/companion-references";
+import type { XilianTimelineEvent } from "../../shared/xilian-world";
 import {
   buildAgentRunOptions,
   onAgentRunFinished,
@@ -53,7 +57,7 @@ import {
 import { buildModelContext } from "./conversation-transcript-context";
 import { getConversationTranscriptStore } from "./conversation-transcript-store";
 import { resolveChatContextTimezone } from "../chat-time-context";
-import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest } from "../xilian-world/life-context";
+import { buildXilianLifeSnapshot, buildXilianPromptFingerprint, buildXilianSelfiePrompt, formatXilianLifeContext, isXilianSelfieRequest, type XilianLifeContextInput } from "../xilian-world/life-context";
 import { getSharedXilianWorldStore } from "../xilian-world/world-store";
 import { createGeneratedImageStore } from "../chats/generated-image-store";
 import { getHarnessRunStore } from "./harness/run-store";
@@ -86,6 +90,8 @@ type EnqueueLLMTask = <T>(
 ) => Promise<T>;
 
 export interface AgentRuntimeDeps {
+  waitForPromptSkills?(signal?: AbortSignal): Promise<void>;
+  waitForStartup?(mode: PluginPromptMode, toolIds?: readonly string[], signal?: AbortSignal): Promise<void>;
   runtimeStateService: RuntimeStateService;
   llmClient: LlmClient;
   enqueueLLMTask: EnqueueLLMTask;
@@ -100,9 +106,9 @@ export interface AgentRuntimeDeps {
   getStickerTextIndex: () => readonly StickerTextEntry[];
   broadcastRuntimeStateChanged: () => void;
   citaService: CitaService;
-  socialContextScheduler: { schedule: (input: SocialExtractionInput) => void };
+  socialContextScheduler: { schedule: (input: SocialExtractionInput) => void | Promise<void> };
   chatsStore: { getWorkspaceBinding: (conversationId: string) => ({ workspaceRoot: string; displayName: string; boundAt: number } | undefined) | Promise<{ workspaceRoot: string; displayName: string; boundAt: number } | undefined> };
-  socialAtomStore: { listActive: (conversationId: string, now: number) => SocialAtom[] };
+  socialAtomStore: { listActive: (conversationId: string, now: number, memoryScope?: string) => SocialAtom[] };
   buildSummaryMemoryContext?: (conversationId: string) => Promise<{ stablePrompt: string; runtimeContext: string }>;
   scheduleSummaryTurn?: (input: Parameters<typeof scheduleSummaryTurn>[0]) => void;
   scheduleWikiTurn?: (input: Parameters<typeof scheduleWikiTurn>[0]) => void;
@@ -116,6 +122,26 @@ export interface AgentRuntimeDeps {
 
 type SchedulerRunOptions = Omit<CyreneRunOptions, "toolSystemContent" | "soulSystemBaseContent">;
 
+function publicLifeSnapshotInput(
+  state: XilianLifeContextInput["state"],
+  timeline: XilianLifeContextInput["timeline"],
+  now: number,
+  timezone: string,
+): XilianLifeContextInput {
+  const isPublic = (event?: XilianTimelineEvent): event is XilianTimelineEvent =>
+    !!event && event.source === "simulated_world" && event.visibility !== "private" && event.slotId !== "amphoreus";
+  return {
+    state: {
+      ...state,
+      currentActivity: isPublic(state.currentActivity) ? state.currentActivity : undefined,
+      nextPlannedEvent: isPublic(state.nextPlannedEvent) ? state.nextPlannedEvent : undefined,
+    },
+    timeline: timeline.filter(isPublic),
+    now,
+    timezone,
+  };
+}
+
 export interface AgentRunFinishedContext {
   source: PluginTurnCompletedEvent["source"];
   mode: PluginPromptMode;
@@ -124,13 +150,14 @@ export interface AgentRunFinishedContext {
   runId?: string;
   assistantEntryId?: string;
   privateRelationshipContext?: boolean;
+  memoryScope?: string;
   speechScope?: string;
   userTurnId?: string;
   companionFeedback?: CompanionFeedbackInput;
 }
 
 export interface AgentRuntime {
-  buildOptions(input: BuildOptionsInput): Promise<{ options: CyreneRunOptions; latestUserText: string }>;
+  buildOptions(input: BuildOptionsInput & { signal?: AbortSignal }, toolIds?: readonly string[]): Promise<{ options: CyreneRunOptions; latestUserText: string; companionReferences?: CompanionReference[] }>;
   onRunFinished(result: CyreneRunResult, latestUserText: string, context: AgentRunFinishedContext): Promise<{ sticker: string | null }>;
   buildSchedulerOptions(task: ScheduledTask): Promise<SchedulerRunOptions>;
 }
@@ -226,13 +253,15 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
     });
   }
 
-  function buildBuildOptionsDeps(sessionId?: string, privateContext = true): BuildOptionsDeps {
+  function buildBuildOptionsDeps(sessionId?: string, scope?: string, toolIds?: readonly string[]): BuildOptionsDeps {
+    const ownerContext = isOwnerMemoryScope(scope);
     return {
+      waitForPromptSkills: rawDeps.waitForPromptSkills,
+      waitForStartup: (mode, signal) => rawDeps.waitForStartup?.(mode, toolIds, signal),
       loadModelSettings: (modelProfileId?: string) => resolveModelSettingsProfile(rawDeps.loadModelSettings(), modelProfileId),
       loadGeneralSettings: () => rawDeps.loadGeneralSettings(),
       loadUserProfile: () => rawDeps.loadUserProfile(),
-      buildEnvironmentContext: ((profile) =>
-        buildEnvironmentContext(profile as any)) as BuildOptionsDeps["buildEnvironmentContext"],
+      buildEnvironmentContext,
       buildSkillCatalog: ((skills) =>
         buildSkillCatalog(skills as any)) as BuildOptionsDeps["buildSkillCatalog"],
       buildAutoInjectedSkillContext: ((skills) =>
@@ -256,18 +285,20 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         return expansion ? { name: expansion.name, source: expansion.source } : null;
       },
       buildToneInjection: (() => buildToneInjection()) as BuildOptionsDeps["buildToneInjection"],
-      buildAlwaysOnContext: ((userText, messages) =>
-        buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
+      buildAlwaysOnContext: ((userText, messages, includeProfile) =>
+        buildAlwaysOnContext(userText, messages as any, includeProfile)) as BuildOptionsDeps["buildAlwaysOnContext"],
+      buildVectorMemoryContext,
       buildXilianLifeContext: (userText) => {
-        if (!privateContext) return "";
+        if (!scope) return "";
         try {
           const now = Date.now();
           const timezone = resolveChatContextTimezone(rawDeps.loadUserProfile().timezone);
           const state = xilianWorldStore.advance({ now, timezone });
           const timeline = xilianWorldStore.queryTimeline({ dateKey: state.worldDate, order: "desc", limit: 8 });
-          const life = formatXilianLifeContext(buildXilianLifeSnapshot({
-            state, timeline, now, timezone, world: xilianWorldStore.worldView().amphoreus, conversationId: sessionId,
-          }));
+          const life = formatXilianLifeContext(buildXilianLifeSnapshot(ownerContext
+            ? { state, timeline, now, timezone, world: xilianWorldStore.worldView().amphoreus, conversationId: sessionId }
+            : publicLifeSnapshotInput(state, timeline, now, timezone)));
+          if (!ownerContext) return life;
           if (!/(?:什么|有没有|有没|有什么|还有|之前|刚才).{0,12}(?:想.{0,4}(?:说|分享)|没说)|想.{0,4}(?:说|分享).{0,10}什么/u.test(userText)
             || getRelationshipStore().getControls().paused) return life;
           const thoughts = initiativeStore.readThoughts({ now, limit: 20 })
@@ -282,6 +313,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         }
       },
       offerXilianSelfie: async ({ conversationId, userText }) => {
+        if (!ownerContext) return undefined;
         const { relationship } = await getRelationshipStore().snapshot();
         if (!relationshipAllowsSelfie(relationship)) return undefined;
         const now = Date.now();
@@ -305,7 +337,9 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           const timezone = resolveChatContextTimezone(rawDeps.loadUserProfile().timezone);
           const state = xilianWorldStore.advance({ now, timezone });
           const timeline = xilianWorldStore.queryTimeline({ dateKey: state.worldDate, order: "desc", limit: 8 });
-          const snapshot = buildXilianLifeSnapshot({ state, timeline, now, timezone, world: xilianWorldStore.worldView().amphoreus });
+          const snapshot = buildXilianLifeSnapshot(ownerContext
+            ? { state, timeline, now, timezone, world: xilianWorldStore.worldView().amphoreus }
+            : publicLifeSnapshotInput(state, timeline, now, timezone));
           return `${buildXilianSelfiePrompt(snapshot)}\n用户请求：${userText.slice(0, 500)}`;
         } catch (error) {
           console.warn("[XilianWorld] 构建自拍生活上下文失败，已降级为稳定视觉约束", error);
@@ -340,9 +374,9 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         return captionImageSafe(filePath, IMAGE_CAPTION_PROMPT, vision.config);
       },
       prepareCitaTurn: (input) => rawDeps.citaService.prepareTurn(input),
-      buildChatSocialContext: async ({ conversationId, query, timezone }) => {
+      buildChatSocialContext: async ({ conversationId, memoryScope, query, timezone }) => {
         const now = Date.now();
-        const active = rawDeps.socialAtomStore.listActive(conversationId, now);
+        const active = await filterActiveSocialAtoms(rawDeps.socialAtomStore.listActive(conversationId, now, memoryScope));
         return buildPersonMemoryContext(active, query, { now, timezone: timezone ?? "Asia/Shanghai" });
       },
       buildMomentsContext: (query, conversationId) => {
@@ -403,10 +437,11 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
     : undefined;
 
   return {
-    buildOptions: async (input) => {
-      const buildOptionsDeps = buildBuildOptionsDeps(input.sessionId, input.privateRelationshipContext !== false && input.promptSource !== "plugin-agent");
-      const { options, latestUserText } = await buildAgentRunOptions(input, buildOptionsDeps);
-      const xilianSelfieArtifact = prepareXilianSelfieArtifact(latestUserText, options.settings);
+    buildOptions: async (input, toolIds) => {
+      const scope = resolvePersonalMemoryScope(input);
+      const buildOptionsDeps = buildBuildOptionsDeps(input.sessionId, scope, toolIds);
+      const { options, latestUserText, companionReferences } = await buildAgentRunOptions(input, buildOptionsDeps);
+      const xilianSelfieArtifact = isOwnerMemoryScope(scope) ? prepareXilianSelfieArtifact(latestUserText, options.settings) : undefined;
       return {
         options: {
           ...options,
@@ -416,6 +451,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           ...(xilianSelfieArtifact ? { xilianSelfieArtifact } : {}),
         },
         latestUserText,
+        companionReferences,
       };
     },
 
@@ -435,6 +471,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           speechScope: context.speechScope,
           companionTurnId: context.speechScope && (terminalStatus === undefined || terminalStatus === "success") && (context.mode === "chat" || (context.source === "channel" && ["wechat","qq"].includes(context.channel ?? ""))) && context.privateRelationshipContext !== false ? context.userTurnId : undefined,
           privateRelationshipContext: context.privateRelationshipContext,
+          memoryScope: context.memoryScope,
           assistantEntryId: context.assistantEntryId, userTurnId: context.userTurnId,
           ...(companionFeedback ? { companionFeedback } : {}),
           vectorMemorySource: context.userTurnId && context.assistantEntryId
@@ -465,6 +502,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       const settings = resolveModelSettingsProfile(rawDeps.loadModelSettings());
       const profile = rawDeps.loadUserProfile();
       const generalSettings = rawDeps.loadGeneralSettings();
+      const ownerContext = !task.delivery && !task.ownerPluginId;
       // 会话模式取任务冻结字段（旧任务默认 work）：skill 过滤、模式提示词
       // 和插件提示词上下文都跟随该模式。
       const mode = task.mode ?? "work";
@@ -481,10 +519,10 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         : rawDeps.skillRegistry.getEnabledForMode(mode, generalSettings.skillModeOverrides);
       const systemContent = [
         buildModePrompt(mode),
-        buildEnvironmentContext(profile),
+        buildEnvironmentContext(profile, ownerContext),
         buildSkillCatalog(scheduledSkills),
-        await buildAlwaysOnContext(task.prompt, messages),
-        await buildRelationshipContext(task.delivery?.conversationId ?? task.delivery?.sessionId, task.delivery?.chatType !== "group"),
+        await buildAlwaysOnContext(task.prompt, messages, false),
+        ownerContext ? await buildRelationshipContext() : "",
         await rawDeps.buildPluginPromptContext({
           source: "scheduler",
           mode,

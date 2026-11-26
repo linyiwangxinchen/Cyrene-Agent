@@ -284,6 +284,7 @@ export async function addL2MemoryVector(
   text: string,
   l2Id: string,
   metadata?: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<string> {
   if (!isMemoryEnabled()) throw new Error("记忆模式已关闭");
   if (!store || !provider) throw new Error("RAG not initialized");
@@ -291,7 +292,7 @@ export async function addL2MemoryVector(
   const currentStore = store;
   const currentProvider = provider;
   return trackVectorOperation(async () => {
-    const entry = await currentStore.addUnique(text, "user_memory", currentProvider, { ...metadata, l2Id });
+    const entry = await currentStore.addUnique(text, "user_memory", currentProvider, { ...metadata, l2Id }, signal);
     return entry.id;
   });
 }
@@ -301,7 +302,7 @@ export async function searchMemory(
   query: string,
   source?: string,
   topK = 5,
-  options?: { recordRecall?: boolean }
+  options?: { recordRecall?: boolean; allowedL2Ids?: ReadonlySet<string> }
 ): Promise<string[]> {
   const results = await searchMemoryEntries(query, source, topK, options);
   return results.map((r) => r.text);
@@ -311,7 +312,7 @@ export async function searchMemoryEntries(
   query: string,
   source?: string,
   topK = 5,
-  options?: { recordRecall?: boolean }
+  options?: { recordRecall?: boolean; allowedL2Ids?: ReadonlySet<string> }
 ): Promise<Array<{ id: string; text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!isMemoryEnabled()) return [];
   return trackVectorOperation(() => searchMemoryEntriesEnabled(query, source, topK, options));
@@ -321,7 +322,7 @@ async function searchMemoryEntriesEnabled(
   query: string,
   source?: string,
   topK = 5,
-  options?: { recordRecall?: boolean },
+  options?: { recordRecall?: boolean; allowedL2Ids?: ReadonlySet<string> },
 ): Promise<Array<{ id: string; text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!retriever) return [];
   let allowedEntryIds: string[] | undefined;
@@ -330,7 +331,8 @@ async function searchMemoryEntriesEnabled(
       const { memoryStore } = await import("../memory/memory-store.js");
       const memories = await memoryStore.getAllL2();
       const recallableById = new Map(
-        memories.filter(isL2LocallyRecallable).map((memory) => [memory.id, memory]),
+        memories.filter(memory => isL2LocallyRecallable(memory) && (!options?.allowedL2Ids || options.allowedL2Ids.has(memory.id)))
+          .map(memory => [memory.id, memory]),
       );
       allowedEntryIds = getEntriesBySource("user_memory")
         .filter((entry) => {
@@ -378,13 +380,15 @@ async function recordUserMemoryRecalls(results: Array<{ entry: MemoryEntry }>): 
 // 让召回工具能按时间排序、展示时间戳。
 export async function searchHistoryEntries(
   query: string,
-  topK = 5
-): Promise<Array<{ text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
+  topK = 5,
+  allowedEntryIds?: string[],
+): Promise<Array<{ id: string; text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!isMemoryEnabled()) return [];
   return trackVectorOperation(async () => {
     if (!retriever) return [];
-    const results = await retriever.retrieve(query, "chat_history", topK);
+    const results = await retriever.retrieve(query, "chat_history", topK, { allowedEntryIds });
     return results.map((r) => ({
+      id: r.entry.id,
       text: r.entry.text,
       createdAt: r.entry.createdAt,
       score: r.score,

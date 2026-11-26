@@ -1,12 +1,13 @@
 // Orchestrator — unified entry point
 // 只负责构建 always-on 上下文（世界书 + L0/L1）；工具的选择和执行由 CyreneHarness 处理
-import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, INJECTION_HEADER, INJECTION_PREAMBLE } from "../rag";
+import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, INJECTION_HEADER, INJECTION_PREAMBLE, searchMemoryEntries } from "../rag";
 import { memoryStore } from "../memory/memory-store";
-import { entityGraph } from "../memory/entity-graph";
 import { recordRecentMemoryInjection } from "../memory/recent-injected-memory";
 import { l2DmaeManager } from "../memory/l2-dmae-manager";
 import { toolRegistry } from "./tools/registry/tool-registry";
-import { isMemoryEnabled } from "../memory/memory-mode";
+import { getMemoryModeVersion, isMemoryEnabled } from "../memory/memory-mode";
+import { selectOwnerL2Memories, selectOwnerProfileFields } from "../memory/memory-owner-recall";
+import { rankTokenizedCandidates, tokenizeText } from "../rag/text-ranking";
 
 export { ToolCallResult } from "./types";
 
@@ -22,15 +23,13 @@ export { buildToneInjection } from "./tone-injector";
  * 构建相关记忆注入：返回经 V5 DMAE 排序后的 active L2 记忆，以及实体关系。
  * L2 DMAE 状态更新由调用方（call-prompt-builder.ts）在调用本函数前完成。
  */
-export async function buildMemoryInjection(
-  userInput: string,
-): Promise<string> {
+export async function buildMemoryInjection(_userInput: string): Promise<string> {
   if (!isMemoryEnabled()) return "";
   const parts: string[] = [];
 
   try {
     // V5 L2：直接读取 DMAE 引擎中 activation >= promptThreshold 的条目，按 activation 降序
-    const allL2 = await memoryStore.getAllL2();
+    const allL2 = await selectOwnerL2Memories(await memoryStore.load());
     const activeL2 = await l2DmaeManager.getActiveL2ForPrompt(allL2, 4);
     recordRecentMemoryInjection(activeL2.map((l2) => l2.id));
     if (activeL2.length > 0) {
@@ -52,17 +51,37 @@ export async function buildMemoryInjection(
     }
   }
 
-  try {
-    // 实体关系图谱
-    const entityInfo = entityGraph.search(userInput);
-    if (entityInfo) {
-      parts.push("【人物关系】\n" + entityInfo);
-    }
-  } catch (err) {
-    console.warn("[Orchestrator] entity graph search failed:", err);
-  }
-
   return parts.join("\n\n");
+}
+
+/** 文字聊天使用同一份受来源约束的 L2；索引未就绪时仍可匹配可信的本地正文。 */
+export async function buildVectorMemoryContext(query: string): Promise<string> {
+  if (!isMemoryEnabled() || !query.trim()) return "";
+  const version = getMemoryModeVersion();
+  const candidates = await selectOwnerL2Memories(await memoryStore.load());
+  if (candidates.length === 0 || getMemoryModeVersion() !== version) return "";
+  const byId = new Map(candidates.map(memory => [memory.id, memory]));
+  const ranked = await searchMemoryEntries(query, "user_memory", 4, {
+    allowedL2Ids: new Set(byId.keys()),
+    recordRecall: false,
+  }).catch(() => []);
+  const semanticIds = ranked.flatMap(({ metadata }) => typeof metadata?.l2Id === "string" ? [metadata.l2Id] : []);
+  const lexicalIds = rankTokenizedCandidates(tokenizeText(query), candidates
+    .map(memory => ({ item: memory.id, tokens: tokenizeText(`${memory.slug ?? ""} ${memory.content}`) })), 4)
+    .filter(({ score }) => score > 0).map(({ item }) => item);
+  const orderedIds = [...new Set([...semanticIds, ...lexicalIds])];
+  if (orderedIds.length === 0 || getMemoryModeVersion() !== version) return "";
+  const current = new Map((await selectOwnerL2Memories(await memoryStore.load(), new Set(orderedIds))).map(memory => [memory.id, memory]));
+  if (getMemoryModeVersion() !== version) return "";
+  const content = orderedIds.flatMap(id => {
+    const memory = current.get(id);
+    return memory && memory.content === byId.get(id)?.content ? [memory.content.slice(0, 400)] : [];
+  }).slice(0, 4);
+  return content.length === 0 ? "" : [
+    "【相关事件记忆】",
+    "这份资料来自旧的用户消息，只作背景。与本轮明确说明冲突时，以本轮用户说明为准。",
+    ...content.map(item => `- ${item}`),
+  ].join("\n");
 }
 
 function getWorldbookTriggerText(userInput: string): string {
@@ -86,6 +105,7 @@ function getWorldbookTriggerText(userInput: string): string {
 export async function buildAlwaysOnContext(
   userInput: string,
   recentMessages: Array<{ role: string; content: string }>,
+  includeProfile = true,
 ): Promise<string> {
   const parts: string[] = [];
 
@@ -121,22 +141,23 @@ export async function buildAlwaysOnContext(
   }
 
   // ── L0/L1 画像 ───────────────────────────────────────
-  if (isMemoryEnabled()) {
+  if (includeProfile && isMemoryEnabled()) {
     try {
-      const l0 = await memoryStore.getL0();
-      const l1 = await memoryStore.getL1();
+      const state = await memoryStore.load();
+      const { l0, l1 } = state;
+      const visible = await selectOwnerProfileFields(state);
 
       const l0Lines = [
-        l0.preferredName && `称呼：${l0.preferredName}`,
-        l0.occupation && `职业：${l0.occupation}`,
-        l0.longTermInterests && `长期兴趣：${l0.longTermInterests}`,
-        l0.permanentNote && `备注：${l0.permanentNote}`,
+        visible.has("L0.preferredName") && l0.preferredName && `称呼：${l0.preferredName}`,
+        visible.has("L0.occupation") && l0.occupation && `职业：${l0.occupation}`,
+        visible.has("L0.longTermInterests") && l0.longTermInterests && `长期兴趣：${l0.longTermInterests}`,
+        visible.has("L0.permanentNote") && l0.permanentNote && `备注：${l0.permanentNote}`,
       ].filter(Boolean);
 
       const l1Lines = [
-        l1.recentGoals && `最近目标：${l1.recentGoals}`,
-        l1.recentPreferences && `近期偏好：${l1.recentPreferences}`,
-        l1.currentProject && `当前项目：${l1.currentProject}`,
+        visible.has("L1.recentGoals") && l1.recentGoals && `最近目标：${l1.recentGoals}`,
+        visible.has("L1.recentPreferences") && l1.recentPreferences && `近期偏好：${l1.recentPreferences}`,
+        visible.has("L1.currentProject") && l1.currentProject && `当前项目：${l1.currentProject}`,
       ].filter(Boolean);
 
       if (l0Lines.length > 0 || l1Lines.length > 0) {

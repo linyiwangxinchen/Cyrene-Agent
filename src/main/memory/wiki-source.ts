@@ -127,6 +127,7 @@ export class WikiChatSourceReader {
     const selectedMessages: (WikiChatSourceMessage | null)[] = [];
     const assistantIndexes = new Map<string, number>();
     let currentUserId: string | undefined;
+    let currentUserAllowed = false;
     for (const node of projection.state.nodes) {
       if (node.kind === "compaction") continue;
       const entry = byEntryId.get(node.entryId);
@@ -135,10 +136,12 @@ export class WikiChatSourceReader {
       if (node.kind === "user") {
         // Even an attachment-only user turn separates adjacent assistant turns.
         currentUserId = node.entryId;
-        if (message?.role === "user") selectedMessages.push(message);
+        currentUserAllowed = !node.entryId.startsWith("channel:") && !entry.runId?.startsWith("plugin:");
+        if (currentUserAllowed && message?.role === "user") selectedMessages.push(message);
         continue;
       }
       if (entry.kind !== "assistant") throw new Error("WIKI_SOURCE_ACTIVE_ENTRY_KIND_MISMATCH");
+      if (!currentUserAllowed) continue;
       // Multiple canonical assistant rounds share one assistant turn. Match the
       // UI's latest-round semantics so obsolete intermediate text is not learned.
       const groupKey = JSON.stringify([currentUserId ?? "", entry.turnId ?? entry.id]);

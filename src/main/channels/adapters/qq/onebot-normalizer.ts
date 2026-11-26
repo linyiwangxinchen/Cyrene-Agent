@@ -147,6 +147,7 @@ export async function normalizeOneBotMessage(
   const text = textParts.join("").trim() || String(event.raw_message ?? "").trim() || "[空消息]";
   return {
     channel: "qq",
+    accountId: context.selfId,
     chatType: event.message_type,
     messageId: oneBotId(event.message_id),
     senderId,

@@ -5,7 +5,7 @@ import {
   MAX_PLUGIN_PROMPT_TOTAL_CHARS,
   PLUGIN_PROMPT_PROVIDER_TIMEOUT_MS,
 } from "./prompts";
-import type { PluginPromptSource } from "./types";
+import type { PluginExpressionEvidence, PluginPromptSource } from "./types";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -13,6 +13,73 @@ afterEach(() => {
 });
 
 describe("PluginPromptRegistry", () => {
+  const privateChat = { source: "conversation", mode: "chat", privateCompanion: true, userText: "聊聊阳台浇水" } as const;
+  const subtitle: PluginExpressionEvidence = {
+    id: "original", quote: "花盆加班", at: 100,
+    source: { kind: "video_subtitle", id: "BV1JcnW6pEFT:subtitle:1:9:11", unit: "BV1JcnW6pEFT", url: "https://www.bilibili.com/video/BV1JcnW6pEFT?t=9" },
+    topics: ["阳台浇水"],
+  };
+
+  it("以经宿主验证的结构化 B 站证据取代旧提示词，不把用户查询交给证据接口", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    const list = vi.fn(() => [subtitle]);
+    const provide = vi.fn(() => "旧提示词");
+    registry.register("bili-garden", { id: "expressions", privateCompanionOnly: true, provide, listExpressionEvidence: list }, signal, "builtin");
+    expect(await registry.build(privateChat)).toContain('"原话":"花盆加班"');
+    expect(provide).not.toHaveBeenCalled();
+    expect(list).toHaveBeenCalledWith({ limit: 100, signal: expect.any(AbortSignal) });
+    expect(await registry.build(privateChat, ["花盆，加班"])).toBe("");
+    expect(await registry.build(privateChat, [], [])).toBe("");
+    expect(await registry.build({ ...privateChat, privateCompanion: undefined })).toBe("");
+    expect(await registry.buildExpressionContext({ use: "proactive", userText: privateChat.userText })).toBe("");
+    expect(await registry.buildExpressionContext({ use: "proactive", userText: privateChat.userText, allowedOwners: ["bili-garden"] })).toBe("");
+  });
+
+  it("已授权的用户插件只能贡献经过归纳的策略，重复转载不能提供两份证据", async () => {
+    const registry = createPluginPromptRegistry();
+    const controller = new AbortController();
+    const initial = { ...subtitle, strategy: "detail" } as const;
+    let rows: PluginExpressionEvidence[] = [initial, { ...initial, id: "copy", quote: "花盆，加班。",
+      source: { ...initial.source, id: "copied", unit: "different" } }];
+    registry.register("community", { id: "style", provide: () => "", listExpressionEvidence: () => rows }, controller.signal, "user");
+    expect(await registry.build(privateChat)).toBe("");
+    expect(await registry.build(privateChat, [], ["community"])).toBe("");
+    rows = [initial, { ...rows[1], quote: "土里藏着天气" }];
+    const active = { use: "proactive", userText: privateChat.userText, allowedOwners: ["community"] } as const;
+    const first = await registry.selectExpressionContext(active);
+    expect(first?.text).toContain("顺着对方刚提到的一个具体细节接话");
+    expect(first?.text).not.toMatch(/花盆|土里|bilibili/);
+    expect(first?.sourceOwners).toEqual(["community"]);
+    rows[1] = { ...rows[1], source: { ...rows[1].source, version: "revised" } };
+    expect((await registry.selectExpressionContext(active))?.evidenceKey).not.toEqual(first?.evidenceKey);
+    controller.abort();
+    expect(await registry.selectExpressionContext(active)).toBeUndefined();
+  });
+
+  it("普通私聊里的正式写作交给当前任务，同话题的日常提及仍可取用", async () => {
+    const registry = createPluginPromptRegistry();
+    const list = vi.fn(() => [subtitle]);
+    registry.register("bili-garden", { id: "expressions", privateCompanionOnly: true, provide: () => "", listExpressionEvidence: list }, new AbortController().signal, "builtin");
+    for (const userText of ["请帮我写一段正式公告，内容是阳台浇水。", "阳台浇水的安排确实变了。把刚才的内容改成物业书面通知。"]) {
+      expect(await registry.build({ ...privateChat, userText })).toBe("");
+    }
+    expect(list).not.toHaveBeenCalled();
+    expect(await registry.build({ ...privateChat, userText: "小区出了个阳台浇水公告，你怎么看？" })).toContain("花盆加班");
+  });
+
+  it("注销正在异步读取的来源后，已读回的证据不会进入本次请求", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    let resolveRows!: (rows: PluginExpressionEvidence[]) => void;
+    registry.register("bili-garden", { id: "expressions", provide: () => "", privateCompanionOnly: true,
+      listExpressionEvidence: () => new Promise(resolve => { resolveRows = resolve; }) }, signal, "builtin");
+    const result = registry.build(privateChat);
+    registry.unregister("bili-garden", "expressions");
+    resolveRows([subtitle]);
+    expect(await result).toBe("");
+  });
+
   it("让内置贴吧表达在归纳前排除用户纠正过的样本", async () => {
     const registry = createPluginPromptRegistry();
     const signal = new AbortController().signal;
@@ -59,6 +126,20 @@ describe("PluginPromptRegistry", () => {
       mode: "work",
       userText: "检查任务",
     })).toBe("[插件上下文：plugin:beta:shared]\nB:scheduler");
+  });
+
+  it("插件完成激活后才调用已注册的 Provider", async () => {
+    const registry = createPluginPromptRegistry();
+    const provide = vi.fn(() => "READY");
+    let running = false;
+    registry.register("demo", { id: "context", provide }, new AbortController().signal, "user", () => running);
+    const input = { source: "conversation", mode: "chat", userText: "hi" } as const;
+
+    expect(await registry.build(input)).toBe("");
+    expect(provide).not.toHaveBeenCalled();
+    running = true;
+    expect(await registry.build(input)).toContain("READY");
+    expect(provide).toHaveBeenCalledOnce();
   });
 
   it("同一插件拒绝重复和非法 id，不同插件可使用相同短 id", () => {

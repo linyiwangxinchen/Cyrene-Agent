@@ -15,6 +15,8 @@ import type { PreparedHarnessRun } from "./run-preparation";
 import type { CyreneRunOptions } from "../../cyrene-agent";
 import { getTaskWorktreeManager, type GitInvocation } from "../../task-worktree";
 import { resolveGitExecutable } from "../../../code-git/git-executable";
+import { resolveImageRoute } from "../../image-router";
+import { bindToolScreenshotHandler, createToolResultImageCache, formatToolImageResult } from "../../tool-result-images";
 
 let resolvedTaskGit: GitInvocation | null = null;
 /** 与 Git 面板相同的探测顺序：系统 git 优先，打包版回退内置 MinGit；成功结果进程内缓存。 */
@@ -39,6 +41,7 @@ export interface PreparedToolRuntime {
   taskExecutor: HarnessInput["taskExecutor"];
   closeTaskExecutor: HarnessInput["closeTaskExecutor"];
   openTaskCompanions: string[];
+  toolResultImages: ReturnType<typeof createToolResultImageCache>;
 }
 
 export async function prepareToolRuntime(input: {
@@ -52,7 +55,7 @@ export async function prepareToolRuntime(input: {
   const permissionCheck: NonNullable<HarnessInput["checkPermission"]> = async (
     toolId: string,
     args: Record<string, unknown>,
-  ): Promise<boolean> => {
+  ) => {
     // 计划只读不变量：必须先于 allow_all 判断。
     // 用户说"先规划不要动"是对本轮对话的契约，任何权限档位都不能越过。
     // 判断依据从 risk（危险程度）换成 effectKind（是否改变世界），只放行纯读取工具；
@@ -74,7 +77,7 @@ export async function prepareToolRuntime(input: {
     const tool = toolRegistry.getById(toolId);
     if (!tool) return false;
     const risk: ToolRiskLevel = (tool as ToolDefinition & { risk?: ToolRiskLevel }).risk ?? "safe";
-    return (await checkPermission({
+    const decision = await checkPermission({
       toolId,
       toolName: tool.name,
       toolDescription: tool.description,
@@ -87,12 +90,18 @@ export async function prepareToolRuntime(input: {
       bypassCompanionApproval: options.bypassCompanionApproval,
       requireApproval: tool.requiresApproval === true,
       effect: resolveEffectKind(tool, args),
-    })).allowed;
+    });
+    if (!decision.allowed && decision.denialCode === "git_scoped_write" && decision.reason) {
+      return { allowed: false, reason: decision.reason };
+    }
+    return decision.allowed;
   };
 
   const toolContext: ToolContext = {
     userQuery: extractLastUserQuery(options.messages),
     conversationId: options.conversationId ?? "default",
+    memoryScope: options.memoryScope,
+    memoryUserTurnId: options.memoryUserTurnId,
     runId,
     contextRefs: contextRefRegistry,
     signal,
@@ -105,6 +114,19 @@ export async function prepareToolRuntime(input: {
     onShellJobComplete: options.onShellJobComplete,
   };
   const toolOutputStore = new FileToolOutputStore(app.getPath("userData"));
+  const toolResultImages = createToolResultImageCache(signal);
+  bindToolScreenshotHandler(toolContext, async ({ base64, description, question }) => {
+    if (signal.aborted) return "[错误] 截图已取消。";
+    const route = resolveImageRoute("tool", options.settings);
+    if (route.mode === "reject") return `[错误] ${route.reason}`;
+    if (route.mode === "direct") {
+      const reference = toolResultImages.remember(base64);
+      return reference ? formatToolImageResult(description, reference) : "[错误] 无法读取受支持尺寸内的 PNG 截图。";
+    }
+    const { captionImage } = await import("../../vision-captioner.js");
+    const caption = await captionImage({ base64, mime: "image/png" }, question, route.config);
+    return caption.startsWith("[错误") ? caption : `${description}\n视觉模型转述：${caption}`;
+  });
   // 只有 work/code 模式允许派生任务；chat 模式不创建 TaskSession，避免出现不可见的后台执行。
   // taskMode 在收窄的同时保留 "work" | "code" 字面量类型，供下方 executor 的 parent.mode 使用。
   const taskMode = options.conversationMode === "work" || options.conversationMode === "code"
@@ -139,5 +161,5 @@ export async function prepareToolRuntime(input: {
     : undefined;
   const openTaskCompanions = taskStore ? await taskStore.listOpenCompanions(threadId) : [];
 
-  return { toolContext, checkPermission: permissionCheck, toolOutputStore, taskExecutor, closeTaskExecutor, openTaskCompanions };
+  return { toolContext, checkPermission: permissionCheck, toolOutputStore, taskExecutor, closeTaskExecutor, openTaskCompanions, toolResultImages };
 }

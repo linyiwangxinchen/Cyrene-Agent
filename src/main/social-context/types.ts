@@ -9,6 +9,8 @@ export interface SocialTurnEvidence {
 
 export interface SocialExtractionInput {
   conversationId: string;
+  memoryScope?: string;
+  source?: { userTurnId: string; assistantEntryId: string };
   userTurn: SocialTurnEvidence & { role: "user" };
   assistantTurn: SocialTurnEvidence & { role: "assistant" };
   retrievedAtoms: SocialAtom[];
@@ -20,9 +22,13 @@ export interface SocialExtractionInput {
 export interface SocialAtom {
   id: string;
   conversationId: string;
+  memoryScope?: string;
   type: SocialAtomType;
   content: string;
   evidenceTurnId: string;
+  sourceEntryId?: string;
+  /** 自动整理的转述尚未经用户核实，召回时使用可检查的原话。 */
+  quoteOnly?: boolean;
   evidenceQuote: string;
   createdAt: number;
   expiresAt?: number;

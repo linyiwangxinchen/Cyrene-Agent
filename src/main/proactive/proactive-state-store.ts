@@ -45,7 +45,16 @@ function normalizePendingCommitIntent(value: unknown): ProactiveCommitIntent | u
     && ((context.composedAt === undefined && context.timezone === undefined)
       || typeof context.composedAt === "number" && Number.isFinite(context.composedAt) && typeof context.timezone === "string" && context.timezone.length <= 100)
     && ["conversationId", "sessionId", "targetId", "threadId", "followupId"].every(key => context[key] === undefined || (typeof context[key] === "string" && context[key].length <= 300))
+    && (context.recipientScope === undefined || (typeof context.recipientScope === "string" && /^peer:[a-f0-9]{64}$/.test(context.recipientScope)))
+    && (context.bindingUpdatedAt === undefined || (typeof context.bindingUpdatedAt === "number" && Number.isFinite(context.bindingUpdatedAt)))
+    && (context.expression === undefined || (isRecord(context.expression) && typeof context.expression.query === "string"
+      && context.expression.query.length <= 300 && typeof context.expression.evidenceKey === "string" && /^[a-f0-9]{64}$/.test(context.expression.evidenceKey)))
+    && (context.memoryMode === undefined || (typeof context.memoryMode === "string" && ["off", "vector", "summary", "wiki"].includes(context.memoryMode)))
     ? { relationshipRevision: context.relationshipRevision as number,
+      ...(typeof context.memoryMode === "string" ? { memoryMode: context.memoryMode } : {}),
+      ...(typeof context.recipientScope === "string" ? { recipientScope: context.recipientScope } : {}),
+      ...(typeof context.bindingUpdatedAt === "number" ? { bindingUpdatedAt: context.bindingUpdatedAt } : {}),
+      ...(isRecord(context.expression) ? { expression: { query: context.expression.query as string, evidenceKey: context.expression.evidenceKey as string } } : {}),
       ...(typeof context.composedAt === "number" && typeof context.timezone === "string" ? { composedAt: context.composedAt, timezone: context.timezone } : {}),
       ...Object.fromEntries(["conversationId", "sessionId", "targetId", "threadId", "followupId"].filter(key => typeof context[key] === "string").map(key => [key, context[key]])) } : undefined;
   if (value.deliveryContext !== undefined && !deliveryContext) return undefined;

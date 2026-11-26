@@ -261,6 +261,7 @@ export class FeishuAdapter implements ChannelAdapter {
   onMessageAccepted: ((msg: IncomingMessage) => Promise<void>) | null = null;
 
   private channel: LarkChannel | null = null;
+  private memoryAccountId?: string;
   private status: ChannelStatus = { enabled: false, phase: "config_missing" };
   /** connect() 失败后的定时重建句柄；连接成功、停用或手动 rebuild 时清除 */
   private connectRetryTimer: NodeJS.Timeout | null = null;
@@ -306,6 +307,9 @@ export class FeishuAdapter implements ChannelAdapter {
       }
       try {
         const inMsg = await normalizeLarkMessage(ch, msg);
+        if (this.channel !== ch || loadChannelsSettings().feishu.appId !== settings.appId) return;
+        inMsg.accountId = settings.appId;
+        inMsg.chatType = "private";
         if (this.onMessageAccepted) await this.onMessageAccepted(inMsg);
         else if (this.onMessage) await this.onMessage(inMsg);
       } catch (err) {
@@ -329,6 +333,7 @@ export class FeishuAdapter implements ChannelAdapter {
     });
 
     this.channel = ch;
+    this.memoryAccountId = settings.appId;
     return ch;
   }
 
@@ -390,6 +395,11 @@ export class FeishuAdapter implements ChannelAdapter {
       return { enabled: true, phase: "config_missing", message: "App ID/Secret 缺失" };
     }
     return this.status;
+  }
+
+  getMemoryAccountId(): string | undefined {
+    const configured = loadChannelsSettings().feishu.appId;
+    return this.channel && this.memoryAccountId === configured ? this.memoryAccountId : undefined;
   }
 
   async send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string }> {

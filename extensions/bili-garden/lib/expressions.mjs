@@ -1,4 +1,58 @@
 import { createHash } from "node:crypto";
+import { videoId } from "./config.mjs";
+
+const cues = { 庆祝: "celebrate", 惊讶: "surprise", 接梗: "joke", 鼓励: "encourage" };
+const cueStrategies = { celebrate: "acknowledge", surprise: "surprise", joke: "playful", encourage: "reassure" };
+const version = text => createHash("sha256").update(text).digest("hex");
+
+function fingerprint(source, quote) {
+  const video = /^https:\/\/www\.bilibili\.com\/video\/(BV[\da-z]{10})(?:[/?#]|$)/iu.exec(source)?.[1];
+  const normalized = quote.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{Z}\p{C}\s]/gu, "");
+  return createHash("sha256").update(JSON.stringify([video ?? source, normalized])).digest("hex");
+}
+
+export function locateVideoExpression(bvid, quote, { video, comments = [], segmentIndex, commentId } = {}) {
+  const unit = videoId(bvid);
+  const base = `https://www.bilibili.com/video/${unit}`;
+  const comment = comments.find(row => /^\d+$/u.test(row.id) && (commentId === undefined || row.id === commentId) && row.text.includes(quote));
+  if (commentId !== undefined && !comment) return undefined;
+  if (comment && segmentIndex === undefined) return { text: comment.text, source: { kind: "video_comment", id: `${unit}:comment:${comment.id}`, unit, url: `${base}/#reply${comment.id}`, version: version(comment.text) } };
+  const segments = video?.segments ?? [];
+  const index = segmentIndex ?? segments.findIndex(row => Number.isFinite(row.from) && row.to > row.from && row.text.includes(quote));
+  const segment = segments[index];
+  if (segment && Number.isInteger(index) && Number.isFinite(segment.from) && segment.from >= 0 && Number.isFinite(segment.to)
+    && segment.to > segment.from && segment.text.includes(quote) && ["asr", "subtitle"].includes(video.source)) {
+    return { text: segment.text, source: { kind: video.source === "asr" ? "video_transcript" : "video_subtitle",
+      id: `${unit}:${video.source}:${index}:${segment.from}:${segment.to}`, unit, url: `${base}?t=${Math.floor(segment.from)}`, version: version(segment.text) } };
+  }
+  if (segmentIndex === undefined && video?.text?.includes(quote)) return { text: video.text, source: { kind: "legacy", id: `${unit}:full`, unit, url: base } };
+}
+
+export function forgetExpression(store, id) {
+  const row = store.get("expression", id);
+  if (!row) return false;
+  return store.transaction(() => {
+    store.put("expression-forgotten", fingerprint(row.source, row.quote), { at: Date.now() });
+    store.remove("expression", id);
+    return true;
+  });
+}
+
+export function visibleExpressions(store, limit = 500) {
+  return store.list("expression", limit).filter(row => typeof row.source === "string" && typeof row.quote === "string"
+    && !store.get("expression-forgotten", fingerprint(row.source, row.quote)));
+}
+
+export function listVideoExpressionEvidence(store, limit) {
+  return visibleExpressions(store, limit).map(row => {
+    const situation = cues[row.cue];
+    const unit = /^https:\/\/www\.bilibili\.com\/video\/(BV[\da-z]{10})(?:[/?#]|$)/iu.exec(row.source)?.[1] ?? row.id;
+    return { id: row.id, quote: row.quote, at: row.at,
+      source: row.evidence ?? { kind: "legacy", id: row.id, unit, url: row.source },
+      topics: [row.scene], ...(situation ? { cues: [situation], strategy: cueStrategies[situation] } : {}),
+    };
+  });
+}
 
 export function rememberExpression(
   store,
@@ -7,6 +61,7 @@ export function rememberExpression(
   scene,
   evidence,
   style = {},
+  reference,
 ) {
   quote = String(quote ?? "").trim();
   scene = String(scene ?? "").trim();
@@ -19,9 +74,17 @@ export function rememberExpression(
   ) {
     throw new Error("请选择已读资料中的短句，填写具体使用场景");
   }
-  const id = createHash("sha256")
+  const key = fingerprint(source, quote);
+  const legacyId = createHash("sha256")
     .update(JSON.stringify([source, quote]))
     .digest("hex");
+  if (store.get("expression-forgotten", key)) {
+    throw new Error("用户已忘记这条表达，重新阅读不会恢复");
+  }
+  const existing = store.get("expression", key) ?? store.get("expression", legacyId);
+  const id = existing?.id ?? key;
+  if (existing && (!reference || reference.kind === "legacy" && existing.evidence?.kind !== "legacy"
+    || existing.evidence?.version === reference.version && existing.evidence?.id === reference.id)) return existing;
   return store.put("expression", id, {
     id,
     source,
@@ -32,7 +95,8 @@ export function rememberExpression(
       typeof style.delivery === "string"
         ? style.delivery.slice(0, 100)
         : undefined,
-    at: Date.now(),
+    ...(reference ? { evidence: reference } : {}),
+    at: existing?.at ?? Date.now(),
   });
 }
 

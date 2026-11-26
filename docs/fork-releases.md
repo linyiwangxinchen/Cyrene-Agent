@@ -15,13 +15,14 @@ node scripts/build/screenshot-helper.mjs
 node scripts/packaging/prepare-mingit.mjs
 node scripts/packaging/prepare-mpv.mjs
 pnpm exec electron-builder --config electron-builder.fork.yml --win nsis --x64 --publish never
-node scripts/verify/installer-artifacts.mjs --artifact-name 'Cyrene-Windows-x64-Setup-${version}.exe'
+node scripts/verify/installer-artifacts.mjs --config electron-builder.fork.yml
 ```
 
 产物为 `release/Cyrene-Windows-x64-Setup-<版本>.exe`、同名 `.blockmap` 和
-`release/latest.yml`。验证脚本检查真实 SHA-512、文件大小和随包辅助程序；
-发布前还需用隔离用户数据目录启动 `win-unpacked/Cyrene.exe`，核对窗口加载、
-`resources/app-update.yml` 的 fork 地址及根目录许可文件。
+`release/latest.yml`。验证脚本检查真实 SHA-512、文件大小、随包辅助程序和
+`resources/app-update.yml` 的更新源。如果构建时指定了单独的输出目录，验收时传入同一
+路径 `--output-dir`。发布前用隔离用户数据目录启动 `win-unpacked/Cyrene.exe`，
+核对窗口加载和根目录许可文件。
 
 没有配置代码签名证书时，安装包未签名。不要声称已签名；Windows 可能提示未知发布者。
 Release 必须同时上传安装器、blockmap、latest.yml 及 SHA-256 清单。

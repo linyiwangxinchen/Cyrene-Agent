@@ -75,11 +75,13 @@ export function CompanionSettingsPanel() {
   const [confirm, setConfirm] = useState<ConfirmCommand>();
   const [sessions, setSessions] = useState<Array<{ id: string; title: string }>>([]);
   const [followup, setFollowup] = useState<{ id?: string; topic: string; conversationId: string; time: string }>({ topic: "", conversationId: "", time: localTime(Date.now() + 3_600_000) });
-  function accept(value: CompanionSnapshot) {
+  function accept(value: CompanionSnapshot, drafts: "all" | "relationship" | "permissions" | "none" = "all") {
     setSnapshot(value);
     const r = value.relationship;
-    setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, desireEnabled: r.desireEnabled ?? false, desireInitiative: r.desireInitiative ?? false, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion", learnConversationStyle: r.learnConversationStyle ?? true, learnPrivateExpressions: !!r.learnPrivateExpressions, selfieFrequency: r.selfieFrequency ?? "normal" });
-    setPermissions({ ...value.permissions });
+    if (drafts === "all" || drafts === "relationship") {
+      setDraft({ userLabel: r.userLabel ?? "", closeness: r.closeness, sharedGoals: [...r.sharedGoals], milestones: [...r.milestones], boundaries: [...r.boundaries], tasteNotes: [...r.tasteNotes], paused: r.paused, recordHistory: r.recordHistory, style: r.style, affection: r.affection, desireEnabled: r.desireEnabled ?? false, desireInitiative: r.desireInitiative ?? false, innerLifeEnabled: r.innerLifeEnabled, proactiveLifeEnabled: r.proactiveLifeEnabled, relationshipMode: r.relationshipMode ?? "companion", learnConversationStyle: r.learnConversationStyle ?? true, learnPrivateExpressions: !!r.learnPrivateExpressions, selfieFrequency: r.selfieFrequency ?? "normal" });
+    }
+    if (drafts === "all" || drafts === "permissions") setPermissions({ ...value.permissions });
   }
   useEffect(() => {
     let active = true;
@@ -117,13 +119,9 @@ export function CompanionSettingsPanel() {
       const savedNotice = value.type === "forget_learned_preference" ? "已忘记这项聊天偏好。"
         : value.type === "forget_task_method" ? "已忘记这项做事经验。"
           : preserveDraftNotice;
-      if (savedNotice) {
-        setSnapshot(updated);
-        setNotice(savedNotice);
-      } else {
-        accept(updated);
-        setNotice("已保存，下次回应会使用当前设置。");
-      }
+      const relationshipChanged = !preserveDraftNotice && (value.type === "preferences" || value.type === "reset_relationship");
+      accept(updated, relationshipChanged ? "relationship" : value.type === "permissions" ? "permissions" : "none");
+      setNotice(savedNotice ?? (relationshipChanged ? "已保存，下次回应会使用当前设置。" : "已保存。"));
       setConfirm(undefined);
       if (value.type === "repair") setRepair("");
       if (value.type === "reset_relationship") setTaskLearningDraft(undefined);
@@ -150,6 +148,9 @@ export function CompanionSettingsPanel() {
   const field = <K extends keyof RelationshipPreferences>(key: K, value: RelationshipPreferences[K]) => setDraft(current => current ? { ...current, [key]: value } : current);
   const taskLearningEnabled = snapshot?.relationship.learnTaskMethods ?? true;
   const sessionName = (conversationId: string) => sessions.find(session => session.id === conversationId)?.title || conversationId;
+  const conversationNavigation = (window as typeof window & {
+    chatStore?: { openInReactChatWindow?: (id: string) => Promise<unknown> };
+  }).chatStore?.openInReactChatWindow;
   function editFollowup(item: CompanionFollowup) { setFollowup({ id: item.id, topic: item.topic, conversationId: item.conversationId, time: localTime(Math.max(item.nextEligibleAt, Date.now() + 3_600_000)) }); }
   async function saveFollowup() {
     if (await command({ type: "followup_save", ...(followup.id ? { id: followup.id } : {}), topic: followup.topic.trim(), conversationId: followup.conversationId, nextEligibleAt: new Date(followup.time).getTime() })) {
@@ -181,7 +182,7 @@ export function CompanionSettingsPanel() {
           <label className="cy-companion__switch">自然的亲昵表达<Switch aria-label="自然的亲昵表达" checked={draft.affection} onChange={value => field("affection", value)} /></label>
           <label className="cy-companion__switch">暂停关系模拟及主动关怀<Switch aria-label="暂停关系模拟及主动关怀" checked={draft.paused} onChange={value => field("paused", value)} /></label>
           <label className="cy-companion__switch">记录本轮关系线索<Switch aria-label="记录本轮关系线索" checked={draft.recordHistory} onChange={value => field("recordHistory", value)} /></label>
-          <label className="cy-companion__switch">跨对话学习说话习惯<Switch checked={!!draft.learnPrivateExpressions} onChange={v=>field("learnPrivateExpressions",v)} /></label>
+          <label className="cy-companion__switch">跨对话学习说话习惯<Switch aria-label="跨对话学习说话习惯" checked={!!draft.learnPrivateExpressions} onChange={v=>field("learnPrivateExpressions",v)} /></label>
           <label className="cy-companion__switch">记住聊天偏好<Switch aria-label="记住聊天偏好" checked={draft.learnConversationStyle ?? true} onChange={value => field("learnConversationStyle", value)} /></label>
           <label className="cy-companion__switch">虚构角色小记<Switch aria-label="虚构角色小记" checked={draft.innerLifeEnabled} onChange={value => field("innerLifeEnabled", value)} /></label>
           <label className="cy-companion__switch">主动关怀<Switch aria-label="主动关怀" checked={draft.proactiveLifeEnabled} onChange={value => field("proactiveLifeEnabled", value)} /></label>
@@ -193,17 +194,23 @@ export function CompanionSettingsPanel() {
           <div className="cy-companion__actions cy-companion__wide"><Button type="primary" loading={busy} onClick={() => void command({ type: "preferences", patch: { ...draft, sharedGoals: lines(draft.sharedGoals.join("\n")), milestones: lines(draft.milestones.join("\n")), boundaries: lines(draft.boundaries.join("\n")), tasteNotes: lines(draft.tasteNotes.join("\n")) } })}>保存相处偏好</Button><Button danger disabled={busy} onClick={() => setConfirm({ type: "reset_relationship" })}>重置关系</Button></div>
           <section className="cy-companion__wide" aria-labelledby="cy-companion-learned-preferences">
             <h3 id="cy-companion-learned-preferences">已记住的聊天偏好</h3>
-            <p>开启“跨对话学习说话习惯”后，昔涟也会在你新开的私聊中沿用常用说法、接话语气和新反馈。下面显示偏好的来源会话。关闭“记住聊天偏好”并保存后，她会停止学习和使用这些偏好。暂停关系模拟或关闭关系记录时也一样。</p>
+            <p>明确说“以后都这样”可保存为偏好，“这次先听我说”只影响本轮。开启跨对话学习后，你的新私聊可沿用已学的共同说法和偏好。关闭相应开关并保存后，会停止学习和使用该类记录。</p>
             {snapshot.learnedPreferences?.length ? snapshot.learnedPreferences.map(item => {
               const session = sessionName(item.conversationId);
               const label = learnedPreferenceLabels[item.topic];
               return <article className="cy-companion__record" key={`${item.conversationId}:${item.topic}`}>
                 <div><strong>{label}</strong><p>{session}</p><time>{new Date(item.updatedAt).toLocaleString()}</time></div>
+                <div className="cy-companion__actions">
+                {conversationNavigation && <Button size="small" onClick={() => {
+                  setError("");
+                  void conversationNavigation(item.conversationId).catch(reason => setError(String(reason)));
+                }}>打开来源会话</Button>}
                 <Button size="small" danger disabled={busy} aria-label={`忘记${session}中的“${label}”偏好`} onClick={() => setConfirm({
                   type: "forget_learned_preference",
                   conversationId: item.conversationId,
                   topic: item.topic,
                 })}>忘记</Button>
+                </div>
               </article>;
             }) : <p>暂时还没有记住聊天偏好。</p>}
           </section>

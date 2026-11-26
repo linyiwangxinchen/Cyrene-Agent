@@ -10,7 +10,7 @@ import type {
   ChannelCapability,
   ChannelId,
   ChannelStatus,
-  IncomingMessage,
+  MessageAcceptance,
   MessageHandler,
   OutgoingMessage,
   ChannelSendOptions,
@@ -22,7 +22,7 @@ export interface ChannelAdapter {
   readonly capability: ChannelCapability;
 
   /** 启动：注册 webhook / 启子进程 / 加载凭证 / 写运行时配置 */
-  start(): Promise<void>;
+  start(signal?: AbortSignal): Promise<void>;
 
   /** 关闭：停止子进程、关闭监听并释放协议资源。 */
   stop(): Promise<void>;
@@ -30,13 +30,16 @@ export interface ChannelAdapter {
   /** 管理器在启动前注入；适配器通过此回调把入站消息交给调度器。 */
   onMessage: MessageHandler | null;
   /** Durable acceptance acknowledgement, separate from slow model execution. */
-  onMessageAccepted?: ((msg: IncomingMessage) => Promise<void>) | null;
+  onMessageAccepted?: MessageAcceptance | null;
 
   /** 出站：把统一 OutgoingMessage 翻译成平台协议发出去 */
   send(msg: OutgoingMessage, options?: ChannelSendOptions): Promise<{ ok: boolean; error?: string; deliveryState?: "failed" | "unknown" }>;
 
   /** UI 展示用状态。轮询调用，adapter 内部缓存即可。 */
   getStatus(): ChannelStatus;
+
+  /** Account authenticated by the active connection, without credentials. */
+  getMemoryAccountId?(): string | undefined;
 
   /** Optional protocol-specific preflight; never performs a send. */
   getProactiveAvailability?(targetId: string): { available: boolean; reason?: string };

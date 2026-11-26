@@ -3,8 +3,9 @@ import fs from "node:fs/promises";
 import type { ChatSessionRecord, SummaryMemoryPendingTurn, SummaryMemoryProgress } from "../../shared/chat-types";
 import { isSummaryMemoryEnabled } from "./memory-mode";
 import { resolveSummaryMemoryPaths } from "./summary-memory-paths";
-import { readSummaryFile, writeSummaryFileAtomic } from "./summary-memory-store";
+import { MAX_SUMMARY_SOURCES, readSummaryFile, writeSummaryFileAtomic, type SummaryReadResult } from "./summary-memory-store";
 import { summarizeMemory } from "./summary-memory-llm";
+import { areSummaryMemorySourcesCurrent, resolveSummaryMemorySources, type SummaryMemoryTurnSource } from "./summary-memory-sources";
 
 export interface SummaryMemoryProgressStore {
   getSessionRecord(id: string): (ChatSessionRecord | null) | Promise<ChatSessionRecord | null>;
@@ -18,6 +19,8 @@ export interface SummaryMemorySchedulerOptions {
   userDataRoot: string;
   sessions: SummaryMemoryProgressStore;
   onError?: (conversationId: string, error: unknown) => void;
+  isTurnCurrent?: (conversationId: string, turn: SummaryMemoryPendingTurn) => Promise<boolean>;
+  trackSources?: boolean;
 }
 
 type QueueMap = Map<string, Promise<unknown>>;
@@ -51,6 +54,10 @@ export class SummaryMemoryScheduler {
   }): Promise<void> {
     if (!this.enabled || !isSummaryMemoryEnabled() || this.cancelledSessions.has(input.conversationId) || !input.assistantEntryId) return;
     try {
+      if (this.options.isTurnCurrent && !await this.options.isTurnCurrent(input.conversationId, input)) return;
+      if (this.options.trackSources && (!input.userTurnId || !(await resolveSummaryMemorySources(this.options.userDataRoot, [{
+        conversationId: input.conversationId, userTurnId: input.userTurnId, assistantEntryId: input.assistantEntryId,
+      }]))[0])) return;
       const recorded = (await this.options.sessions.appendSummaryMemoryTurn(input.conversationId, {
         assistantEntryId: input.assistantEntryId,
         ...(input.userTurnId ? { userTurnId: input.userTurnId } : {}),
@@ -106,15 +113,26 @@ export class SummaryMemoryScheduler {
     const session = (await this.options.sessions.getSessionRecord(conversationId));
     if (!session) return;
     const progress = (await this.options.sessions.getSummaryMemoryProgress(conversationId));
-    const turns = progress?.pendingTurns ?? [];
-    if (turns.length === 0) return;
+    const pending = progress?.pendingTurns ?? [];
+    if (pending.length === 0) return;
+    const { isTurnCurrent, trackSources, userDataRoot } = this.options;
+    const sourceCandidates = trackSources ? await resolveSummaryMemorySources(userDataRoot, pending.map(turn => ({
+      conversationId, userTurnId: turn.userTurnId ?? "", assistantEntryId: turn.assistantEntryId,
+    }))) : undefined;
+    const validity = isTurnCurrent ? await Promise.all(pending.map(turn => isTurnCurrent(conversationId, turn))) : undefined;
+    const eligible = pending.flatMap((turn, index) => {
+      if (validity?.[index] === false || (trackSources && !sourceCandidates?.[index])) return [];
+      return [{ turn, source: sourceCandidates?.[index] }];
+    });
+    const batch = trackSources ? eligible.slice(-MAX_SUMMARY_SOURCES) : eligible;
+    const turns = batch.map(({ turn }) => turn);
+    const batchSources = batch.flatMap(({ source }) => source ? [source] : []);
+    const processed = pending.map(({ assistantEntryId }) => ({ assistantEntryId }));
+    if (turns.length === 0) {
+      await this.options.sessions.markSummaryMemoryProcessed(conversationId, processed);
+      return;
+    }
     const paths = resolveSummaryMemoryPaths({ conversationId, userDataRoot: this.options.userDataRoot, session });
-    const isCurrentTarget = () => this.isCurrentTarget(
-      conversationId,
-      generation,
-      paths.sessionPath,
-      paths.workspacePath,
-    );
     const workspaceRoot = paths.workspacePath
       ? path.resolve(session.workspaceBinding!.workspaceRoot)
       : path.resolve(this.options.userDataRoot);
@@ -125,18 +143,36 @@ export class SummaryMemoryScheduler {
       : `session:${conversationId}`;
     await this.enqueue(this.workspaceQueues, workspaceKey, async () => {
       if (!(await this.isCurrent(conversationId, generation))) return;
-      const sessionFile = await readSummaryFile(paths.sessionPath, 800, workspaceRoot);
-      const workspaceFile = paths.workspacePath
-        ? await readSummaryFile(paths.workspacePath, 1200, workspaceRoot)
-        : { content: "", truncated: false };
+      const previous = async (filePath: string, limit: number) => {
+        const file = await readSummaryFile(filePath, limit, workspaceRoot);
+        const empty: SummaryReadResult = { content: "", truncated: false };
+        return file.sources === null || (file.sources && !await areSummaryMemorySourcesCurrent(userDataRoot, file.sources)) ? empty : file;
+      };
+      const sessionFile = await previous(paths.sessionPath, 800);
+      const workspaceFile = paths.workspacePath ? await previous(paths.workspacePath, 1200) : undefined;
+      // The model sees both old summaries and can move information between them. Each output inherits
+      // all sources. Once the bounded history is full, start from the verified current batch instead.
+      const allSources: SummaryMemoryTurnSource[] = [...new Map([
+        ...(sessionFile.sources ?? []), ...(workspaceFile?.sources ?? []), ...batchSources,
+      ].map(source => [JSON.stringify(source), source])).values()];
+      const refresh = trackSources && allSources.length > MAX_SUMMARY_SOURCES;
+      const activeSources = refresh ? batchSources : allSources;
+      const sessionSummary = refresh ? "" : sessionFile.content;
+      const workspaceSummary = refresh ? "" : workspaceFile?.content ?? "";
+      const isCurrentTarget = async () => {
+        if (isTurnCurrent && !(await Promise.all(turns.map(turn => isTurnCurrent(conversationId, turn)))).every(Boolean)) return false;
+        if (!await areSummaryMemorySourcesCurrent(userDataRoot, activeSources)) return false;
+        return this.isCurrentTarget(conversationId, generation, paths.sessionPath, paths.workspacePath);
+      };
+      if (!await isCurrentTarget()) return;
       const controller = new AbortController() as AbortController & { __summarySessionId?: string };
       controller.__summarySessionId = conversationId;
       this.abortControllers.add(controller);
       let result: Awaited<ReturnType<typeof summarizeMemory>>;
       try {
         result = await summarizeMemory({
-          sessionSummary: sessionFile.content,
-          workspaceSummary: workspaceFile.content,
+          sessionSummary,
+          workspaceSummary,
           turns: turns.map(({ userText, assistantText }) => ({ userText, assistantText })),
           hasWorkspace: Boolean(paths.workspacePath),
           signal: controller.signal,
@@ -148,15 +184,17 @@ export class SummaryMemoryScheduler {
 
       // Write the project-level file first. Repeated retries replace complete summaries,
       // so a crash between file writes cannot duplicate source turns in either file.
-      if (paths.workspacePath && result.workspaceSummary && result.workspaceSummary !== workspaceFile.content) {
-        await writeSummaryFileAtomic(paths.workspacePath, result.workspaceSummary, 1200, workspaceRoot, isCurrentTarget);
+      if (paths.workspacePath && result.workspaceSummary && result.workspaceSummary !== workspaceSummary) {
+        await writeSummaryFileAtomic(paths.workspacePath, result.workspaceSummary, 1200, workspaceRoot, isCurrentTarget,
+          trackSources ? activeSources : undefined);
       }
       if (!(await isCurrentTarget())) return;
-      if (result.sessionSummary !== sessionFile.content) {
-        await writeSummaryFileAtomic(paths.sessionPath, result.sessionSummary, 800, workspaceRoot, isCurrentTarget);
+      if (result.sessionSummary !== sessionSummary) {
+        await writeSummaryFileAtomic(paths.sessionPath, result.sessionSummary, 800, workspaceRoot, isCurrentTarget,
+          trackSources ? activeSources : undefined);
       }
       if (!(await isCurrentTarget())) return;
-      (await this.options.sessions.markSummaryMemoryProcessed(conversationId, turns.map(({ assistantEntryId }) => ({ assistantEntryId }))));
+      await this.options.sessions.markSummaryMemoryProcessed(conversationId, processed);
     });
   }
 
@@ -211,7 +249,7 @@ let scheduler: SummaryMemoryScheduler | null = null;
 
 export function initializeSummaryMemoryScheduler(options: SummaryMemorySchedulerOptions): SummaryMemoryScheduler {
   scheduler?.dispose();
-  scheduler = new SummaryMemoryScheduler(options);
+  scheduler = new SummaryMemoryScheduler({ trackSources: true, ...options });
   return scheduler;
 }
 

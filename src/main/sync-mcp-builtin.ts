@@ -59,13 +59,14 @@ export function buildPlaywrightMcpConfig(): McpServerConfig {
 }
 
 /**
- * 解析打包内 @modelcontextprotocol/server-filesystem 的入口绝对路径。
- * 与 Playwright MCP 同理：asar 虚拟路径在 ELECTRON_RUN_AS_NODE 模式下不可读，
- * 需替换为 electron-builder asarUnpack 解出的真实磁盘路径。
+ * 桌面编译生成独立入口。Web 核心由 Node 运行，可直接读取安装的 MCP 包。
  */
 export function resolveFilesystemMcpCliPath(): string {
-  const pkgJsonPath = require.resolve("@modelcontextprotocol/server-filesystem/package.json");
-  return path.join(path.dirname(pkgJsonPath), "dist", "index.js")
+  if (process.env.CYRENE_HEADLESS === "1") {
+    const packageRoot = path.dirname(require.resolve("@modelcontextprotocol/server-filesystem/package.json"));
+    return path.join(packageRoot, "dist", "index.js");
+  }
+  return path.join(__dirname, "filesystem-mcp.mjs")
     .replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 }
 

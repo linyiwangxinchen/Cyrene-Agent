@@ -158,6 +158,27 @@ describe("scheduled Cyrene execution policy", () => {
 });
 
 describe("createSchedulerRunner lifecycle events", () => {
+  it("records the scheduled occurrence before waiting, then resolves only ready authorized tools", async () => {
+    let release!: () => void;
+    const waiting = new Promise<void>(resolve => { release = resolve; });
+    const waitForTools = vi.fn(() => waiting);
+    const deps = makeRunnerDeps({ waitForTools });
+    const task = makeTask({ allowedToolIds: ["ready-tool"] });
+    const result = createSchedulerRunner(deps).runScheduledTask(task, new Date(), false);
+    expect(deps.recordHistory).toHaveBeenCalledWith(expect.objectContaining({ status: "running", effectiveToolIds: [] }));
+    expect(deps.buildOptions).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(waitForTools).toHaveBeenCalledOnce());
+    runnerMocks.tools = [
+      { id: "ready-tool", enabled: true },
+      { id: "disallowed-tool", enabled: true },
+    ] as ToolDefinition[];
+    try {
+      release();
+      expect(await result).toMatchObject({ ok: true, effectiveToolIds: ["ready-tool"] });
+    } finally {
+      runnerMocks.tools = [];
+    }
+  });
   it.each(["code", "work"] as const)("runs a persisted %s user task in its saved mode and workspace after reload", async (mode) => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-scheduler-mode-reload-"));
     try {

@@ -4,6 +4,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { assertRelativeDynamicImports } from "./verify-dynamic-imports.mjs";
+import { buildFilesystemMcp } from "./filesystem-mcp.mjs";
+import { writeExternalContentManifest } from "./external-content-manifest.mjs";
 import { stageBundledPlugins } from "./bundled-plugins.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -65,6 +67,8 @@ if (target === "main") {
       source.endsWith("native-import.cjs"),
   });
   cpSync(path.join(repoRoot, "src", "main", "plugin-panel"), path.join(outDir, "plugin-panel"), { recursive: true });
+  writeExternalContentManifest(repoRoot, path.join(outDir, "main", "shipped-external-content-manifest.json"));
+  await buildFilesystemMcp({ repoRoot, outfile: path.join(outDir, "main", "filesystem-mcp.mjs") });
   assertRelativeDynamicImports(outDir);
   await stageBundledPlugins(path.join(outDir, "plugins"));
 }

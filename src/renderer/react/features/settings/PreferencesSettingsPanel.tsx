@@ -7,6 +7,7 @@ import {
   normalizeProactiveChatMode,
   normalizeProactiveDensity,
   normalizeProactiveDeliveryTarget,
+  normalizeExpressionSourceIds,
   normalizeProactiveTargetScore,
   normalizeProactiveQuietStartMinute,
   normalizeProactiveQuietEndMinute,
@@ -32,6 +33,7 @@ import { isProactiveDeliveryTargetSelectable } from "../../../../shared/proactiv
 import { useTranslation } from "../../i18n";
 import { SettingsInput, SettingsSegmented, SettingsSlider, SettingsSwitch } from "../../components/ui/SettingsControls";
 import { Card } from "../../components/ui/Card";
+import type { PluginListEntry } from "../../../../shared/plugin-management";
 
 type Liveliness = "quiet" | "natural" | "lively";
 
@@ -46,6 +48,8 @@ interface PreferencesValues {
   proactiveQuietEndMinute: number;
   proactiveDailyLimit: number;
   companionPluginSharingEnabled: boolean;
+  proactiveExpressionSources: string[];
+  conversationExpressionSources?: string[];
   momentsEnabled: boolean;
   cyreneMomentsPostingEnabled: boolean;
   cyreneMomentsReactionsEnabled: boolean;
@@ -82,6 +86,7 @@ const defaults: PreferencesValues = {
   proactiveQuietEndMinute: DEFAULT_PROACTIVE_QUIET_END_MINUTE,
   proactiveDailyLimit: DEFAULT_PROACTIVE_DAILY_LIMIT,
   companionPluginSharingEnabled: false,
+  proactiveExpressionSources: [],
   momentsEnabled: true,
   cyreneMomentsPostingEnabled: false,
   cyreneMomentsReactionsEnabled: true,
@@ -109,6 +114,8 @@ function readPreferences(value: unknown): PreferencesValues {
     proactiveQuietEndMinute: normalizeProactiveQuietEndMinute(input.proactiveQuietEndMinute),
     proactiveDailyLimit: normalizeProactiveDailyLimit(input.proactiveDailyLimit),
     companionPluginSharingEnabled: input.companionPluginSharingEnabled === true,
+    proactiveExpressionSources: normalizeExpressionSourceIds(input.proactiveExpressionSources),
+    conversationExpressionSources: input.conversationExpressionSources === undefined ? undefined : normalizeExpressionSourceIds(input.conversationExpressionSources),
     momentsEnabled: typeof input.momentsEnabled === "boolean" ? input.momentsEnabled : defaults.momentsEnabled,
     cyreneMomentsPostingEnabled: typeof input.cyreneMomentsPostingEnabled === "boolean" ? input.cyreneMomentsPostingEnabled : defaults.cyreneMomentsPostingEnabled,
     cyreneMomentsReactionsEnabled: typeof input.cyreneMomentsReactionsEnabled === "boolean" ? input.cyreneMomentsReactionsEnabled : defaults.cyreneMomentsReactionsEnabled,
@@ -136,6 +143,7 @@ export function PreferencesSettingsPanel() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [channels, setChannels] = useState<ChannelStatus>({});
+  const [expressionPlugins, setExpressionPlugins] = useState<PluginListEntry[]>([]);
   const [proactiveStatus, setProactiveStatus] = useState<ProactiveEvaluationStatus>({
     candidateScore: null,
     targetScore: DEFAULT_PROACTIVE_TARGET_SCORE,
@@ -148,6 +156,15 @@ export function PreferencesSettingsPanel() {
   const [styleOpen, setStyleOpen] = useState(false);
   const [styleDraft, setStyleDraft] = useState<CustomStyleConfig>(DEFAULT_CUSTOM_STYLE);
   const [styleSaving, setStyleSaving] = useState(false);
+  const conversationSources = values.conversationExpressionSources ?? expressionPlugins
+    .filter(plugin => plugin.source === "builtin" && ["bili-garden", "tieba-garden"].includes(plugin.id)).map(plugin => plugin.id);
+  const shownExpressionPlugins = expressionPlugins.filter(plugin => plugin.expressionEvidenceAvailable
+    || conversationSources.includes(plugin.id) || values.proactiveExpressionSources.includes(plugin.id));
+
+  function toggleExpressionSource(key: "conversationExpressionSources" | "proactiveExpressionSources", id: string, checked: boolean) {
+    const current = key === "conversationExpressionSources" ? conversationSources : values.proactiveExpressionSources;
+    setValues(previous => ({ ...previous, [key]: checked ? [...current, id] : current.filter(source => source !== id) }));
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -169,6 +186,9 @@ export function PreferencesSettingsPanel() {
         setLoadError(true);
         setLoading(false);
       });
+    void window.plugins?.list().then(result => {
+      if (!disposed) setExpressionPlugins(Array.isArray(result) ? result : result.plugins);
+    }).catch(() => {});
     return () => { disposed = true; };
   }, []);
 
@@ -216,6 +236,8 @@ export function PreferencesSettingsPanel() {
         proactiveQuietEndMinute,
         proactiveDailyLimit,
         companionPluginSharingEnabled,
+        proactiveExpressionSources,
+        conversationExpressionSources,
       } = values;
       await window.settings.saveGeneral({
         citaEnabled,
@@ -234,6 +256,8 @@ export function PreferencesSettingsPanel() {
         proactiveQuietEndMinute,
         proactiveDailyLimit,
         companionPluginSharingEnabled,
+        proactiveExpressionSources,
+        ...(conversationExpressionSources === undefined ? {} : { conversationExpressionSources }),
       });
       setStatus(t("settingsPage.preferences.saved"));
     } catch {
@@ -325,6 +349,21 @@ export function PreferencesSettingsPanel() {
                   onChange={(value) => update("proactiveDeliveryTarget", value as ProactiveDeliveryTarget)}
                 />
               </div>}
+              {shownExpressionPlugins.length > 0 && (
+                <details className="cy-settings-row__copy">
+                  <summary>{t("settingsPage.preferences.expressionSources")}</summary>
+                  <span>{t("settingsPage.preferences.expressionSourcesDescription")}</span>
+                  {shownExpressionPlugins.map(plugin => (
+                    <div className="cy-settings-row" key={plugin.id}>
+                      <strong>{plugin.name}</strong>
+                      <div className="cy-settings-button-group">
+                        <label><input type="checkbox" checked={conversationSources.includes(plugin.id)} disabled={!plugin.expressionEvidenceAvailable && !conversationSources.includes(plugin.id)} onChange={event => toggleExpressionSource("conversationExpressionSources", plugin.id, event.target.checked)} /> {t("settingsPage.preferences.expressionChat")}</label>
+                        <label><input type="checkbox" checked={values.proactiveExpressionSources.includes(plugin.id)} disabled={!plugin.expressionEvidenceAvailable && !values.proactiveExpressionSources.includes(plugin.id)} onChange={event => toggleExpressionSource("proactiveExpressionSources", plugin.id, event.target.checked)} /> {t("settingsPage.preferences.expressionProactive")}</label>
+                      </div>
+                    </div>
+                  ))}
+                </details>
+              )}
               {values.proactiveChatMode === "on" && <>
                 <div className="cy-settings-row">
                   <div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.preferences.proactiveDensity">{t("settingsPage.preferences.proactiveDensity")}</strong><span>{t("settingsPage.preferences.proactiveDensityDescription")}</span></div>

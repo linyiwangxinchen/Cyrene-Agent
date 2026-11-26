@@ -70,6 +70,44 @@ describe("durable pending memory turns in the database worker", () => {
     expect(await client.call("memory.count")).toBe(21);
   });
 
+  it("reopens a pending personal extraction once and invalidates it with the authoritative rewind", async () => {
+    await record(1);
+    const input = { conversationId: "c1", memoryScope: "owner",
+      userTurn: { id: "u1", role: "user", text: "U1" }, assistantTurn: { id: "a1", role: "assistant", text: "A1" },
+      source: { userTurnId: "u1", assistantEntryId: "reply-1" }, retrievedAtoms: [], now: 10 };
+    const id = await client.call("memory.socialRecord", input);
+    expect(id).toEqual(expect.any(String));
+    expect(await client.call("memory.socialRecord", input)).toBe(id);
+    await client.close();
+    client = new ConversationDatabaseClient(root);
+    expect(await client.call("memory.socialPending")).toEqual([{ id, input }]);
+    await client.call("transcript.append", "c1", { id: "rewind-social", kind: "turn_rewind", at: 12,
+      payload: { anchorUserTurnId: "u1", disposition: "keep_user", reason: "regenerate" } });
+    expect(await client.call("memory.socialPending")).toEqual([]);
+    expect(await client.call("memory.socialRecord", input)).toBeUndefined();
+  });
+
+  it("off discards recovery payloads durably without modifying transcripts or blocking new turns", async () => {
+    await record(1);
+    const extraction = (i: number) => ({ conversationId: "c1", memoryScope: "owner",
+      source: { userTurnId: `u${i}`, assistantEntryId: `reply-${i}` },
+      userTurn: { id: `u${i}`, role: "user", text: `U${i}` }, assistantTurn: { id: `a${i}`, role: "assistant", text: `A${i}` },
+      retrievedAtoms: [], now: 10 });
+    const id = await client.call("memory.socialRecord", extraction(1));
+    expect(id).toEqual(expect.any(String));
+    await client.call("memory.socialDiscardPending");
+    await client.close();
+    client = new ConversationDatabaseClient(root);
+    expect(await client.call("memory.socialPending")).toEqual([]);
+    expect(await client.call("memory.socialRecord", extraction(1))).toBeUndefined();
+    withConversationDatabase(root, db => expect(db.prepare("SELECT status,payload_json FROM memory_social_jobs WHERE job_id=?").get(id as string))
+      .toEqual({ status: "obsolete", payload_json: null }));
+    expect((await client.call<Array<{ id: string }>>("transcript.audit", "c1")).map(entry => entry.id)).toEqual(["user-1", "reply-1"]);
+    await record(2);
+    expect(await client.call("memory.socialRecord", extraction(2))).toEqual(expect.any(String));
+    expect(await client.call("memory.socialPending")).toHaveLength(1);
+  });
+
   it("rolls back transcript rewind if pending-source invalidation cannot commit", async () => {
     await record(1);
     withConversationDatabase(root, db => db.exec(`CREATE TRIGGER fail_memory_invalidation BEFORE UPDATE ON memory_pending_turns

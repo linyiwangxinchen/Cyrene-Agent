@@ -205,6 +205,7 @@ export function parseAndValidateSocialExtraction(
     const atom: SocialAtom = {
       id: createId(),
       conversationId: input.conversationId,
+      ...(input.memoryScope ? { memoryScope: input.memoryScope } : {}),
       type,
       content,
       evidenceTurnId: evidenceTurnId!,

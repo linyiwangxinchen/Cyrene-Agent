@@ -144,7 +144,7 @@ test("mobile reply reads stop on redirects and verification responses", async (t
 });
 
 test("Bilibili saves verifiable quotations and retrieves a relevant scene", () => {
-  const store = { put: (_type, _id, item) => item };
+  const store = { get: () => null, put: (_type, _id, item) => item };
   assert.throws(() =>
     rememberExpression(store, "url", "编造的", "调侃", "真正的原文"),
   );

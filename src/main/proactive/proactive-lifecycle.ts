@@ -14,7 +14,7 @@ import type { ConversationJournalService } from "../orchestrator/conversation-jo
 import { setChannelsConversationLifecycle } from "../channels/init";
 import { channelManager } from "../channels/manager";
 import { getChannelRecoveryStore } from "../channels/recovery-store";
-import { isGroupBoundConversation } from "../channels/conversation-binding-store";
+import { getChannelConversationBindingStore, isGroupBoundConversation } from "../channels/conversation-binding-store";
 import {
   getProactiveChannelAvailability,
   sendProactiveChannelMessage,
@@ -22,6 +22,9 @@ import {
 } from "../channels/proactive-delivery";
 import { resolveChatContextTimezone } from "../chat-time-context";
 import { buildAlwaysOnContext, buildMemoryInjection } from "../orchestrator";
+import { getMemoryModeVersion, normalizeMemoryMode } from "../memory/memory-mode";
+import { filterActiveSocialAtoms } from "../memory/memory-owner-recall";
+import type { ProactiveDeliveryTarget } from "../../shared/preferences";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import type { GeneralSettings } from "../settings/general-settings";
 import { loadModelSettings, resolveSessionModelSettings } from "../settings/model-settings";
@@ -41,7 +44,7 @@ import { runProactiveModel } from "./proactive-model";
 import { DEFAULT_PROACTIVE_TARGET_SCORE, normalizeProactiveDensity } from "../../shared/preferences";
 import { InitiativeOpportunityStore, type InitiativeOpportunityInput } from "./initiative-opportunities";
 import { worldInitiativeOpportunities, boredomInitiativeOpportunity, relatedConversationOpportunity } from "./world-initiative";
-import type { ProactiveCandidate, ProactiveEvaluationStatus, ProactiveRuntimeSnapshot, ProactiveDeliveryContext } from "./proactive-types";
+import type { ProactiveCandidate, ProactiveCommitIntent, ProactiveEvaluationStatus, ProactiveRuntimeSnapshot, ProactiveDeliveryContext } from "./proactive-types";
 import { getSharedXilianWorldStore, type XilianWorldStore } from "../xilian-world/world-store";
 import type { ChatMessage } from "../../shared/chat-types";
 import type { XilianTimelineEvent, XilianWorldState, XilianWorldView } from "../../shared/xilian-world";
@@ -51,7 +54,7 @@ import { createLlmClient } from "../services/llm/llm-client";
 import type { DailyRecap } from "../../shared/companion";
 import { createAmphoreusRuntime } from "../amphoreus-world/runtime";
 import { buildChannelSystem, buildRecentPhrasingHint, PRIVATE_CHAT_EXPRESSION } from "../orchestrator/expression-context-core";
-import { buildPersonMemoryContext } from "../social-context/context";
+import { buildPersonMemoryContext, socialAtomDisplayText } from "../social-context/context";
 import type { SocialAtom } from "../social-context/types";
 import type { RelationshipChannel } from "../relationship/relationship-log-core";
 import { isMemoryFollowupAtomOpen, MEMORY_FOLLOWUP_SOURCE, memoryFollowupOpportunities } from "./memory-initiative";
@@ -65,7 +68,7 @@ export interface ProactiveLifecycleOptions {
   loadGeneralSettings: () => GeneralSettings;
   conversationJournal: ConversationJournalService;
   /** What she remembers about the person in a conversation (chat social atoms). */
-  listPersonMemory?: (conversationId: string, now: number) => SocialAtom[];
+  listPersonMemory?: (conversationId: string, now: number, scope: string) => SocialAtom[];
 }
 
 export interface ProactiveLifecycle {
@@ -124,6 +127,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   let generationRelationshipRevision: number | undefined;
   let generationRecipient: RecentProactiveChannelRecipient | undefined;
   let generationDeliveryContext: ProactiveDeliveryContext | undefined;
+  let generationMemoryVersion: number | undefined;
   let generationShares: {
     history: ProactiveHistoryTurn[]; ordinary: ProactiveHistoryTurn[]; worldShare: boolean; careStale?: boolean;
     /** Material for the compose step, frozen with the decision prompt. */
@@ -206,8 +210,12 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     }
     if (["inner_life", "shared_interest"].includes(opportunity.source) && worldStore.worldView().amphoreus?.personal?.currentActivity?.eventId !== opportunity.sourceEventId) return "life_activity_changed";
     // 对方已经说了结果（提取器关闭了这条），就不再问。
-    if (opportunity.source === MEMORY_FOLLOWUP_SOURCE && opportunity.conversationId
-      && !isMemoryFollowupAtomOpen(options.listPersonMemory?.(opportunity.conversationId, Date.now()).find(atom => atom.id === opportunity.sourceEventId), Date.now())) return "memory_resolved";
+    if (opportunity.source === MEMORY_FOLLOWUP_SOURCE && opportunity.conversationId) {
+      const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
+      const scope = target === "local" ? "owner" : route?.available ? route.recipient.recipientScope : undefined;
+      if (!scope || normalizeMemoryMode(loadModelSettings().memoryMode) === "off"
+        || !isMemoryFollowupAtomOpen(options.listPersonMemory?.(opportunity.conversationId, Date.now(), scope).find(atom => atom.id === opportunity.sourceEventId), Date.now())) return "memory_resolved";
+    }
     const controls = getRelationshipStore().getControls();
     if (controls.paused) return "relationship_paused";
     return undefined;
@@ -238,14 +246,18 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     return message.role === "model" && /^proactive-intent-\d+$/.test(message.runSnapshot?.runId ?? "");
   }
 
-  async function getProactiveHistories(recipient?: RecentProactiveChannelRecipient): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[]; conversationId?: string; careAllowed: boolean }> {
+  async function getProactiveHistories(recipient?: RecentProactiveChannelRecipient, target: ProactiveDeliveryTarget = "local"): Promise<{ ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[]; conversationId?: string; careAllowed: boolean }> {
     if (recipient) {
       const conversationId = recipient.conversationId ?? recipient.sessionId;
       const { messages } = await conversationJournal.readProjection(conversationId);
+      const scopedMessages = target === "local" ? messages.filter(message => !message.channelSource)
+        : messages.filter(message => !!recipient.recipientScope && message.channelSource?.channel === target
+          && message.channelSource.chatType === "private" && message.channelSource.recipientScope === recipient.recipientScope);
       return {
-        ordinary: toProactiveHistory(messages.filter(message => !isProactiveMessage(message))),
-        proactive: toProactiveHistory(messages.filter(isProactiveMessage)),
-        careAllowed: !isGroupBoundConversation(conversationId) && !messages.some(message => message.channelSource?.chatType === "group"),
+        ordinary: toProactiveHistory(scopedMessages.filter(message => !isProactiveMessage(message))),
+        proactive: toProactiveHistory(scopedMessages.filter(isProactiveMessage)),
+        careAllowed: (target === "local" || !!recipient.recipientScope)
+          && !isGroupBoundConversation(conversationId) && !messages.some(message => message.channelSource?.chatType === "group"),
         conversationId,
       };
     }
@@ -261,7 +273,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       proactiveMeta ? conversationJournal.readProjection(proactiveMeta.id) : Promise.resolve(null),
     ]);
     return {
-      ordinary: toProactiveHistory(ordinaryProjection?.messages.filter(message => !isProactiveMessage(message)) ?? []),
+      ordinary: toProactiveHistory(ordinaryProjection?.messages.filter(message => !message.channelSource && !isProactiveMessage(message)) ?? []),
       proactive: toProactiveHistory(proactiveProjection?.messages ?? []),
       careAllowed: !!ordinaryMeta && !ordinaryMeta.purpose && ordinaryMeta.mode === "chat" && !isGroupBoundConversation(ordinaryMeta.id)
         && !ordinaryProjection?.messages.some(message => message.channelSource?.chatType === "group"),
@@ -311,6 +323,42 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       && hour === snapshot.localHour && minute + elapsedMinutes === snapshot.localMinute;
   }
 
+  function hasOtherFollowupRecipients(conversationId: string, sessionId: string): boolean {
+    return getChannelConversationBindingStore().list().bindings.some(binding => binding.conversationId === conversationId && binding.sessionId !== sessionId);
+  }
+
+  function deliveryContextChanged(context: ProactiveDeliveryContext | undefined, target: ProactiveDeliveryTarget): string | undefined {
+    if (!context) return undefined;
+    if (options.loadGeneralSettings().proactiveDeliveryTarget !== target) return "delivery_target_changed";
+    if (context.memoryMode !== undefined && context.memoryMode !== normalizeMemoryMode(loadModelSettings().memoryMode)) return "memory_mode_changed";
+    if (target === "local" || !context.sessionId || !context.targetId) return undefined;
+    const route = getProactiveChannelAvailability(target, channelManager);
+    if (!route.available || route.recipient.sessionId !== context.sessionId || route.recipient.targetId !== context.targetId
+      || (route.recipient.conversationId ?? route.recipient.sessionId) !== context.conversationId
+      || route.recipient.recipientScope !== context.recipientScope
+      || route.recipient.bindingUpdatedAt !== context.bindingUpdatedAt
+      || (route.recipient.threadId ?? "") !== (context.threadId ?? "")) return "binding_changed";
+    if (context.followupId && context.conversationId && hasOtherFollowupRecipients(context.conversationId, context.sessionId)) return "followup_recipient_ambiguous";
+    return undefined;
+  }
+
+  const memorySettingsChanged = () => generationMemoryVersion !== undefined && generationMemoryVersion !== getMemoryModeVersion();
+
+  function selectProactiveExpression(query: string, context: ProactiveDeliveryContext, target: ProactiveDeliveryTarget) {
+    const allowedOwners = options.loadGeneralSettings().proactiveExpressionSources;
+    if (!allowedOwners?.length) return Promise.resolve(undefined);
+    const scope = target === "local" ? "owner" : context.recipientScope;
+    const blockedExpressions = scope && context.conversationId
+      ? getRelationshipStore().blockedExpressions(context.conversationId, "", scope) : undefined;
+    return pluginPromptRegistry.selectExpressionContext({ use: "proactive", userText: query, allowedOwners, blockedExpressions });
+  }
+
+  async function frozenExpressionIsCurrent(context: ProactiveDeliveryContext | undefined, target: ProactiveDeliveryTarget): Promise<boolean> {
+    if (!context?.expression) return true;
+    const current = await selectProactiveExpression(context.expression.query, context, target);
+    return current?.evidenceKey === context.expression.evidenceKey;
+  }
+
   async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     const companion = await getRelationshipStore().snapshot();
     generationRelationshipRevision = companion.revision;
@@ -324,39 +372,51 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     if (candidate.momentId && !moment) throw new Error("companion_moment_not_pending");
     if (followupId && (!followup || followup.status !== "active" || followup.nextEligibleAt > Date.now() || !companion.relationship.proactiveLifeEnabled)) throw new Error("followup_not_eligible");
     if (followup && generationRecipient && followup.conversationId !== (generationRecipient.conversationId ?? generationRecipient.sessionId)) throw new Error("followup_recipient_changed");
+    if (followup && generationRecipient && hasOtherFollowupRecipients(followup.conversationId, generationRecipient.sessionId)) throw new Error("followup_recipient_ambiguous");
     const initiative = candidate.opportunityId ? initiativeStore.find(candidate.opportunityId) : undefined;
     const standaloneCare = initiative?.source === STANDALONE_CARE_SCENE;
     const localConversationId = followup?.conversationId ?? moment?.conversationId ?? initiative?.conversationId;
     const historyTarget = generationRecipient ?? (localConversationId ? { conversationId: localConversationId, sessionId: localConversationId, targetId: "", updatedAt: 0 } : undefined);
-    generationDeliveryContext = { relationshipRevision: companion.revision,
+    const memoryMode = normalizeMemoryMode(loadModelSettings().memoryMode);
+    generationMemoryVersion = getMemoryModeVersion();
+    generationDeliveryContext = { relationshipRevision: companion.revision, memoryMode,
       ...(historyTarget ? { conversationId: historyTarget.conversationId ?? historyTarget.sessionId } : {}),
-      ...(generationRecipient ? { sessionId: generationRecipient.sessionId, targetId: generationRecipient.targetId, ...(generationRecipient.threadId ? { threadId: generationRecipient.threadId } : {}) } : {}),
+      ...(generationRecipient ? { sessionId: generationRecipient.sessionId, targetId: generationRecipient.targetId,
+        threadId: generationRecipient.threadId, recipientScope: generationRecipient.recipientScope, bindingUpdatedAt: generationRecipient.bindingUpdatedAt } : {}),
       ...(followupId ? { followupId } : {}) };
-    const histories = await getProactiveHistories(historyTarget);
+    const histories = await getProactiveHistories(historyTarget, target);
     generationShares = { history: histories.proactive, ordinary: histories.ordinary, worldShare: initiative?.source === "amphoreus" || candidate.sceneId.startsWith("world:") };
     const recentTopic = histories.ordinary.slice(-4).map((turn) => turn.content).join("\n");
     const retrievalQuery = `${candidate.sceneId}\n${recentTopic}`.trim();
-    const [profileContext, memoryContext] = standaloneCare ? ["", ""] : await Promise.all([
+    const [profileContext, memoryContext] = standaloneCare || memoryMode === "off" || target !== "local" || !histories.careAllowed ? ["", ""] : await Promise.all([
       buildAlwaysOnContext(retrievalQuery, histories.ordinary.map((turn) => ({ role: turn.role, content: turn.content }))).catch(() => ""),
       buildMemoryInjection(retrievalQuery).catch(() => ""),
     ]);
-    const relationshipContext = await buildRelationshipContext(historyTarget?.conversationId ?? historyTarget?.sessionId ?? "proactive-local", true, undefined, false, false);
+    const relationshipContext = !standaloneCare && target === "local"
+      ? await buildRelationshipContext(historyTarget?.conversationId ?? historyTarget?.sessionId ?? "proactive-local", true, undefined, false, false) : "";
     const state = loadProactiveState();
     const snapshot = getProactiveRuntimeSnapshot();
     generationDeliveryContext.composedAt = snapshot.now;
     generationDeliveryContext.timezone = snapshot.timezone;
     const memoryConversationId = histories.conversationId ?? historyTarget?.conversationId;
-    const personAtoms = memoryConversationId && histories.careAllowed ? options.listPersonMemory?.(memoryConversationId, snapshot.now) ?? [] : [];
+    const memoryScope = target === "local" ? "owner" : generationRecipient?.recipientScope;
+    const personAtoms = !standaloneCare && memoryMode !== "off" && memoryScope && memoryConversationId && histories.careAllowed
+      ? await filterActiveSocialAtoms(options.listPersonMemory?.(memoryConversationId, snapshot.now, memoryScope) ?? []) : [];
     const personMemory = buildPersonMemoryContext(personAtoms, retrievalQuery, { now: snapshot.now, timezone: snapshot.timezone }).contextBlock;
     const rememberedAtom = initiative?.source === MEMORY_FOLLOWUP_SOURCE ? personAtoms.find(atom => atom.id === initiative.sourceEventId) : undefined;
     if (initiative?.source === MEMORY_FOLLOWUP_SOURCE && !isMemoryFollowupAtomOpen(rememberedAtom, snapshot.now)) generationShares.careStale = true;
     const channelSystem = target === "local" ? "" : buildChannelSystem(target as RelationshipChannel);
+    const expressionQuery = ["日常聊天 接话", moment?.bilibiliVideo?.title].filter(Boolean).join(" ").slice(0, 300);
+    const expression = await selectProactiveExpression(expressionQuery, generationDeliveryContext, target);
+    if (expression) generationDeliveryContext.expression = { query: expressionQuery, evidenceKey: expression.evidenceKey };
+    const composeHistory = standaloneCare ? [] : [...histories.ordinary, ...histories.proactive];
     generationShares.compose = {
       persona: [buildProactivePersonaPrompt(), channelSystem, PRIVATE_CHAT_EXPRESSION, relationshipContext,
-        buildRecentPhrasingHint([...histories.ordinary, ...histories.proactive].sort((a, b) => a.at - b.at).map(turn => ({ role: turn.role, content: turn.content })), companion.relationship.userLabel)]
+        expression?.text,
+        buildRecentPhrasingHint(composeHistory.slice().sort((a, b) => a.at - b.at).map(turn => ({ role: turn.role, content: turn.content })), target === "local" && !standaloneCare ? companion.relationship.userLabel : undefined)]
         .filter(part => part?.trim()).join("\n\n---\n\n"),
       personMemory,
-      history: [...histories.ordinary, ...histories.proactive],
+      history: composeHistory,
       timezone: snapshot.timezone,
       replyBurden: candidate.replyBurden,
       bilibiliVideo: moment?.bilibiliVideo,
@@ -380,7 +440,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     }
     const careContext = followup ? { kind: "requested_followup" as const, at: followup.nextEligibleAt, topic: followup.topic }
       : initiative?.source === "user_care" ? { kind: "user_message" as const, at: initiative.occurredAt }
-      : rememberedAtom ? { kind: "remembered" as const, at: rememberedAtom.createdAt, topic: rememberedAtom.content }
+      : rememberedAtom ? { kind: "remembered" as const, at: rememberedAtom.createdAt, topic: socialAtomDisplayText(rememberedAtom) }
       : standaloneCare ? { kind: "standalone_care" as const }
       : undefined;
     return buildProactiveMessages({
@@ -388,7 +448,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       userProfile: profileContext,
       relevantMemory: [careContext ? "" : memoryContext, personMemory].filter(part => part?.trim()).join("\n\n"),
       ordinaryHistory: standaloneCare ? [] : histories.ordinary,
-      proactiveHistory: histories.proactive,
+      proactiveHistory: standaloneCare ? [] : histories.proactive,
       sceneId: candidate.sceneId,
       localNow: new Date(snapshot.now),
       idleSec: snapshot.idleSec,
@@ -492,7 +552,6 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const initialDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
     if (!initialDecision.allowed) return { kind: "cancelled", reason: initialDecision.reason };
     if (!input.intentId) return { kind: "cancelled", reason: "durable_intent_required" };
-
     const selectedId = input.deliveryContext?.conversationId;
     const session = selectedId ? await chatsStore.getSessionRecord(selectedId) : (await chatsStore.getOrCreateSessionByPurpose("proactive-chat", {
       title: "昔涟的主动消息",
@@ -505,6 +564,10 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const runId = commitKey;
     const intentAt = input.intentAt ?? 0;
     return withConversationRun(session.id, async (): Promise<ProactiveCommitResult> => {
+    if (options.loadGeneralSettings().proactiveDeliveryTarget !== "local") return { kind: "cancelled", reason: "delivery_target_changed" };
+    if (!await frozenExpressionIsCurrent(input.deliveryContext, "local")) return { kind: "cancelled", reason: "expression_source_changed" };
+    const changed = deliveryContextChanged(input.deliveryContext, "local");
+    if (changed || memorySettingsChanged()) return { kind: "cancelled", reason: changed ?? "memory_mode_changed" };
     if (input.deliveryContext && !isDraftTimeCurrent(input.deliveryContext, getProactiveRuntimeSnapshot())) return { kind: "cancelled", reason: "draft_time_changed" };
     if (!getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed) return { kind: "cancelled", reason: "stale_epoch" };
     const sink = conversationJournal.createRunSink({ conversationId: session.id, runId });
@@ -532,6 +595,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     if (!input.intentId) return { kind: "cancelled", reason: "durable_intent_required" };
     if (target !== settings.proactiveDeliveryTarget) return { kind: "cancelled", reason: "delivery_target_changed" };
     const frozen = input.deliveryContext;
+    const changed = deliveryContextChanged(frozen, target);
+    if (changed) return { kind: "cancelled", reason: changed };
     if (frozen) generationRelationshipRevision = frozen.relationshipRevision;
     if (frozen?.followupId) {
       const companion = await getRelationshipStore().snapshot();
@@ -561,6 +626,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
             return { kind: "cancelled" as const, reason: "draft_time_changed" };
           }
           if (!getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed) return { kind: "cancelled" as const, reason: "stale_epoch" };
+          if (!await frozenExpressionIsCurrent(frozen, channel)) return { kind: "cancelled" as const, reason: "expression_source_changed" };
+          const changed = deliveryContextChanged(frozen, channel);
+          if (changed || memorySettingsChanged()) return { kind: "cancelled" as const, reason: changed ?? "memory_mode_changed" };
           const current = getProactiveChannelAvailability(channel, channelManager);
           if (!current.available || current.recipient.targetId !== recipient.targetId || current.recipient.conversationId !== recipient.conversationId) return { kind: "cancelled" as const, reason: "binding_changed" };
           // CTA 是外发的前置事实：失败重试使用同一 intent、同一 assistant、同一 outbox。
@@ -568,7 +636,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           const messageId = await sink.appendAssistant({ message: { role: "assistant", content: input.text,
             ...(input.attachments?.length ? { attachments: input.attachments } : {}) }, roundId: "proactive" });
           await conversationJournal.appendPresentationNext(conversationId, messageId, `${runId}:presentation`, {
-            content: input.text, channelSource: { channel, chatType: "private" },
+            content: input.text, channelSource: { channel, chatType: "private", ...(frozen?.recipientScope ? { recipientScope: frozen.recipientScope } : {}) },
             runSnapshot: { runId, status: "terminal", updatedAt: input.intentAt ?? 0 },
           });
           const channelResult = await sendProactiveChannelMessage({
@@ -580,9 +648,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
             recordDelivery: async () => undefined,
             canContinue: () => {
               if (frozen && !isDraftTimeCurrent(frozen, getProactiveRuntimeSnapshot())) return false;
-              if (options.loadGeneralSettings().proactiveDeliveryTarget !== channel) return false;
-              const latest = getProactiveChannelAvailability(channel, channelManager);
-              if (!latest.available || latest.recipient.targetId !== recipient.targetId || latest.recipient.conversationId !== recipient.conversationId) return false;
+              if (deliveryContextChanged(frozen, channel)) return false;
+              if (memorySettingsChanged()) return false;
               return getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed;
             },
           });
@@ -618,6 +685,27 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     return result;
   }
 
+  async function recoverCommittedIntent(intent: ProactiveCommitIntent): Promise<ProactiveCommitResult | undefined> {
+    const channel = intent.deliveryTarget;
+    if (!channel || channel === "local") return undefined;
+    const committed = getChannelRecoveryStore()?.get(`proactive:${intent.intentId}`);
+    const frozen = intent.deliveryContext;
+    if (committed?.kind !== "outbox" || !frozen?.targetId || !frozen.conversationId
+      || committed.channel !== channel || committed.message.targetId !== frozen.targetId
+      || committed.conversationId !== frozen.conversationId || committed.runId !== intent.intentId
+      || !committed.assistantTurnId || !committed.parts.length || committed.parts.some(part => part.status !== "sent")) return undefined;
+
+    return withConversationRun(frozen.conversationId, async () => {
+      await conversationJournal.appendDeliveryReceipt(frozen.conversationId!, {
+        assistantTurnId: committed.assistantTurnId!, channel, runId: intent.intentId, status: "delivered",
+      });
+      if (frozen.followupId) await getRelationshipStore().settleFollowup(frozen.followupId, frozen.conversationId!, intent.intentId, Date.now(), "asked");
+      recordProactiveDeliveryMetadata(intent, { kind: "committed" });
+      broadcastChatsChanged();
+      return { kind: "committed" };
+    });
+  }
+
   function initializeProactiveChatService(): void {
     proactiveChatService = createProactiveChatService({
       loadState: loadProactiveState,
@@ -640,6 +728,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         // Resolve the delivery conversation, not whichever ordinary chat is open.
         // Use the route frozen by the service before building messages.
         const target = deliveryTarget ?? options.loadGeneralSettings().proactiveDeliveryTarget;
+        if (deliveryContextChanged(generationDeliveryContext, target) || memorySettingsChanged()) return { kind: "drop" };
         const sessionId = target === "local"
           ? generationDeliveryContext?.conversationId ?? (await chatsStore.listSessions()).find((session) => session.purpose === "proactive-chat")?.id
           : undefined;
@@ -664,6 +753,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         const decision = await runProactiveModel({ settings: vendorSettings, messages, timeoutMs: 45_000 });
         const compose = generationShares.compose;
         if (decision.kind !== "send" || !compose) return decision;
+        if (deliveryContextChanged(generationDeliveryContext, target) || memorySettingsChanged()) return { kind: "drop" };
         const video = compose.bilibiliVideo;
         const plan = video ? bilibiliShareProse(decision.text) : decision.text;
         if (!plan) return { kind: "drop" };
@@ -691,6 +781,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           }
         }
         // Step two: write the message as an ordinary turn of this private chat.
+        if (!await frozenExpressionIsCurrent(generationDeliveryContext, target)
+          || deliveryContextChanged(generationDeliveryContext, target) || memorySettingsChanged()) return { kind: "drop" };
         const result = await runProactiveModel({
           settings: vendorSettings,
           messages: buildProactiveComposeMessages({
@@ -704,7 +796,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         });
         if (result.kind === "invalid") return { kind: "error", reason: `compose_${result.reason}` };
         if (result.kind !== "send") return result;
+        if (deliveryContextChanged(generationDeliveryContext, target) || memorySettingsChanged()) return { kind: "drop" };
         const prose = video ? bilibiliShareProse(result.text) : result.text;
+        if (compose.replyBurden === "none" && /[?？]|(?:请|记得|记着|一定要)(?:你)?(?:回我|回复|告诉我|说一声)/u.test(prose)) return { kind: "hold", resumeOn: "user_message" };
         if (!prose || repeatsRecentProactiveMessage(prose, generationShares.history, Date.now(), generationShares.worldShare)
           || restatesRecentReply(prose, generationShares.ordinary, Date.now())) {
           return { kind: "drop" };
@@ -723,6 +817,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       getDeliveryContext: () => generationDeliveryContext,
       getDeliveryTarget: () => options.loadGeneralSettings().proactiveDeliveryTarget,
       commitMessage: commitSelectedProactiveMessage,
+      recoverCommittedIntent,
       log: (event, detail) => {
         const info = detail as { reason?: string; scene?: string } | undefined;
         const state = event === "message_committed" ? "sent"
@@ -780,7 +875,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         const target = options.loadGeneralSettings().proactiveDeliveryTarget;
         const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
         if (route && !route.available) return null;
-        const histories = await getProactiveHistories(route?.available ? route.recipient : undefined);
+        const histories = await getProactiveHistories(route?.available ? route.recipient : undefined, target);
         if (!histories.ordinary.some(turn => turn.role === "user")) return null;
         return histories.ordinary.at(-1)?.at ?? null;
       },
@@ -790,7 +885,8 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         const target = settings.proactiveDeliveryTarget;
         const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
         const conversationId = route?.available ? route.recipient.conversationId ?? route.recipient.sessionId : undefined;
-        const ids = route?.available ? [route.recipient.conversationId ?? route.recipient.sessionId]
+        const ids = route?.available && !hasOtherFollowupRecipients(route.recipient.conversationId ?? route.recipient.sessionId, route.recipient.sessionId)
+          ? [route.recipient.conversationId ?? route.recipient.sessionId]
           : target === "local" ? [...new Set((companion.followups ?? []).map(item => item.conversationId))] : [];
         const hash = (value: string) => createHash("sha256").update(value).digest("hex").slice(0, 24);
         const opportunities: InitiativeOpportunityInput[] = relationshipOpportunities(companion.relationship, ctx).map(item => ({
@@ -816,7 +912,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           ...(personal ? { energy: personal.energy, activity: personal.currentActivity?.activity === "rest" && personal.energy >= 55 ? "idle" : personal.currentActivity?.activity } : {}) });
         if (!companion.relationship.paused && companion.relationship.proactiveLifeEnabled) {
           if (ctx.state.unansweredCount === 0 && (route === null || route.available)) {
-            const histories = await getProactiveHistories(route?.available ? route.recipient : undefined);
+            const histories = await getProactiveHistories(route?.available ? route.recipient : undefined, target);
             const lastUser = histories.ordinary.filter(turn => turn.role === "user").at(-1);
             if (histories.careAllowed) {
               const care = userCareOpportunity(lastUser, histories.conversationId, ctx.now);
@@ -827,8 +923,10 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
                 });
                 if (greeting) opportunities.push(greeting);
               }
-              if (histories.conversationId && options.listPersonMemory) {
-                opportunities.push(...memoryFollowupOpportunities(options.listPersonMemory(histories.conversationId, ctx.now), ctx.now, histories.conversationId));
+              const scope = target === "local" ? "owner" : route?.available ? route.recipient.recipientScope : undefined;
+              if (normalizeMemoryMode(loadModelSettings().memoryMode) !== "off" && scope && histories.conversationId && options.listPersonMemory) {
+                const atoms = await filterActiveSocialAtoms(options.listPersonMemory(histories.conversationId, ctx.now, scope));
+                opportunities.push(...memoryFollowupOpportunities(atoms, ctx.now, histories.conversationId));
               }
               if (histories.conversationId && relationshipAllowsSelfie(companion.relationship) && imageGenerationSettings()
                 && selfieLog.canSendProactive(normalizeSelfieFrequency(companion.relationship.selfieFrequency), ctx.now)) {

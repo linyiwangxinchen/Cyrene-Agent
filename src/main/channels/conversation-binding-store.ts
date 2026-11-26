@@ -15,6 +15,8 @@ export interface ExternalChannelChat {
   chatId: string;
   chatType: ChannelChatType;
   senderName?: string;
+  recipientScope?: string;
+  accountId?: string;
   lastAt: number;
 }
 
@@ -58,6 +60,8 @@ function isExternalChat(value: unknown): value is ExternalChannelChat {
     && chat.chatId.length <= 256
     && (chat.chatType === "private" || chat.chatType === "group")
     && (chat.senderName === undefined || (typeof chat.senderName === "string" && chat.senderName.length <= 256))
+    && (chat.recipientScope === undefined || (typeof chat.recipientScope === "string" && /^peer:[a-f0-9]{64}$/.test(chat.recipientScope)))
+    && (chat.accountId === undefined || (typeof chat.accountId === "string" && chat.accountId.length > 0 && chat.accountId.length <= 256))
     && typeof chat.lastAt === "number"
     && Number.isFinite(chat.lastAt);
 }
@@ -93,7 +97,9 @@ export class ChannelConversationBindingStore {
       || previous.channel !== chat.channel
       || previous.chatId !== chat.chatId
       || previous.chatType !== chat.chatType
-      || previous.senderName !== chat.senderName;
+      || previous.senderName !== chat.senderName
+      || previous.recipientScope !== chat.recipientScope
+      || previous.accountId !== chat.accountId;
     const externalChats = state.externalChats.filter((item) => item.sessionId !== chat.sessionId);
     externalChats.push({ ...chat });
     externalChats.sort((a, b) => b.lastAt - a.lastAt);

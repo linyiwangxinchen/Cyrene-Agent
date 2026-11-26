@@ -3,6 +3,27 @@ import { TIEBA } from "./public-pages.mjs";
 import { recognizedStyle } from "./speaking-style.mjs";
 
 const cues = new Set(["庆祝", "惊讶", "接梗", "鼓励"]);
+const evidenceCues = { 庆祝: "celebrate", 惊讶: "surprise", 接梗: "joke", 鼓励: "encourage" };
+
+export function tiebaExpressionFingerprint(tid, quote) {
+  const normalized = quote.normalize("NFKC").toLowerCase().replace(/[\p{P}\p{Z}\p{C}\s]/gu, "");
+  return createHash("sha256").update(JSON.stringify([tid, normalized])).digest("hex");
+}
+
+export function legacyTiebaExpressionId(tid, quote) {
+  return createHash("sha256").update(tid + "|" + quote).digest("hex");
+}
+
+export function tiebaExpressionEvidence(samples, limit) {
+  return samples.slice(0, limit).map(sample => {
+    const unit = /\/p\/(\d+)(?:[?#]|$)/u.exec(sample.source ?? "")?.[1] ?? sample.id;
+    return { id: sample.id, quote: sample.quote, at: sample.at,
+      source: sample.origin ?? { kind: "legacy", id: sample.id, unit, url: sample.source },
+      strategy: recognizedStyle(sample.style),
+      ...(evidenceCues[sample.cue] ? { cues: [evidenceCues[sample.cue]] } : {}), topics: [sample.scene],
+    };
+  });
+}
 
 function quoteFromFloors(value, floors, tid, maxLength) {
   const quote = typeof value === "string" ? value.trim() : "";
@@ -12,7 +33,11 @@ function quoteFromFloors(value, floors, tid, maxLength) {
   const source = TIEBA + "/p/" + tid
     + (floor.page > 1 ? "?pn=" + floor.page : "")
     + (floor.post ? "#post_content_" + floor.post : "");
-  return { quote, source, post: floor.post, reply: floor.reply === true };
+  return { quote, source, post: floor.post, reply: floor.reply === true,
+    origin: floor.origin === "forum_public" || floor.origin === "forum_authenticated" ? floor.origin : floor.origin === "imported_excerpt" ? "imported_excerpt" : "legacy",
+    version: createHash("sha256").update(floor.body).digest("hex"),
+    ...(floor.replyId ? { replyId: floor.replyId } : {}),
+  };
 }
 
 export async function writeReadingNote(llm, reading, learn, signal, now) {
@@ -53,12 +78,15 @@ export async function writeReadingNote(llm, reading, learn, signal, now) {
     const matched = quoteFromFloors(row?.quote, reading.floors, reading.tid, 64);
     const scene = typeof row?.scene === "string" ? row.scene.trim().slice(0, 100) : "";
     if (!matched || !scene) continue;
-    const id = createHash("sha256").update(reading.tid + "|" + matched.quote).digest("hex");
+    const id = tiebaExpressionFingerprint(reading.tid, matched.quote);
     if (samples.some(row => row.id === id)) continue;
     const style = recognizedStyle(row.style);
     samples.push({
       id, quote: matched.quote, scene, source: matched.source, at: now,
       tid: reading.tid, bar: reading.bar,
+      origin: { kind: reading.imported ? "imported_excerpt" : matched.replyId || matched.post && !matched.reply ? matched.origin : "legacy",
+        id: matched.replyId ? `${reading.tid}:reply:${matched.replyId}` : matched.post && !matched.reply ? `${reading.tid}:post:${matched.post}` : id,
+        unit: reading.tid, url: matched.source, version: matched.version },
       ...(cues.has(row.cue) && { cue: row.cue }),
       ...(typeof row.delivery === "string" && { delivery: row.delivery.trim().slice(0, 100) }),
       ...(style && { style }),

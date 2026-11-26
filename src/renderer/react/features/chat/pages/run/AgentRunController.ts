@@ -14,6 +14,7 @@ import type {
 import type { GeneratedImageAttachment } from "../../../../../../shared/generated-image";
 import { isContextUsageSnapshot, type ContextUsageSnapshot } from "../../../../../../shared/context-usage";
 import { isCacheDiagnostic, type CacheDiagnostic } from "../../../../../../shared/cache-diagnostic";
+import { isCompanionReferenceList } from "../../../../../../shared/companion-references";
 import type { TodoItem } from "../../../../../../shared/todo-types";
 import { normalizeMailDraftCardData, type MailDraftCardData } from "../../../../../../shared/mail-draft-card";
 import { isModelFailureInfo, type ModelFailureInfo } from "../../../../../../shared/model-error";
@@ -147,7 +148,7 @@ export interface AgentRunRegistries {
   /** 会话 → 立即写检查点的触发器（审批请求到达时把 run 状态落为 waiting_user）。 */
   checkpointTriggers: { current: Record<string, (status: "running" | "waiting_user") => void> };
   /** ack.runId 尚未返回时已被请求取消的会话。 */
-  cancelRequestedSessions: { current: Set<string> };
+  cancelRequestedTurns: { current: Set<string> };
   /** 页面卸载时需要统一退订的事件句柄集合。 */
   eventUnsubscribers: { current: Set<() => void> };
 }
@@ -389,7 +390,11 @@ export class AgentRunController {
         this.input.assistantId,
         splitMode,
       );
-      const ack = await api.run({
+      const cancelledBeforeDispatch = this.deps.registries.cancelRequestedTurns.current.has(this.input.assistantId);
+      if (cancelledBeforeDispatch && this.input.claimedPendingMessageId) {
+        await api.cancel({ sessionId: this.input.sessionId, messageId: this.input.claimedPendingMessageId });
+      }
+      const ack = cancelledBeforeDispatch ? { success: false, status: "cancelled", runId: "" } : await api.run({
         // 模型历史由主进程 journal 构建；renderer 只发送当前 user 事实。
         currentUser: {
           turnId: this.input.userMessageId,
@@ -442,6 +447,13 @@ export class AgentRunController {
             mime: attachment.mime,
           })),
       });
+      if (ack.status === "cancelled") {
+        this.runAccepted = true;
+        if (this.input.claimedPendingMessageId) await store.pendingCompleteDispatch(this.input.sessionId, this.input.claimedPendingMessageId);
+        this.deps.host.patchMessage(this.input.sessionId, this.input.assistantId, { loading: false, streaming: false, waitingForFirstEvent: false });
+        this.earlyTtsQueue?.cancel();
+        return;
+      }
       if (!ack.success) throw new Error(ack.error ?? t("chatPage.errorModelRequestStartFailed"));
       // run 已被主进程接受：认领派发的消息确认派发完成，清除 pendingDispatch。
       // 确认失败仅告警——残留状态会被恢复逻辑直接清账（不自动续派），不会重复派发。
@@ -492,7 +504,7 @@ export class AgentRunController {
         };
         for (const accepted of eventGate.bind(ack.runId)) this.handleEvent(accepted);
         await this.checkpointRun("running", true);
-        if (this.deps.registries.cancelRequestedSessions.current.delete(this.input.sessionId)) {
+        if (this.deps.registries.cancelRequestedTurns.current.delete(this.input.assistantId)) {
           await api.cancel(ack.runId);
         }
       }
@@ -633,7 +645,7 @@ export class AgentRunController {
       off();
       this.deps.registries.eventUnsubscribers.current.delete(off);
       const currentActive = this.deps.registries.activeRuns.current[this.input.sessionId];
-      this.deps.registries.cancelRequestedSessions.current.delete(this.input.sessionId);
+      this.deps.registries.cancelRequestedTurns.current.delete(this.input.assistantId);
       if (currentActive?.assistantId === this.input.assistantId) {
         const nextActive = { ...this.deps.registries.activeRuns.current };
         delete nextActive[this.input.sessionId];
@@ -1419,6 +1431,10 @@ export class AgentRunController {
           items,
         ));
         void this.checkpointRun("running", true);
+      }
+    } else if (event.type === "CUSTOM" && event.name === "cyrene.companion.references") {
+      if (isCompanionReferenceList(event.value)) {
+        this.deps.host.patchMessage(this.input.sessionId, this.input.assistantId, { companionReferences: event.value });
       }
     } else if (event.type === "CUSTOM" && event.name === "cyrene.context.usage") {
       // 上下文容量快照：preRequest 纯内存实时刷新（零 I/O）；

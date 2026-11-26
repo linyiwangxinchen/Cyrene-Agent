@@ -1,8 +1,8 @@
 import { detectUserMood } from "./mood-cues"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import { RelationshipRepository } from "./relationship-repository"
 import { normalizeFollowups, resolveExplicitFollowupReply } from "./followup-state"
-import { classifyCompanionFeedback, type CompanionLearningPreference } from "./companion-learning"
+import { classifyCompanionFeedback, isDirectCompanionWording, isTemporaryCompanionWording, stripCompanionQuotedBlocks, type CompanionFeedbackObservation, type CompanionLearningPreference } from "./companion-learning"
 import { COMPANION_LEARNING_TOPICS, type CompanionLearnedPreference, type CompanionLearningTopic, type CompanionFollowup, type CompanionCommitment, type CompanionCommitmentStatus } from "../../shared/companion"
 import { COMPANION_TASK_KINDS, COMPANION_TASK_METHODS, type CompanionTaskKind, type CompanionTaskLesson, type CompanionTaskMethod } from "../../shared/companion"
 import type { CompanionSnapshot, CompanionCommand, CompanionPermissions, CompanionRecord, RelationshipPreferences, RepairCase, RepairCaseStatus, RelationshipMode, SelfieFrequency } from "../../shared/companion"
@@ -29,11 +29,23 @@ export interface CompanionFeedbackInput {
   text: string
   userTurnId: string
   revision: number
+  source?: { userEntryId: string; userRevision: number };
+}
+
+export interface AcceptedCompanionFeedback {
+  conversationId: string;
+  userTurnId: string;
+  userEntryId: string;
+  userRevision: number;
+  speechScope: string;
+  text: string;
+  channel: RelationshipChannel;
 }
 
 import { collectPrivateExpressions, expressionCorrection, privateExpressionHint, speechObservations, rememberSpeech, isSpeechObservation, type SpeechObservation } from "./private-expressions";
 import { addDesireSample, desireAvailable, desireContext } from "./partner-desire";
 import type { DesireSample } from "../../shared/companion";
+import type { CompanionReference } from "../../shared/companion-references";
 
 export interface RelationshipTurnInput {
   companionTurnId?: string;
@@ -84,6 +96,9 @@ export type RelationshipPreferencesPatch = Partial<RelationshipPreferences>
 
 interface CompanionFeedbackRecord {
   speechScope?: string;
+  userEntryId?: string;
+  userRevision?: number;
+  contextHash?: string;
   entryId: string
   conversationId: string
   userTurnId: string
@@ -92,6 +107,8 @@ interface CompanionFeedbackRecord {
   preference: CompanionLearningPreference
   explicit: boolean
 }
+
+type SourcedRepairCase = RepairCase & { userTurnId?: string; userEntryId?: string; userRevision?: number; speechScope?: string };
 
 interface TaskMethodObservation {
   workspaceKey: string
@@ -119,11 +136,12 @@ interface RelationshipLogData {
   seenEventKeys: string[]
   lastDiaryDay: string
   followups: CompanionFollowup[]
-  repairCases: RepairCase[]
+  repairCases: SourcedRepairCase[]
   commitments: CompanionCommitment[]
   bondProgress: BondProgressState
   seenCompanionEventIds: string[]
   companionFeedback: CompanionFeedbackRecord[]
+  acceptedFeedbackKeys: string[]
   learningRevision: number
   taskObservations: TaskMethodObservation[]
   taskLearningRevision: number
@@ -144,6 +162,7 @@ const EMPTY_DATA: RelationshipLogData = {
   repairCases: [],
   commitments: [],
   companionFeedback: [],
+  acceptedFeedbackKeys: [],
   learningRevision: 1,
   taskObservations: [],
   taskLearningRevision: 1,
@@ -165,17 +184,37 @@ const LEARNED_STYLE: Record<CompanionLearningTopic, string> = {
 };
 
 function learnedPreferences(records: readonly CompanionFeedbackRecord[], share = false): CompanionLearnedPreference[] {
-  const states = new Map<string, { pending: CompanionLearningPreference; active?: CompanionLearnedPreference }>();
-  for (const { conversationId, topic, at, explicit, preference, speechScope } of records) {
+  const states = new Map<string, { pending: CompanionLearningPreference; contextHash?: string; active?: CompanionLearnedPreference }>();
+  for (const { conversationId, topic, at, explicit, preference, speechScope, contextHash, userTurnId } of records) {
     const key = JSON.stringify([share && speechScope ? speechScope : conversationId, topic]);
     const previous = states.get(key);
-    const confirmed = explicit || previous?.pending === preference;
+    const confirmed = explicit || (previous?.pending === preference && (!contextHash || !previous.contextHash || contextHash !== previous.contextHash));
     states.set(key, {
       pending: preference,
-      active: confirmed ? (preference === "prefer" ? { conversationId, topic, updatedAt: at } : undefined) : previous?.active,
+      contextHash,
+      active: confirmed ? (preference === "prefer" ? { conversationId, topic, updatedAt: at, userTurnId } : undefined) : previous?.active,
     });
   }
   return [...states.values()].flatMap(state => state.active ? [state.active] : []).sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function appendFeedback(
+  data: RelationshipLogData,
+  source: Omit<CompanionFeedbackRecord, keyof CompanionFeedbackObservation>,
+  observations: readonly CompanionFeedbackObservation[],
+): boolean {
+  const fresh = observations.filter(observation => !data.companionFeedback.some(item =>
+    item.conversationId === source.conversationId && item.userTurnId === source.userTurnId
+    && item.userEntryId === source.userEntryId && item.userRevision === source.userRevision && item.speechScope === source.speechScope
+    && item.topic === observation.topic));
+  if (!fresh.length) return false;
+  data.companionFeedback = [...data.companionFeedback, ...fresh.map(observation => ({ ...observation, ...source }))].slice(-MAX_COMPANION_FEEDBACK);
+  return true;
+}
+
+function feedbackContextHash(text: string): string {
+  const normalized = text.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  return createHash("sha256").update(normalized).digest("hex");
 }
 
 function validCompanionFeedback(item: CompanionFeedbackRecord): boolean {
@@ -318,7 +357,15 @@ const CORRECTION_CUE = /^(?:纠正|更正|订正)\s*[:：]|不像人(?:说|话)|
 
 /** The user explicitly corrected how she talks. Kept as a standing note for the conversation. */
 export function isCompanionCorrection(text: string): boolean {
-  return CORRECTION_CUE.test(text.trim());
+  const direct = stripCompanionQuotedBlocks(text).trim();
+  return isDirectCompanionWording(direct) && CORRECTION_CUE.test(direct);
+}
+
+function explicitRepairNote(text: string): string | undefined {
+  const direct = stripCompanionQuotedBlocks(text).trim();
+  if (!isDirectCompanionWording(direct) || isTemporaryCompanionWording(direct)) return;
+  if (!/^(?:纠正|更正|订正)\s*[:：]|^(?:从今以后|从现在起|今后|以后|往后)\s*(?:别|不要)(?:再)?(?:这样|这么)/u.test(direct)) return;
+  return compact(direct, 200) || undefined;
 }
 
 function refreshCommitmentStatuses(data: RelationshipLogData, now: number): boolean {
@@ -374,7 +421,7 @@ function normalizeData(value: unknown): RelationshipLogData {
   for (const field of ["valence", "arousal", "warmth", "curiosity", "concern", "confidence"] as const) {
     if (!Number.isFinite(affect[field]) || affect[field] < 0 || affect[field] > 1) throw new Error("情绪数据数值无效，原始文件已保留");
   }
-  const repairCases = Array.isArray(raw.repairCases) ? raw.repairCases.filter((item): item is RepairCase => Boolean(
+  const repairCases = Array.isArray(raw.repairCases) ? raw.repairCases.filter((item): item is SourcedRepairCase => Boolean(
     item && typeof item === "object" && typeof item.id === "string" && item.id.length <= 160
       && typeof item.note === "string" && item.note.length <= 500
       && ["acknowledged", "follow_up", "resolved", "dismissed"].includes(item.status)
@@ -397,6 +444,9 @@ function normalizeData(value: unknown): RelationshipLogData {
     ...EMPTY_DATA, ...raw, relationshipState: relationship, affectState: affect, bondProgress,
     permissions,
     companionFeedback: raw.companionFeedback?.slice(-MAX_COMPANION_FEEDBACK) ?? [],
+    acceptedFeedbackKeys: Array.isArray(raw.acceptedFeedbackKeys)
+      ? raw.acceptedFeedbackKeys.filter(key => typeof key === "string" && /^[a-f0-9]{64}$/u.test(key)).slice(-10000)
+      : [],
     taskObservations: raw.taskObservations?.slice(-MAX_TASK_OBSERVATIONS) ?? [],
     followups: normalizeFollowups(raw.followups),
     repairCases,
@@ -526,6 +576,49 @@ export class RelationshipLogStore {
     data.revision++;
     this.repository.write(data);
   }
+
+  /** Record what the user explicitly committed, independently of whether a reply can be generated. */
+  recordAcceptedCompanionFeedback(input: AcceptedCompanionFeedback): void {
+    const { conversationId, userTurnId, userEntryId, userRevision, speechScope, channel, text } = input;
+    if (!conversationId || !userTurnId || !userEntryId || !speechScope
+      || !Number.isSafeInteger(userRevision) || userRevision < 1 || !text.trim()) return;
+    const data = this.repository.read();
+    const relationship = data.relationshipState;
+    if (!relationship.recordHistory || relationship.paused) return;
+    const at = Date.now();
+    const sourceKey = createHash("sha256").update(JSON.stringify([conversationId, userEntryId, userRevision, speechScope])).digest("hex");
+    if (data.acceptedFeedbackKeys.includes(sourceKey)) return;
+    const entryId = `explicit-feedback:${sourceKey}`;
+    let changed = relationship.learnConversationStyle !== false && appendFeedback(data,
+      { conversationId, userTurnId, userEntryId, userRevision, speechScope, entryId, at },
+      classifyCompanionFeedback(text).filter(observation => observation.explicit));
+    const known = data.entries.slice().reverse().find(item => item.conversationId === conversationId
+      && item.speechScope === speechScope && item.companionTurnId !== userTurnId);
+    const words = collectPrivateExpressions(data.speech.filter(row => row.scope === speechScope)).samples.map(item => item.quote);
+    const speech = speechObservations({
+      id: entryId, conversationId, companionTurnId: userTurnId, speechScope, channel, createdAt: at, userText: text,
+      learnedExpressions: relationship.learnPrivateExpressions === true,
+    }, text, { reply: known?.assistantText ?? "", words }, "explicit")
+      .filter(observation => !data.speech.some(row => row.id === entryId && row.kind === observation.kind && row.quote === observation.quote));
+    if (speech.length) {
+      rememberSpeech(data.speech, speech.map(row => ({ ...row, userEntryId, userRevision })));
+      changed = true;
+    }
+    const note = relationship.learnConversationStyle !== false ? explicitRepairNote(text) : undefined;
+    if (note && !data.repairCases.some(item => item.id === entryId)) {
+      data.repairCases = [...data.repairCases, {
+        id: entryId, note, status: "acknowledged", createdAt: at, updatedAt: at,
+        conversationId, userTurnId, userEntryId, userRevision, speechScope,
+      } satisfies SourcedRepairCase].slice(-100);
+      data.records = [...data.records, { id: entryId, kind: "repair", at, conversationId, text: `对方纠正：${note}` } satisfies CompanionRecord].slice(-500);
+      changed = true;
+    }
+    if (changed) {
+      data.acceptedFeedbackKeys = [...data.acceptedFeedbackKeys, sourceKey].slice(-10000);
+      data.revision++;
+      this.repository.write(data);
+    }
+  }
   async getState(): Promise<{ relationshipState: RelationshipState; affectState: AffectState }> {
     const data = this.repository.read();
     return { relationshipState: data.relationshipState, affectState: decayAffectState(data.affectState) };
@@ -578,6 +671,10 @@ export class RelationshipLogStore {
     data.entries = data.entries.filter(item => item.conversationId !== conversationId || !item.companionTurnId || retainedUserTurnIds.has(item.companionTurnId));
     data.desireHistory = data.desireHistory?.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.turnId));
     data.companionFeedback = data.companionFeedback.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.userTurnId));
+    const removedRepairs = new Set(data.repairCases.filter(item => item.conversationId === conversationId
+      && item.userTurnId && !retainedUserTurnIds.has(item.userTurnId)).map(item => item.id));
+    data.repairCases = data.repairCases.filter(item => !removedRepairs.has(item.id));
+    data.records = data.records.filter(item => !removedRepairs.has(item.id));
     data.taskObservations = data.taskObservations.filter(item => item.conversationId !== conversationId || retainedUserTurnIds.has(item.userTurnId));
     // A completion for a truncated turn could still be running its side effects.
     data.learningRevision++;
@@ -609,9 +706,11 @@ export class RelationshipLogStore {
   }
   blockedExpressions(conversationId: string, current: string, scope = "owner") {
     const data = this.repository.read();
-    const banned = data.speech.filter(row => row.kind === "block" && row.scope === scope
-      && (data.relationshipState.learnPrivateExpressions || row.conversationId === conversationId));
-    return [...new Set([...banned.map(row => row.quote), ...expressionCorrection(current)])];
+    const relevant = data.relationshipState.recordHistory && !data.relationshipState.paused ? data.speech.filter(row => row.scope === scope
+      && (data.relationshipState.learnPrivateExpressions || row.conversationId === conversationId)) : [];
+    const previous = data.entries.slice().reverse().find(item => item.conversationId === conversationId && item.speechScope === scope);
+    const { blocked, samples } = collectPrivateExpressions(relevant);
+    return [...new Set([...blocked, ...expressionCorrection(current, { reply: previous?.assistantText ?? "", words: samples.map(item => item.quote) })])];
   }
   privateExpressions() {
     const data = this.repository.read();
@@ -801,6 +900,7 @@ export class RelationshipLogStore {
       data.records = data.records.filter(item => item.id !== command.id);
       data.entries = data.entries.filter(item => item.id !== command.id);
       data.companionFeedback = data.companionFeedback.filter(item => item.entryId !== command.id);
+      data.repairCases = data.repairCases.filter(item => item.id !== command.id || !item.userTurnId);
       data.learningRevision++;
       // Derived summaries must not resurrect removed evidence.
       data.dailySummaries = [];
@@ -836,8 +936,9 @@ export class RelationshipLogStore {
     const assistantText = input.assistantText.trim()
     if (!userText && !assistantText) return null
 
+    const ownerContext = !input.speechScope || input.speechScope === "owner";
     const data = this.repository.read()
-    if (input.privateContext !== false && input.conversationId) {
+    if (ownerContext && input.privateContext !== false && input.conversationId) {
       let changed = false;
       for (const item of data.followups.filter(item => item.conversationId === input.conversationId && ["active", "awaiting_reply", "paused"].includes(item.status))) {
         const status = resolveExplicitFollowupReply(item.topic, userText);
@@ -865,7 +966,7 @@ export class RelationshipLogStore {
     if (eventKey && data.seenEventKeys.includes(eventKey)) return null
     if (eventKey) data.seenEventKeys = [...data.seenEventKeys, eventKey].slice(-10000)
     const now = Date.now()
-    if (input.companionTurnId && input.conversationId && desireAvailable(data.relationshipState)) {
+    if (ownerContext && input.companionTurnId && input.conversationId && desireAvailable(data.relationshipState)) {
       addDesireSample(data.desireHistory ??= [], input.conversationId, input.companionTurnId, userText, now);
     }
     const userMood = detectUserMood(userText)
@@ -892,32 +993,36 @@ export class RelationshipLogStore {
         ? data.entries.slice().reverse().find(e => e.conversationId === entry.conversationId && e.speechScope === entry.speechScope && e.companionTurnId)
         : undefined;
       const known = previous && { reply: previous.assistantText, words: collectPrivateExpressions(data.speech.filter(row => row.scope === (entry.speechScope ?? "owner"))).samples.map(s => s.quote) };
-      rememberSpeech(data.speech, speechObservations(entry, text, known));
+      const speech = speechObservations(entry, text, known, companionFeedback?.source ? "passive" : "all");
+      rememberSpeech(data.speech, companionFeedback?.source ? speech.map(row => ({ ...row, ...companionFeedback.source })) : speech);
     }
     data.entries.push(entry)
     data.entries = data.entries.slice(-MAX_ENTRIES)
     if (input.conversationId && companionFeedback?.userTurnId && assistantText && data.relationshipState.learnConversationStyle !== false
-      && companionFeedback.revision === data.learningRevision
-      && !data.companionFeedback.some(item => item.conversationId === input.conversationId && item.userTurnId === companionFeedback.userTurnId)) {
-      const observations = classifyCompanionFeedback(companionFeedback.text);
-      if (observations.length) {
-        for (const observation of observations) data.companionFeedback.push({
-          ...observation, speechScope: entry.learnedExpressions ? entry.speechScope ?? (entry.channel === "desktop" || entry.channel === "web" ? "owner" : "session:"+entry.conversationId) : undefined, entryId: entry.id, conversationId: input.conversationId, userTurnId: companionFeedback.userTurnId, at: now,
-        });
-        data.companionFeedback = data.companionFeedback.slice(-MAX_COMPANION_FEEDBACK);
-        data.revision++;
-      }
+      && companionFeedback.revision === data.learningRevision) {
+      const observations = classifyCompanionFeedback(companionFeedback.text).filter(observation => !companionFeedback.source || !observation.explicit);
+      const changed = appendFeedback(data, {
+        speechScope: entry.speechScope ?? (entry.learnedExpressions ? (entry.channel === "desktop" || entry.channel === "web" ? "owner" : "session:"+entry.conversationId) : undefined),
+        ...companionFeedback.source, entryId: entry.id, conversationId: input.conversationId, userTurnId: companionFeedback.userTurnId, at: now,
+        contextHash: feedbackContextHash(companionFeedback.text),
+      }, observations);
+      if (changed) data.revision++;
     }
     if (input.conversationId && companionFeedback?.userTurnId && data.relationshipState.learnConversationStyle !== false
-      && companionFeedback.revision === data.learningRevision && isCompanionCorrection(companionFeedback.text)) {
+      && companionFeedback.revision === data.learningRevision && !companionFeedback.source && isCompanionCorrection(companionFeedback.text)) {
       const note = compact(companionFeedback.text, 200);
-      if (!data.repairCases.some(item => item.conversationId === input.conversationId && item.note === note)) {
+      if (!data.repairCases.some(item => item.conversationId === input.conversationId && item.speechScope === entry.speechScope && item.note === note)) {
         data.repairCases = [...data.repairCases, {
           id: randomUUID(), note, status: "acknowledged", createdAt: now, updatedAt: now, conversationId: input.conversationId,
-        } satisfies RepairCase].slice(-100);
+          speechScope: entry.speechScope,
+        } satisfies SourcedRepairCase].slice(-100);
         data.records.push({ id: randomUUID(), kind: "repair", at: now, conversationId: input.conversationId, text: `对方纠正：${note}` });
         data.revision++;
       }
+    }
+    if (!ownerContext) {
+      this.repository.write(data);
+      return entry;
     }
     data.relationshipState = advanceRelationshipState(data.relationshipState, userMood, now)
     data.affectState = advanceAffectState(data.affectState, userMood, now)
@@ -953,7 +1058,7 @@ export class RelationshipLogStore {
       data.records.push({ id: commitment.id, kind: "commitment", at: now, conversationId: input.conversationId, runId: input.runId, text: `记录助手承诺：${promise}` });
     }
 
-    const entriesForDate = data.entries.filter((item) => item.date === entry.date)
+    const entriesForDate = data.entries.filter(item => item.date === entry.date && (!item.speechScope || item.speechScope === "owner"));
     const summary = summarizeDate(entry.date, entriesForDate)
     data.dailySummaries = [
       ...data.dailySummaries.filter((item) => item.date !== entry.date),
@@ -964,14 +1069,16 @@ export class RelationshipLogStore {
     return entry
   }
 
-  async buildContext(conversationId?: string, privateContext = true, currentUserText?: string, useLearnedStyle = false, includeTaskLedger = true, speechScope = "owner"): Promise<string> {
+  async buildContext(conversationId?: string, privateContext = true, currentUserText?: string, useLearnedStyle = false, includeTaskLedger = true, speechScope = "owner",
+    onReference?: (reference: CompanionReference) => void): Promise<string> {
     if (!privateContext) return "";
+    const ownerContext = speechScope === "owner";
     const data = this.repository.read();
-    if (refreshCommitmentStatuses(data, Date.now())) { data.revision++; this.repository.write(data); }
+    if (ownerContext && refreshCommitmentStatuses(data, Date.now())) { data.revision++; this.repository.write(data); }
     const rel = data.relationshipState;
     const lines = ["【昔涟的相处偏好】", "这些偏好用于决定怎样开口。按对方此刻的意思应答，顺着对方提过的事聊。保留事实和权限边界，别向对方复述这些设置。"];
-    if (rel.userLabel) lines.push(`称呼对方时可以用 ${JSON.stringify(rel.userLabel)}。来回聊天时直接接话就好。`);
-    if (rel.boundaries.length) lines.push(`相处边界：${JSON.stringify(rel.boundaries)}`);
+    if (ownerContext && rel.userLabel) lines.push(`称呼对方时可以用 ${JSON.stringify(rel.userLabel)}。来回聊天时直接接话就好。`);
+    if (ownerContext && rel.boundaries.length) lines.push(`相处边界：${JSON.stringify(rel.boundaries)}`);
     if (rel.tasteNotes.length) {
       lines.push("昔涟的兴趣与品味（由用户明确设定，仅用于形成稳定表达，不代表现实经历）：", JSON.stringify(rel.tasteNotes));
     }
@@ -982,7 +1089,9 @@ export class RelationshipLogStore {
       concise: "说到点上就停，一句够了就用一句。",
     }[rel.style];
     if (rel.paused) {
-      lines.push(styleDescription, "对方已暂停关系模拟和主动关怀。礼貌回应眼下的话，亲昵互动等对方恢复后再聊。");
+      lines.push(styleDescription, ownerContext
+        ? "对方已暂停关系模拟和主动关怀。礼貌回应眼下的话，亲昵互动等对方恢复后再聊。"
+        : "礼貌回应眼下的话。");
       return lines.join("\n");
     }
     const relationshipMode = rel.relationshipMode ?? "companion";
@@ -992,44 +1101,56 @@ export class RelationshipLogStore {
       companion: "平时可以关心、说笑，也可以一起安静待会儿。亲近程度跟着对方当下的语气走。",
       partner: "按对方选的伴侣式相处。开心时可以互相逗两句，难过时可以把话听完，日常也能直接答一句。闹别扭时就说这件具体的事，听清对方的意思，再继续聊。",
     }[relationshipMode];
-    lines.push(relationshipDescription, styleDescription);
+    lines.push(ownerContext ? relationshipDescription : "根据这段对话里的称呼和熟悉程度接话。", styleDescription);
     if (conversationId && currentUserText && !includeTaskLedger) {
       if (rel.learnPrivateExpressions && rel.recordHistory && useLearnedStyle) {
         const learned = collectPrivateExpressions(data.speech.filter(row => row.scope === speechScope));
-        const expression = privateExpressionHint(learned.samples, currentUserText);
+        const expression = privateExpressionHint(learned.samples, currentUserText, sample => onReference?.({
+          kind: "expression", quote: sample.quote, conversationId: sample.turn.conversationId, userTurnId: sample.turn.turnId,
+        }));
         if (expression) lines.push(expression);
       }
-      const hint = desireContext(rel, data.desireHistory ?? [], conversationId, currentUserText, Date.now());
-      if (hint) lines.push(hint);
+      if (ownerContext) {
+        const hint = desireContext(rel, data.desireHistory ?? [], conversationId, currentUserText, Date.now());
+        if (hint) lines.push(hint);
+      }
     }
-    lines.push(rel.affection
-      ? "话题和语气合适时，可以自然表达亲近。对方忙着、想安静或改了话题，就尊重这个选择。"
-      : "对方喜欢体贴、平实的语气。用日常的关心，省去恋爱称呼和撒娇。");
-    if (relationshipMode === "partner" && rel.affection) lines.push("对方接得住时可以说亲近的话，也可以逗逗对方。昵称和撒娇由当时的话题决定，不需要用来证明亲近。");
-    lines.push(`内部亲近度 ${Math.round(rel.closeness * 100)}/100，仅参考熟悉程度。以对方选的相处方式、边界和当下的话为准。日常聊天省去报分。`);
-    if (rel.stage === "new") lines.push("习惯和共同经历慢慢了解，先听对方怎么说。");
-    if (rel.stage === "close" || rel.stage === "long_term") lines.push("可以接着聊彼此熟悉的话题，提到共同经历时以对话里确定的细节为准。");
+    if (ownerContext) {
+      lines.push(rel.affection
+        ? "话题和语气合适时，可以自然表达亲近。对方忙着、想安静或改了话题，就尊重这个选择。"
+        : "对方喜欢体贴、平实的语气。用日常的关心，省去恋爱称呼和撒娇。");
+      if (relationshipMode === "partner" && rel.affection) lines.push("对方接得住时可以说亲近的话，也可以逗逗对方。昵称和撒娇由当时的话题决定，不需要用来证明亲近。");
+      lines.push(`内部亲近度 ${Math.round(rel.closeness * 100)}/100，仅参考熟悉程度。以对方选的相处方式、边界和当下的话为准。日常聊天省去报分。`);
+      if (rel.stage === "new") lines.push("习惯和共同经历慢慢了解，先听对方怎么说。");
+      if (rel.stage === "close" || rel.stage === "long_term") lines.push("可以接着聊彼此熟悉的话题，提到共同经历时以对话里确定的细节为准。");
+    }
     // Only reactive callers have a current user message. A stored guess cannot describe this turn.
     const replyHint = currentUserText ? MOOD_REPLY_HINTS[detectUserMood(currentUserText)] : undefined;
     if (replyHint) lines.push("【本轮语气参考】", "这是从这一条消息自动识别的线索，可能误判。以对方原话、原话说的时间和明确要求为准。只调整接话方式，省去给对方贴标签。", replyHint);
     if (useLearnedStyle && conversationId && rel.recordHistory && rel.learnConversationStyle !== false) {
       const currentTopics = new Set(classifyCompanionFeedback(currentUserText ?? "").map(item => item.topic));
       const share = !!rel.learnPrivateExpressions && !includeTaskLedger;
-      const scopedFeedback = data.companionFeedback.filter(item => item.speechScope ? (share ? item.speechScope === speechScope : item.speechScope === speechScope && item.conversationId === conversationId) : item.conversationId === conversationId);
-      const style = learnedPreferences(scopedFeedback, share)
-        .filter(item => !currentTopics.has(item.topic)).map(item => LEARNED_STYLE[item.topic]);
+      const scopedFeedback = data.companionFeedback.filter(item => item.speechScope
+        ? item.speechScope === speechScope && (share || item.conversationId === conversationId)
+        : ownerContext && item.conversationId === conversationId);
+      const preferences = learnedPreferences(scopedFeedback, share).filter(item => !currentTopics.has(item.topic));
+      for (const { topic, conversationId, userTurnId } of preferences) {
+        onReference?.({ kind: "preference", topic, conversationId, userTurnId });
+      }
+      const style = preferences.map(item => LEARNED_STYLE[item.topic]);
       if (style.length) lines.push(share ? "【你们平常聊天的表达习惯】" : "【这段私聊的表达习惯】", "仅在合适时沿用。按对方这一轮明确的要求和相处边界接话。", ...style);
     }
-    if (rel.sharedGoals.length) lines.push(`聊到相关事情时可以参考这些共同目标，进度按已知事实说：${JSON.stringify(rel.sharedGoals)}`);
-    if (rel.milestones.length) lines.push(`只在时机或话题合适时提起这些由对方指定的日子：${JSON.stringify(rel.milestones)}`);
+    if (ownerContext && rel.sharedGoals.length) lines.push(`聊到相关事情时可以参考这些共同目标，进度按已知事实说：${JSON.stringify(rel.sharedGoals)}`);
+    if (ownerContext && rel.milestones.length) lines.push(`只在时机或话题合适时提起这些由对方指定的日子：${JSON.stringify(rel.milestones)}`);
     const repairs = data.repairCases.filter(item =>
       (item.conversationId === undefined || item.conversationId === conversationId)
+      && (item.speechScope ? item.speechScope === speechScope : ownerContext)
       && (item.status === "acknowledged" || item.status === "follow_up"),
     ).slice(-6);
     if (repairs.length) lines.push("【对方纠正过的地方】", "对方专门指出过这些说法或做法不对。以后照着改，别再犯，也不用再提起或道歉：", ...repairs.map(item => `- ${item.note}`));
-    const commitments = includeTaskLedger ? data.commitments.filter(item => item.status === "open" || item.status === "overdue").filter(item => conversationId ? !item.conversationId || item.conversationId === conversationId : !item.conversationId).slice(-8) : [];
+    const commitments = ownerContext && includeTaskLedger ? data.commitments.filter(item => item.status === "open" || item.status === "overdue").filter(item => conversationId ? !item.conversationId || item.conversationId === conversationId : !item.conversationId).slice(-8) : [];
     if (commitments.length) lines.push("【助手承诺账本】", "以下承诺必须保持可追踪，完成后更新状态，不要声称已完成而没有证据：", JSON.stringify(commitments.map(item => ({ id: item.id, promise: item.promise, status: item.status, dueAt: item.dueAt, evidence: item.evidence }))));
-    if (rel.innerLifeEnabled) {
+    if (ownerContext && rel.innerLifeEnabled) {
       // Existing fictional diaries stay in the settings history. World sharing
       // uses grounded events from the conversation's own world context.
       const today = new Date().toISOString().slice(0, 10);

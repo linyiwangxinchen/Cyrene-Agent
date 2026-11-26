@@ -11,6 +11,7 @@ import { saveReport, markdownReport, timePlaylist } from "../lib/content.mjs";
 import { GardenRunner } from "../lib/runner.mjs";
 import { GardenService } from "../lib/service.mjs";
 import { BilibiliClient } from "../lib/bilibili.mjs";
+import { forgetExpression, listVideoExpressionEvidence, locateVideoExpression, rememberExpression } from "../lib/expressions.mjs";
 
 test("缺少平台回执不能记成发送成功", async t => {
   const {store}=setup(t);store.saveConfig({dmOn:true,dmUid:'456'});
@@ -56,6 +57,33 @@ function evidence(store, bvid = BV) {
     segments: [{ from: 12, to: 15, text: "春天种花需要阳光" }],
   });
 }
+
+test("表达定位到真实字幕片段、评论与转写，忘记后跨重启阻止改标点重录", t => {
+  const fixture = setup(t);
+  evidence(fixture.store);
+  const video = fixture.store.get("evidence", BV);
+  const subtitle = locateVideoExpression(BV, "春天种花", { video });
+  const { version, ...locator } = subtitle.source;
+  assert.deepEqual(locator, { kind: "video_subtitle", id: `${BV}:subtitle:0:12:15`, unit: BV, url: `https://www.bilibili.com/video/${BV}?t=12` });
+  assert.match(version, /^[a-f0-9]{64}$/u);
+  const transcript = locateVideoExpression(BV, "春天种花", { video: { ...video, source: "asr" } });
+  assert.equal(transcript.source.kind, "video_transcript");
+  const fallback = locateVideoExpression(BV, "春天种花", { video: { ...video, segments: [{ from: 0, to: 0, text: video.text }] } });
+  assert.equal(fallback.source.kind, "legacy");
+  const comments = [{ id: "57", text: "春天种花晒会儿太阳。" }];
+  const comment = locateVideoExpression(BV, "春天种花", { comments, commentId: "57" });
+  assert.equal(comment.source.kind, "video_comment");
+  assert.equal(locateVideoExpression(BV, "春天种花", { video, comments, commentId: "58" }), undefined);
+  const row = rememberExpression(fixture.store, subtitle.source.url, "春天种花", "阳台晒太阳", subtitle.text, {}, subtitle.source);
+  assert.deepEqual(listVideoExpressionEvidence(fixture.store, 10)[0].source, subtitle.source);
+  const reobserved = rememberExpression(fixture.store, comment.source.url, "春天，种花", "阳台晒太阳", "春天，种花晒会儿太阳。", {}, comment.source);
+  assert.equal(row.id, reobserved.id);
+  assert.equal(listVideoExpressionEvidence(fixture.store, 10).length, 1);
+  assert.equal(forgetExpression(fixture.store, row.id), true);
+  const reopened = fixture.reopen();
+  assert.throws(() => rememberExpression(reopened, comment.source.url, "春天，种花", "阳台晒太阳", "春天，种花晒会儿太阳。", {}, comment.source), /已忘记/);
+  assert.deepEqual(listVideoExpressionEvidence(reopened, 10), []);
+});
 const account = async () => ({ loggedIn: true, uid: "123", name: "测试账号" });
 function policy(
   store,

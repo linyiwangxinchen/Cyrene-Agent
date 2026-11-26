@@ -69,3 +69,7 @@ export function normalizeProactiveDailyLimit(value: unknown): number {
   if (!Number.isFinite(numeric)) return DEFAULT_PROACTIVE_DAILY_LIMIT;
   return Math.max(0, Math.min(24, Math.round(numeric)));
 }
+export function normalizeExpressionSourceIds(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.filter((id): id is string => typeof id === "string" && /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/.test(id)))].slice(0, 32);
+}

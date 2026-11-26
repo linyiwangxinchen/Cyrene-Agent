@@ -244,8 +244,18 @@ export async function connectMcpServer(config: McpServerConfig, options: { signa
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(LOG_PREFIX, "工具调用失败 [" + toolId + "]:", msg);
-          if (msg.startsWith("E_MCP_TOOL_FAILED")) throw err;
-          throw new Error(`E_MCP_TOOL_FAILED: ${msg}`);
+          if (resolvedEffectKind === "read") {
+            if (msg.startsWith("E_MCP_TOOL_FAILED")) throw err;
+            throw new Error(`E_MCP_TOOL_FAILED: ${msg}`);
+          }
+          // 响应失败时，第三方服务可能已经执行了写操作。保留回执未确认的事实。
+          throw new ToolExecutionError(
+            "E_MCP_TOOL_FAILED",
+            msg.startsWith("E_MCP_TOOL_FAILED") ? msg : `E_MCP_TOOL_FAILED: ${msg}`,
+            "partial_failure",
+            false,
+            "unknown",
+          );
         }
       },
     };

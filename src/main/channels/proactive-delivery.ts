@@ -10,6 +10,7 @@ import { appendLog as appendChannelLog, type LogEntry } from "./message-log";
 import type { ChannelId, IncomingMessage, OutgoingMessage, OutgoingPart } from "./types";
 import { getChannelConversationBindingStore, type ChannelConversationBindingSnapshot } from "./conversation-binding-store";
 import { getChannelRecoveryStore } from "./recovery-store";
+import { resolveChannelMemoryScope } from "./memory-scope";
 
 export type ProactiveMobileChannel = Extract<ChannelId, "wechat" | "feishu">;
 
@@ -22,6 +23,9 @@ export interface RecentProactiveChannelRecipient {
   sessionId: string;
   updatedAt: number;
   conversationId?: string;
+  recipientScope?: string;
+  accountId?: string;
+  bindingUpdatedAt?: number;
 }
 
 export interface ProactiveChannelRecipientRegistry {
@@ -37,11 +41,13 @@ export function createProactiveChannelRecipientRegistry(): ProactiveChannelRecip
       if (message.chatType === "group") return;
       const targetId = message.chatId.trim();
       if (!targetId || !sessionId) return;
+      const recipientScope = resolveChannelMemoryScope(message);
       recipients.set(message.channel, {
         targetId,
         ...(message.threadId ? { threadId: message.threadId } : {}),
         sessionId,
         updatedAt: message.at.getTime(),
+        ...(recipientScope ? { recipientScope, accountId: message.accountId } : {}),
       });
     },
     get(channel): RecentProactiveChannelRecipient | null {
@@ -71,15 +77,18 @@ export function getProactiveChannelAvailability(
   if (!adapter?.getStatus().enabled || adapter.getStatus().phase !== "running") return { available: false, reason: "channel_offline" };
   const candidates = bindings.bindings.flatMap(binding => {
     const chat = bindings.externalChats.find(item => item.sessionId === binding.sessionId && item.channel === channel && item.chatType === "private");
-    return chat ? [{ targetId: chat.chatId, sessionId: chat.sessionId, conversationId: binding.conversationId, updatedAt: chat.lastAt }] : [];
+    return chat ? [{ targetId: chat.chatId, sessionId: chat.sessionId, conversationId: binding.conversationId, updatedAt: chat.lastAt,
+      recipientScope: chat.recipientScope, accountId: chat.accountId, bindingUpdatedAt: binding.updatedAt }] : [];
   });
   if (candidates.length > 1) return { available: false, reason: "recipient_ambiguous" };
   const recent = recipientRegistry.get(channel);
   const recipient = candidates[0] ?? (recent ? { ...recent, conversationId: recent.sessionId } : null);
   if (!recipient) return { available: false, reason: "recipient_unavailable" };
+  const accountId = adapter.getMemoryAccountId?.();
+  if (recipient.accountId && accountId && accountId !== recipient.accountId) return { available: false, reason: "recipient_account_changed" };
   const protocol = adapter.getProactiveAvailability?.(recipient.targetId);
   if (protocol && !protocol.available) return { available: false, reason: protocol.reason || "delivery_unavailable" };
-  return { available: true, recipient };
+  return { available: true, recipient: recipient.accountId && recipient.accountId === accountId ? recipient : { ...recipient, recipientScope: undefined } };
 }
 
 export function canStartProactiveChannelDelivery(
