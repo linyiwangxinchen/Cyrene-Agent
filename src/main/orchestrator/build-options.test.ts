@@ -1396,12 +1396,12 @@ describe("build-options", () => {
     expect(effects).toEqual({ sticker: null })
   })
 
-  it("schedules one social extraction instead of legacy memory for an enabled Chat result", async () => {
+  it("records a vector-memory turn alongside social extraction for an enhanced private chat", async () => {
     const scheduleMemoryWrite = vi.fn()
     const scheduleSocialAtomExtraction = vi.fn()
     const observeRuntimeState = vi.fn(async () => {})
     const deps: OnRunFinishedDeps = {
-      loadModelSettings: () => ({ provider: "test", baseUrl: "", model: "", apiKey: "", runtimeSync: "llm" }),
+      loadModelSettings: () => ({ provider: "test", baseUrl: "", model: "", apiKey: "", runtimeSync: "llm", memoryMode: "vector" }),
       scheduleMemoryWrite,
       scheduleSocialAtomExtraction,
       inferRuntimeState: () => ({ status: "陪伴中" }),
@@ -1429,9 +1429,13 @@ describe("build-options", () => {
         retrievedAtoms,
         now: 100,
       },
-    }, "我喜欢海边。", deps)
+    }, "我喜欢海边。", deps, undefined, "chat-a", {
+      vectorMemorySource: { userTurnId: "user-1", assistantEntryId: "journal-assistant-1" },
+    })
 
-    expect(scheduleMemoryWrite).not.toHaveBeenCalled()
+    expect(scheduleMemoryWrite).toHaveBeenCalledExactlyOnceWith("我喜欢海边。", "海风确实很舒服。", "chat-a", {
+      userTurnId: "user-1", assistantEntryId: "journal-assistant-1",
+    })
     expect(observeRuntimeState).not.toHaveBeenCalled()
     expect(scheduleSocialAtomExtraction).toHaveBeenCalledWith({
       conversationId: "chat-a",

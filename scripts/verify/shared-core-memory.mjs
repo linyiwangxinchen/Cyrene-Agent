@@ -2,28 +2,46 @@
 // The production Web host forks a real headless core: an unhandled rejection must
 // fail the authenticated IPC checks, even when the HTTP health check stays alive.
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
+import { responseBody, streamEvents } from '../../src/main/orchestrator/vendors/sdk-stream/model-fixtures.ts';
 
 const require = createRequire(import.meta.url);
 const { createWebServer } = require('../../dist/server/server/index.js');
+const { CURRENT_DISCLAIMER_VERSION } = require('../../dist/server/shared/disclaimer.js');
 const dataDir = await mkdtemp(path.join(os.tmpdir(), 'cyrene-memory-'));
 const sessionId = 'wiki-backfill-fixture';
 const model = 'gpt-6.1-sol';
 const userText = '请记住，我喜欢在清晨读书。';
+const vectorTurns = [
+  '平时请叫我小屿。',
+  '我这段时间在制作夜景摄影集。',
+  '傍晚去了河边散步。',
+  '天黑后桥上的灯亮起来了。',
+  '我找到了一个视野开阔的位置。',
+  '上周我在河边拍到了第一张星轨照片。',
+];
+const vectorReply = '听起来挺有意思，愿意多聊聊吗？';
+const vectorCandidates = [
+  { layer: 'L0', field: 'preferredName', content: '小屿', evidenceIndex: 0 },
+  { layer: 'L1', field: 'currentProject', content: '制作夜景摄影集', evidenceIndex: 1 },
+  { layer: 'L2', slug: '河边拍星轨', content: '用户在河边拍到了第一张星轨照片', evidenceIndex: 5 },
+];
 const previousNodeOptions = process.env.NODE_OPTIONS;
 // Do not let an inherited warning-only policy hide a rejected background tail.
 process.env.NODE_OPTIONS = `${previousNodeOptions ?? ''} --unhandled-rejections=strict`.trim();
-const results = [], logs = [], requests = [], ignoredRequests = [];
+const results = [], logs = [], requests = [], ignoredRequests = [], aguiEvents = [], vectorRequests = [];
 let mode = 'unauthorized', handle, socket, baseUrl, cookie = '', clientToken = '';
+let vectorDataDir, vectorSessionId;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 // Bound the acceptance run even if the child process dies with an unresolved IPC.
-const watchdog = setTimeout(() => { console.error('FAIL memory acceptance exceeded 30 seconds'); process.exit(1); }, 30_000);
+const watchdog = setTimeout(() => { console.error('FAIL memory acceptance exceeded 45 seconds'); process.exit(1); }, 45_000);
 
 function strings(value) {
   if (typeof value === 'string') return [value];
@@ -31,11 +49,55 @@ function strings(value) {
   return value && typeof value === 'object' ? Object.values(value).flatMap(strings) : [];
 }
 
+function respondVector(request, response, body) {
+  const prompt = strings([body.instructions, body.input, body.messages]).join('\n');
+  let text = vectorReply;
+  if (prompt.includes('保守的记忆候选提取器')) {
+    assert.equal(request.url, '/v1/responses');
+    assert.equal(body.model, model);
+    assert.ok(vectorSessionId && prompt.includes(`conversationId: ${vectorSessionId}`));
+    assert.deepEqual(Array.from(prompt.matchAll(/^用户：(.+)$/gm), match => match[1]), vectorTurns);
+    assert.deepEqual(Array.from(prompt.matchAll(/^AI：(.+)$/gm), match => match[1]), vectorTurns.map(() => vectorReply));
+    vectorRequests.push({ kind: 'judge', path: request.url, stream: body.stream });
+    text = JSON.stringify({
+      candidates: vectorCandidates.map(({ evidenceIndex, ...candidate }) => ({
+        ...candidate,
+        ...(candidate.layer === 'L2' && { sourceQuote: vectorTurns[evidenceIndex] }),
+        summary: candidate.content,
+        confidence: 0.99,
+        triggerText: vectorTurns[evidenceIndex],
+        certainty: 'explicit',
+        attribution: 'user_explicit',
+        evidenceQuotes: [vectorTurns[evidenceIndex]],
+        shouldWrite: true,
+      })),
+      entities: [],
+    });
+  } else if (prompt.includes('保守的聊天连续性信息提取器')) {
+    text = JSON.stringify({ operations: [] });
+  }
+  const transport = request.url === '/v1/responses' ? 'responses' : 'openai';
+  if (!body.stream) {
+    response.writeHead(200, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(responseBody(transport, { text })));
+    return;
+  }
+  response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  for (const event of streamEvents(transport, { text })) {
+    response.write(`event: ${event.type ?? 'data'}\ndata: ${JSON.stringify(event)}\n\n`);
+  }
+  response.end('data: [DONE]\n\n');
+}
+
 const provider = createServer(async (request, response) => {
   try {
     let raw = '';
     for await (const chunk of request) raw += chunk;
     const body = JSON.parse(raw);
+    if (mode === 'vector') {
+      respondVector(request, response, body);
+      return;
+    }
     const requestItem = { mode, path: request.url, stream: body.stream, model: body.model };
     // Runtime startup may also probe the configured model for Amphoreus. That
     // request is unrelated to Wiki backfill and must not count as a memory
@@ -106,8 +168,8 @@ async function waitFor(predicate, label) {
   }
 }
 
-async function launch(first = false) {
-  handle = createWebServer({ dataDir, secureCookies: false, setupToken: 'fixture-memory-setup', sharedCore: true,
+async function launch(first = false, root = dataDir) {
+  handle = createWebServer({ dataDir: root, secureCookies: false, setupToken: 'fixture-memory-setup', sharedCore: true,
     logger: { info: value => logs.push(value), warn: value => logs.push(value), error: value => logs.push(value) } });
   await new Promise(resolve => handle.server.listen(0, '127.0.0.1', resolve));
   baseUrl = `http://127.0.0.1:${handle.server.address().port}`;
@@ -118,7 +180,11 @@ async function launch(first = false) {
   assert.equal(login.response.status, 200);
   cookie = login.response.headers.get('set-cookie').split(';')[0];
   socket = new WebSocket(baseUrl.replace('http:', 'ws:') + '/ws', { headers: { Cookie: cookie } });
-  socket.on('message', raw => { const event = JSON.parse(String(raw)); if (event.type === 'ready') clientToken = event.clientToken; });
+  socket.on('message', raw => {
+    const event = JSON.parse(String(raw));
+    if (event.type === 'ready') clientToken = event.clientToken;
+    if (event.type === 'CORE_EVENT' && event.channel === 'agui:event') aguiEvents.push(event.args[0]);
+  });
   await waitFor(() => clientToken, 'authenticated WebSocket');
   await handle.startChannels();
 }
@@ -163,15 +229,70 @@ async function check(name, run) {
   const start = Date.now(); await run(); results.push({ name, ok: true, ms: Date.now() - start }); console.log('PASS', name);
 }
 
+function fixtureSettings(memoryMode, general) {
+  return { version: 1, sessions: [], settings: {
+    general: { proactiveChatMode: 'off', chatToolsEnabled: false, disclaimerAcceptedVersion: CURRENT_DISCLAIMER_VERSION, ...general },
+    config: { memoryMode, runtimeSync: 'off' },
+    modelProfiles: [{ id: 'memory-profile', provider: 'ChatGPT（OpenAI）', displayName: 'Local memory acceptance',
+      apiKey: 'local-memory-fixture-key', baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, explicitTransport: 'responses', model, models: [model] }],
+    defaultModelProfileId: 'memory-profile',
+  } };
+}
+
+async function verifyVectorMemory() {
+  await close();
+  mode = 'vector';
+  vectorDataDir = await mkdtemp(path.join(os.tmpdir(), 'cyrene-vector-memory-'));
+  await writeFile(path.join(vectorDataDir, 'web-data.json'), JSON.stringify(fixtureSettings('vector', { chatSocialContextEnabled: true })));
+  await launch(true, vectorDataDir);
+  assert.equal((await invoke('settings:get-general')).chatSocialContextEnabled, true);
+  const session = await invoke('chats:create', { mode: 'chat', title: 'Vector memory acceptance' });
+  vectorSessionId = session.id;
+  const turnIds = [];
+  for (const text of vectorTurns) {
+    const turnId = randomUUID();
+    turnIds.push(turnId);
+    const run = await invoke('agui:run', {
+      sessionId: session.id, styleId: 'default',
+      currentUser: { turnId, text, visibleContent: text },
+      assistantTurnId: randomUUID(),
+    });
+    assert.ok(run.success, JSON.stringify(run));
+    const terminal = () => aguiEvents.find(event => event.runId === run.runId && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type));
+    await waitFor(terminal, `finished vector-memory chat turn ${turnIds.length}`);
+    assert.equal(terminal().type, 'RUN_FINISHED', JSON.stringify(terminal()));
+    assert.equal(terminal().result?.status, 'success', JSON.stringify(terminal()));
+  }
+  const memoryPath = path.join(vectorDataDir, 'memory.json');
+  async function readMemory() {
+    try { return JSON.parse(await readFile(memoryPath, 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') return undefined; throw error; }
+  }
+  await waitFor(async () => {
+    const memory = await readMemory();
+    return memory?.l1.roundCount === vectorTurns.length
+      && memory.l2.some(entry => ['synced', 'sync_failed'].includes(entry.syncStatus));
+  }, 'vector judge persisted L2 and finalized the sixth turn');
+  const memory = await readMemory();
+  assert.equal(memory.l0.preferredName, '小屿');
+  assert.equal(memory.l1.currentProject, '制作夜景摄影集');
+  assert.equal(memory.l1.roundCount, vectorTurns.length);
+  const entry = memory.l2.find(item => item.slug === '河边拍星轨');
+  assert.equal(entry?.sourceQuote, vectorTurns[5]);
+  assert.equal(entry?.sourceConversationId, session.id);
+  assert.deepEqual(entry?.sourceMessageIds, [`user:v1:${turnIds[5]}:r1`]);
+  assert.deepEqual(memory.profileSources['L0.preferredName'].sources, [{ conversationId: session.id, messageId: `user:v1:${turnIds[0]}:r1` }]);
+  assert.deepEqual(memory.profileSources['L1.currentProject'].sources, [{ conversationId: session.id, messageId: `user:v1:${turnIds[1]}:r1` }]);
+  assert.equal(vectorRequests.length, 1);
+  assert.ok(!logs.some(line => String(line).includes('Fixture error:')), 'fixture assertions must all pass');
+  console.log(`Vector store: L2 ${entry.syncStatus}; isolated memory: ${memoryPath}`);
+}
+
 try {
   await new Promise(resolve => provider.listen(0, '127.0.0.1', resolve));
   await mkdir(path.join(dataDir, 'cyrene-chats', 'sessions'), { recursive: true });
   await mkdir(path.join(dataDir, 'transcripts', sessionId), { recursive: true });
-  await writeFile(path.join(dataDir, 'web-data.json'), JSON.stringify({ version: 1, sessions: [], settings: {
-    general: { proactiveChatMode: 'off', chatToolsEnabled: false }, config: { memoryMode: 'wiki', runtimeSync: 'off' },
-    modelProfiles: [{ id: 'memory-profile', provider: 'ChatGPT（OpenAI）', displayName: 'Local memory acceptance',
-      apiKey: 'local-memory-fixture-key', baseUrl: `http://127.0.0.1:${provider.address().port}/v1`, explicitTransport: 'responses', model, models: [model] }], defaultModelProfileId: 'memory-profile',
-  } }));
+  await writeFile(path.join(dataDir, 'web-data.json'), JSON.stringify(fixtureSettings('wiki')));
   await writeFile(path.join(dataDir, 'cyrene-chats', 'sessions', `${sessionId}.json`), JSON.stringify({ schemaVersion: 1, id: sessionId, title: 'Wiki background failure acceptance',
     mode: 'chat', createdAt: 1, updatedAt: 2, modelProfileId: 'memory-profile', model, messages: [] }));
   const entries = [
@@ -240,12 +361,13 @@ try {
     assert.ok((await invoke('chats:get', sessionId)).messages.some(message => message.content === userText));
     assert.ok(!logs.some(line => String(line).includes('Fixture error:')), 'fixture assertions must all pass');
   });
+  await check('Six successful Web Chat turns persist source-backed L0/L1/L2 with social context enabled', verifyVectorMemory);
   const report = path.join(dataDir, 'verification-results.json');
-  await writeFile(report, JSON.stringify({ at: new Date().toISOString(), results, requests, ignoredRequests }, null, 2));
+  await writeFile(report, JSON.stringify({ at: new Date().toISOString(), results, requests, ignoredRequests, vectorRequests, vectorDataDir }, null, 2));
   console.log(`ALL PASSED ${results.length} checks; isolated evidence: ${report}`);
 } catch (error) {
   console.error('FAIL', error); console.error('Recent isolated core logs:', logs.slice(-16).join('\n'));
-  console.error('Isolated data:', dataDir); process.exitCode = 1;
+  console.error('Isolated data:', dataDir, vectorDataDir ?? ''); process.exitCode = 1;
 } finally {
   try { await close(); } finally {
     await new Promise(resolve => provider.close(resolve)); clearTimeout(watchdog);

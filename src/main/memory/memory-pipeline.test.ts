@@ -43,12 +43,8 @@ afterEach(async () => {
   fs.rmSync(state.root, { recursive: true, force: true })
 })
 
-it("passes completion through the real scheduler, worker and memory writer while rejecting a superseded judge result", async () => {
-  const { onAgentRunFinished } = await import("../orchestrator/build-options")
-  const { scheduleMemoryWrite } = await import("../orchestrator/context-builder")
-  const { getConversationDatabase } = await import("../storage/conversation-database-client")
-  const client = getConversationDatabase(state.root)
-  const deps: OnRunFinishedDeps = {
+function createFinishedDeps(scheduleMemoryWrite: OnRunFinishedDeps["scheduleMemoryWrite"]): OnRunFinishedDeps {
+  return {
     loadModelSettings: () => ({ provider: "fixture", baseUrl: "", model: "", apiKey: "", memoryMode: "vector", runtimeSync: "off" }),
     scheduleMemoryWrite,
     inferRuntimeState: () => ({}),
@@ -62,6 +58,87 @@ it("passes completion through the real scheduler, worker and memory writer while
     observeRuntimeState: async () => {},
     recordRelationshipTurn: async () => {},
   }
+}
+
+it("writes all three vector memory layers after six canonical private chat turns with social context", async () => {
+  const { onAgentRunFinished } = await import("../orchestrator/build-options")
+  const { scheduleMemoryWrite } = await import("../orchestrator/context-builder")
+  const { getConversationDatabase } = await import("../storage/conversation-database-client")
+  const { createTranscriptSink } = await import("../orchestrator/transcript-sink")
+  const { ConversationTranscriptStore } = await import("../orchestrator/conversation-transcript-store")
+  const { formatMemoryOverview } = await import("../orchestrator/tools/registry/tool-registry")
+  const { memoryStore } = await import("./memory-store")
+  const client = getConversationDatabase(state.root)
+  const { id: conversationId } = await client.call<{ id: string }>("chats.createSession", { mode: "chat" })
+  const transcript = new ConversationTranscriptStore(state.root)
+  const scheduleSocialAtomExtraction = vi.fn()
+  const deps = { ...createFinishedDeps(scheduleMemoryWrite), scheduleSocialAtomExtraction }
+  const userTexts = [
+    "平时请叫我小屿。",
+    "我最近在做一套夜景摄影集。",
+    "今晚有点凉。",
+    "这会儿喝杯茶。",
+    "明天再聊。",
+    "上周我在河边拍到了第一张星轨照片。",
+  ]
+  state.judge.mockResolvedValue({ entities: [], candidates: [
+    { layer: "L0", field: "preferredName", content: "小屿", confidence: 0.99,
+      triggerText: userTexts[0], certainty: "explicit", attribution: "user_explicit", shouldWrite: true },
+    { layer: "L1", field: "currentProject", content: "制作夜景摄影集", confidence: 0.95,
+      triggerText: userTexts[1], certainty: "explicit", attribution: "user_explicit", shouldWrite: true },
+    { layer: "L2", slug: "河边拍星轨", content: "上周在河边拍到第一张星轨照片", confidence: 0.95,
+      sourceQuote: userTexts[5], triggerText: userTexts[5], certainty: "explicit", attribution: "user_explicit", shouldWrite: true },
+  ] })
+
+  for (const [index, userText] of userTexts.entries()) {
+    const userTurnId = `user-${index}`
+    const assistantTurnId = `assistant-${index}`
+    const runId = `run-${index}`
+    const reply = `回复 ${index + 1}`
+    await client.call("runs.admit", conversationId, userTurnId,
+      { currentUser: { turnId: userTurnId, text: userText, visibleContent: userText } }, runId)
+    const sink = createTranscriptSink({ store: transcript, conversationId, runId, assistantTurnId })
+    const assistantEntryId = await sink.appendAssistant({ message: { role: "assistant", content: reply }, roundId: "final" })
+    await client.call("runs.terminal", runId, "completed")
+    await onAgentRunFinished({ reply, toolResults: [], executionMode: "chat",
+      socialContext: { enabled: true, conversationId, userTurnId, assistantTurnId, retrievedAtoms: [], now: Date.now() },
+    }, userText, deps, undefined, conversationId, {
+      mode: "chat", source: "desktop", runId, userTurnId, assistantEntryId, privateRelationshipContext: true,
+      vectorMemorySource: { userTurnId, assistantEntryId },
+    })
+  }
+  await state.queue
+
+  expect(scheduleSocialAtomExtraction).toHaveBeenCalledTimes(6)
+  expect(await client.call("memory.count")).toBe(6)
+  expect(state.judge).toHaveBeenCalledExactlyOnceWith(userTexts.map((userInput, index) => ({
+    userInput, assistantReply: `回复 ${index + 1}`,
+  })), conversationId)
+  expect(await client.call("memory.batch", conversationId)).toBeNull()
+
+  const stored = JSON.parse(fs.readFileSync(path.join(state.root, "memory.json"), "utf8"))
+  expect(stored).toMatchObject({
+    l0: { preferredName: "小屿" },
+    l1: { currentProject: "制作夜景摄影集", roundCount: 6 },
+    l2: [{ slug: "河边拍星轨", sourceConversationId: conversationId, sourceMessageIds: ["user:v1:user-5:r1"] }],
+  })
+  const l0 = await memoryStore.getL0()
+  const l1 = await memoryStore.getL1()
+  const l2 = await memoryStore.getAllL2()
+  const overview = formatMemoryOverview({ ...l0 }, { ...l1 }, l2.map(row => ({ ...row, title: row.slug ?? row.content })))
+  expect(overview).toContain("称呼: 小屿")
+  expect(overview).toContain("当前项目: 制作夜景摄影集")
+  expect(overview).toContain("对话记忆（L2，共 1 条")
+  expect(overview).toContain("河边拍星轨")
+  expect(l2[0].sourceQuote).toBe(userTexts[5])
+})
+
+it("passes completion through the real scheduler, worker and memory writer while rejecting a superseded judge result", async () => {
+  const { onAgentRunFinished } = await import("../orchestrator/build-options")
+  const { scheduleMemoryWrite } = await import("../orchestrator/context-builder")
+  const { getConversationDatabase } = await import("../storage/conversation-database-client")
+  const client = getConversationDatabase(state.root)
+  const deps = createFinishedDeps(scheduleMemoryWrite)
   let releaseJudge!: (result: MemoryJudgeResult) => void
   state.judge.mockImplementationOnce(() => new Promise(resolve => { releaseJudge = resolve }))
   state.judge.mockResolvedValue({ candidates: [{ layer: "L2", content: "current", triggerText: "U6", confidence: 0.9 }], entities: [] } as MemoryJudgeResult)
@@ -99,20 +176,7 @@ it.each(["unchanged", "regenerate", "edit", "delete"])("keeps run ownership thro
   const { ConversationTranscriptStore } = await import("../orchestrator/conversation-transcript-store")
   const client = getConversationDatabase(state.root)
   const session = await client.call<{id:string}>("chats.createSession", { mode: "work" })
-  const deps: OnRunFinishedDeps = {
-    loadModelSettings: () => ({ provider: "fixture", baseUrl: "", model: "", apiKey: "", memoryMode: "vector", runtimeSync: "off" }),
-    scheduleMemoryWrite,
-    inferRuntimeState: () => ({}),
-    runtimeState: { status: "", feeling: "", expression: 0, updatedAt: 0 },
-    feelingToExpression: {},
-    setRuntimeState: () => {},
-    stickerTextIndex: [],
-    matchSticker: () => null,
-    loadStickerSettings: () => ({}),
-    broadcastRuntimeStateChanged: () => {},
-    observeRuntimeState: async () => {},
-    recordRelationshipTurn: async () => {},
-  }
+  const deps = createFinishedDeps(scheduleMemoryWrite)
 
   let release: ((result: MemoryJudgeResult) => void) | undefined
   state.judge.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))

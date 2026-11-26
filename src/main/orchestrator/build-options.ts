@@ -1424,7 +1424,9 @@ export async function onAgentRunFinished(
       userText: sideEffectUserText,
       assistantText: chatContent,
     });
-  } else if (memoryMode === "vector" && !socialContext) {
+  } else if (memoryMode === "vector") {
+    // Social atoms serve the enhanced chat context. The selected memory mode
+    // still governs the durable profile and episode stores.
     await deps.scheduleMemoryWrite(sideEffectUserText, chatContent, conversationId,
       finishedContext?.vectorMemorySource);
   }
