@@ -57,9 +57,13 @@ vi.mock("./proactive-trigger", async original => {
 import { createProactiveLifecycle } from "./proactive-lifecycle";
 import { InitiativeOpportunityStore } from "./initiative-opportunities";
 import { relatedConversationOpportunity } from "./world-initiative";
+import { normalizePluginObservation } from "./plugin-observation";
+import { buildCapabilityTextParts } from "../channels/capability-text";
 
 const NOW = Date.UTC(2026, 10, 17, 2);
 const minute = 60_000;
+const appendAssistant = vi.fn(async () => "assistant-fixture");
+const appendPresentationNext = vi.fn(async () => undefined);
 let lifecycle: ProactiveLifecycle;
 let random: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
@@ -85,7 +89,11 @@ function setup(patch: Partial<GeneralSettings> = {}) {
   const settings = { proactiveChatMode: "on", proactiveDeliveryTarget: "local", proactiveDailyLimit: 20,
     proactiveDensity: "active", proactiveTargetScore: 60, ...patch } as GeneralSettings;
   lifecycle = createProactiveLifecycle({ loadGeneralSettings: () => settings,
-    conversationJournal: { readProjection: async (id: string) => ({ messages: id === "bound" ? mocks.history : [] }) } as unknown as ConversationJournalService });
+    conversationJournal: {
+      readProjection: async (id: string) => ({ messages: id === "bound" ? mocks.history : [] }),
+      createRunSink: () => ({ appendAssistant }),
+      appendPresentationNext,
+    } as unknown as ConversationJournalService });
   lifecycle.initializeProactiveChatService(); lifecycle.initializeProactiveTrigger();
   return settings;
 }
@@ -101,6 +109,81 @@ function entries(): InitiativeOpportunity[] {
   return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")).entries : [];
 }
 async function tick(now: number) { vi.setSystemTime(now); await mocks.controller.evaluateNow("integration"); }
+
+describe("Bilibili video shares in the shared lifecycle", () => {
+  const bvid = "BV1TqCMBGExu";
+  const run = "4f823177-8290-459e-a6e7-b6307f872adb";
+  const source = "https://www.bilibili.com/video/" + bvid;
+  const title = "一段字幕剪辑";
+  const summary = "剪辑把字幕从一行拆成两行。";
+  const clip = { text: "这句停一下再出下一行。", from: 30 };
+
+  it.each(["current", "legacy"] as const)("composes and persists the canonical link for a %s queued video", async mode => {
+    random.mockReturnValue(0.99);
+    setup({ companionPluginSharingEnabled: true });
+    if (mode === "legacy") {
+      lifecycle.enqueueCompanionMoment({ id: "plugin:bili-garden:" + run + ":" + bvid, kind: "share", source: "plugin",
+        pluginId: "bili-garden", occurredAt: NOW, summary: [title, summary, source].join("\n") });
+    } else {
+      const moment = normalizePluginObservation("bili-garden", "interesting-item", { eventId: run + ":" + bvid, occurredAt: NOW, bvid, title, summary, clip });
+      expect(moment).not.toBeNull();
+      lifecycle.enqueueCompanionMoment(moment!);
+    }
+    const plan = "聊聊字幕那处停顿，原片链接还没核实";
+    const prose = "它卡着停顿才弹出下一行字幕，有点俏皮♪";
+    mocks.runModel
+      .mockResolvedValueOnce({ kind: "send", text: plan })
+      .mockResolvedValueOnce({ kind: "send", text: prose + "，原片链接还没核实。" });
+    for (let minuteIndex = 0; minuteIndex <= 5 && mocks.runModel.mock.calls.length < 2; minuteIndex++) {
+      await tick(NOW + minuteIndex * minute);
+    }
+    expect(mocks.runModel).toHaveBeenCalledTimes(2);
+    for (const [call] of mocks.runModel.mock.calls) {
+      const messages = JSON.stringify(call.messages);
+      expect(messages).toContain(source);
+      expect(messages).toContain(summary);
+      expect(messages).not.toContain("链接还没核实");
+      if (mode === "current") expect(messages).toContain(clip.text);
+    }
+    const sent = prose + "\n\n" + source;
+    expect(appendAssistant).toHaveBeenCalledOnce();
+    expect(appendAssistant).toHaveBeenCalledWith({ message: { role: "assistant", content: sent }, roundId: "proactive" });
+    expect(appendPresentationNext.mock.calls[0]).toContainEqual(expect.objectContaining({ content: sent }));
+    expect(buildCapabilityTextParts(sent, 2048, "natural")).toEqual([
+      { kind: "text", text: prose }, { kind: "text", text: source },
+    ]);
+  });
+
+  it("does not compose or send a source link when the planning model drops the video", async () => {
+    random.mockReturnValue(0.99);
+    setup({ companionPluginSharingEnabled: true });
+    lifecycle.enqueueCompanionMoment(normalizePluginObservation("bili-garden", "interesting-item", {
+      eventId: run + ":" + bvid, occurredAt: NOW, bvid, title, summary,
+    })!);
+    mocks.runModel.mockResolvedValueOnce({ kind: "drop" });
+    for (let minuteIndex = 0; minuteIndex <= 5 && !mocks.runModel.mock.calls.length; minuteIndex++) {
+      await tick(NOW + minuteIndex * minute);
+    }
+    expect(mocks.runModel).toHaveBeenCalledOnce();
+    expect(appendAssistant).not.toHaveBeenCalled();
+  });
+
+  it("does not send a bare source link when the composer returns only a link disclaimer", async () => {
+    random.mockReturnValue(0.99);
+    setup({ companionPluginSharingEnabled: true });
+    lifecycle.enqueueCompanionMoment(normalizePluginObservation("bili-garden", "interesting-item", {
+      eventId: run + ":" + bvid, occurredAt: NOW, bvid, title, summary,
+    })!);
+    mocks.runModel
+      .mockResolvedValueOnce({ kind: "send", text: "聊聊字幕那处停顿" })
+      .mockResolvedValueOnce({ kind: "send", text: "原片链接还没核实。" });
+    for (let minuteIndex = 0; minuteIndex <= 5 && mocks.runModel.mock.calls.length < 2; minuteIndex++) {
+      await tick(NOW + minuteIndex * minute);
+    }
+    expect(mocks.runModel).toHaveBeenCalledTimes(2);
+    expect(appendAssistant).not.toHaveBeenCalled();
+  });
+});
 
 describe("world initiative in the shared lifecycle", () => {
   const boundChannel = () => ({ available: true, recipient: { conversationId: "bound", sessionId: "channel:wechat:fixture", targetId: "fixture", updatedAt: NOW } });

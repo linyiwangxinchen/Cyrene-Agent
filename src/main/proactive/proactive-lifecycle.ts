@@ -1,6 +1,7 @@
 import { canAskAboutRecentWellbeing, relationshipOpportunities, standaloneCareOpportunity, standaloneCareWindowDate, STANDALONE_CARE_SCENE, userCareOpportunity } from "./relationship-opportunities";
 import { followupIdFromScene, followupOpportunities } from "./followup-opportunities";
 import { createCompanionLifeStore, type CompanionDeliveryReviewStatus, type CompanionLifeObservationKind, type CompanionLifeStore, type CompanionMoment } from "./companion-life";
+import { bilibiliShareProse, bilibiliVideoSource, type BilibiliVideoEvidence } from "./bilibili-share";
 import { withConversationRun } from "../orchestrator/conversation-run-guard";
 import { buildPersonaContractPrompt } from "../persona/persona-spec";
 import { buildRelationshipContext, getRelationshipStore, recordCompanionEvent } from "../relationship/relationship-log";
@@ -126,7 +127,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
   let generationShares: {
     history: ProactiveHistoryTurn[]; ordinary: ProactiveHistoryTurn[]; worldShare: boolean; careStale?: boolean;
     /** Material for the compose step, frozen with the decision prompt. */
-    compose?: { persona: string; personMemory: string; history: ProactiveHistoryTurn[]; timezone: string; replyBurden?: ProactiveCandidate["replyBurden"] };
+    compose?: { persona: string; personMemory: string; history: ProactiveHistoryTurn[]; timezone: string; replyBurden?: ProactiveCandidate["replyBurden"]; bilibiliVideo?: BilibiliVideoEvidence };
     /** 主动自拍：先生成图片，再写配文。 */
     selfie?: { scene: string; conversationId: string };
   } = { history: [], ordinary: [], worldShare: false };
@@ -358,6 +359,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       history: [...histories.ordinary, ...histories.proactive],
       timezone: snapshot.timezone,
       replyBurden: candidate.replyBurden,
+      bilibiliVideo: moment?.bilibiliVideo,
     };
     if (initiative?.source === SELFIE_SOURCE) {
       const life = currentLifeSnapshot(snapshot.now);
@@ -394,6 +396,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
       replyBurden: candidate.replyBurden,
       timezone: snapshot.timezone,
       careContext,
+      bilibiliVideo: moment?.bilibiliVideo,
       ...((moment?.summary ?? candidate.momentSummary) ? { momentContext: moment?.summary ?? candidate.momentSummary } : {}),
     });
   }
@@ -661,6 +664,9 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
         const decision = await runProactiveModel({ settings: vendorSettings, messages, timeoutMs: 45_000 });
         const compose = generationShares.compose;
         if (decision.kind !== "send" || !compose) return decision;
+        const video = compose.bilibiliVideo;
+        const plan = video ? bilibiliShareProse(decision.text) : decision.text;
+        if (!plan) return { kind: "drop" };
         const selfie = generationShares.selfie;
         let attachments: import("../../shared/generated-image").GeneratedImageAttachment[] | undefined;
         if (selfie) {
@@ -689,18 +695,22 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           settings: vendorSettings,
           messages: buildProactiveComposeMessages({
             persona: compose.persona, personMemory: compose.personMemory, history: compose.history,
-            plan: selfie ? `${decision.text}\n${SELFIE_CAPTION_NOTE}` : decision.text,
+            plan: selfie ? `${plan}\n${SELFIE_CAPTION_NOTE}` : plan,
             localNow: new Date(), timezone: compose.timezone, replyBurden: compose.replyBurden,
+            bilibiliVideo: compose.bilibiliVideo,
           }),
           timeoutMs: 45_000,
           parse: "message",
         });
         if (result.kind === "invalid") return { kind: "error", reason: `compose_${result.reason}` };
-        if (result.kind === "send" && (repeatsRecentProactiveMessage(result.text, generationShares.history, Date.now(), generationShares.worldShare)
-          || restatesRecentReply(result.text, generationShares.ordinary, Date.now()))) {
+        if (result.kind !== "send") return result;
+        const prose = video ? bilibiliShareProse(result.text) : result.text;
+        if (!prose || repeatsRecentProactiveMessage(prose, generationShares.history, Date.now(), generationShares.worldShare)
+          || restatesRecentReply(prose, generationShares.ordinary, Date.now())) {
           return { kind: "drop" };
         }
-        return result.kind === "send" && attachments ? { ...result, attachments } : result;
+        const text = video ? prose + "\n\n" + bilibiliVideoSource(video) : prose;
+        return { ...result, text, ...(attachments ? { attachments } : {}) };
       },
       // Model failure is fail-closed: the proactive service cancels this
       // attempt instead of sending a generic canned message.

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { CompanionEvent } from "../../shared/companion-events";
+import { bilibiliMomentEvidence, type BilibiliVideoEvidence } from "./bilibili-share";
 
 export type CompanionMomentKind = "share" | "ask" | "checkin" | "joke" | "followup";
 export type CompanionMomentStatus = "pending" | "consumed" | "dismissed" | "delivery_partial" | "delivery_unknown";
@@ -47,6 +48,7 @@ export interface CompanionMoment {
   occurredAt: number;
   conversationId?: string;
   pluginId?: string;
+  bilibiliVideo?: BilibiliVideoEvidence;
   status: CompanionMomentStatus;
   /** Set when a channel accepted only part of the message or could not confirm it. */
   deliveryStatus?: "failed" | "unknown";
@@ -125,8 +127,9 @@ function normalize(value: unknown): CompanionLifeData {
     && (item as CompanionMoment).summary.length <= 1000
     && Number.isFinite((item as CompanionMoment).occurredAt)
     && ["pending", "consumed", "dismissed", "delivery_partial", "delivery_unknown"].includes((item as CompanionMoment).status),
-  )).map((item) => ({
+  )).map(({ bilibiliVideo, ...item }) => ({
     ...item,
+    bilibiliVideo: bilibiliMomentEvidence({ ...item, bilibiliVideo }),
     ...(typeof item.deliveryStatus === "string" && ["failed", "unknown"].includes(item.deliveryStatus) ? { deliveryStatus: item.deliveryStatus } : {}),
     ...(typeof item.deliveryError === "string" ? { deliveryError: item.deliveryError.slice(0, 300) } : {}),
     ...(typeof item.deliveryReviewedAt === "number" && Number.isFinite(item.deliveryReviewedAt) ? { deliveryReviewedAt: item.deliveryReviewedAt } : {}),

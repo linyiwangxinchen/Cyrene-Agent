@@ -199,6 +199,8 @@ export class GardenService {
                 bvid: item.bvid,
                 title: item.title,
                 summary: item.summary,
+                reason: item.reason,
+                clip: item.citations?.[0] ? { text: item.citations[0].text, from: item.citations[0].from } : undefined,
                 say: report.say,
                 url: `https://www.bilibili.com/video/${item.bvid}`,
               });
