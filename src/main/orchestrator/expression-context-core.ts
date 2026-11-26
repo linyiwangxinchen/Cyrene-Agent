@@ -1,4 +1,6 @@
 import type { RelationshipChannel } from "../relationship/relationship-log-core";
+import { isDirectCompanionWording, stripCompanionQuotedBlocks } from "../relationship/companion-learning";
+import type { CompanionReplyMode } from "../../shared/companion";
 
 export const PRIVATE_CHAT_EXPRESSION = `【私聊怎么说】
 先接对方最后一句的具体意思。简单的话一句回完，有问题就直接答。对方只是吐槽，就顺着那件事聊，需要建议时再给。用户明说想怎么聊，或为本轮选了回应方式，就照这个心意来。
@@ -10,30 +12,90 @@ export const PRIVATE_CHAT_EXPRESSION = `【私聊怎么说】
 角色台词和历史回复只作参考，不照搬里面的句式、比喻和结尾。`;
 
 const OPENER_LENGTH = 6;
+const RECENT_SPEAKING_TURNS = 8;
+
+type SpeakingMessage = { role: string; content?: unknown; visibility?: string; toolCalls?: readonly unknown[] };
 
 function opener(text: string): string {
   const firstClause = text.trim().split(/[，。！？!?,\n]/u)[0] ?? "";
-  return firstClause.slice(0, OPENER_LENGTH);
+  return [...firstClause].slice(0, OPENER_LENGTH).join("");
 }
 
-/**
- * Long chats teach the model its own template ("喵～人家在呢，雯雯♪" three times).
- * Show the recent openings so this reply takes a different shape.
- */
-export function buildRecentPhrasingHint(messages: ReadonlyArray<{ role: string; content?: unknown }>, nickname?: string): string {
-  const recent = messages
-    .filter((message) => message.role === "assistant" || message.role === "model")
-    .map((message) => typeof message.content === "string" ? message.content.trim() : "")
-    .filter(Boolean)
-    .slice(-8);
-  if (recent.length < 3) return "";
-  const openers = [...new Set(recent.map(opener).filter((item) => item.length >= 2))];
-  const lines = ["【你最近几条的说法】", `最近几条是这样开头的：${openers.map((item) => `「${item}」`).join("")}。这次换个开头和句子形状，不要重复它们。`];
+function recentCompletedReplies(messages: readonly SpeakingMessage[]): string[] {
+  const replies: string[] = [];
+  let pendingUser = false;
+  for (const message of messages.slice(-64)) {
+    if (message.visibility === "internal" || typeof message.content !== "string") continue;
+    const text = message.content.trim();
+    if (!text) continue;
+    if (message.role === "user") pendingUser = true;
+    else if (pendingUser && !message.toolCalls?.length && (message.role === "assistant" || message.role === "model")) {
+      replies.push(text);
+      pendingUser = false;
+    }
+  }
+  return replies.slice(-RECENT_SPEAKING_TURNS);
+}
+
+function phrasingHint(recent: readonly string[], nickname?: string): string {
+  const openers = recent.map(opener).filter(item => item.length >= 2 && !/[<>\[\]`\s]/u.test(item));
+  const repeated = [...new Set(openers.filter((item, index) => openers.indexOf(item) < index))].slice(-3);
+  const lines: string[] = [];
+  if (repeated.length) lines.push(`最近重复过${repeated.map(item => `「${item}」`).join("、")}这样的开头。这次直接从眼前的话题说起。`);
   const lastFour = recent.slice(-4);
   if (lastFour.filter((text) => text.includes("♪")).length >= 3) lines.push("最近几条几乎都带了「♪」，这次不带。");
   if (nickname && lastFour.filter((text) => text.includes(nickname)).length >= 3) lines.push(`最近几条都喊了「${nickname}」，这次不用喊。`);
   if (lastFour.filter((text) => text.includes("人家")).length >= 3) lines.push("最近几条都自称「人家」，这次用「我」或省掉主语。");
-  return lines.join("\n");
+  return lines.length ? ["【近期用语】", ...lines].join("\n") : "";
+}
+
+export function buildRecentPhrasingHint(messages: readonly SpeakingMessage[], nickname?: string): string {
+  return phrasingHint(recentCompletedReplies(messages), nickname);
+}
+
+function chooseSpeakingAction(text: string, mode?: CompanionReplyMode): string {
+  if (mode) return "先按本轮指定的回应方式，接住对方刚提到的具体话题。";
+  const visible = stripCompanionQuotedBlocks(text).replace(/"[^"\n]*"|“[^”\n]*”|「[^」\n]*」|『[^』\n]*』/gu, " ").trim();
+  if (!isDirectCompanionWording(visible)) return "";
+  if (/^(?:(?:我|那我|那就|好(?:啦|了)?[，, ]*)?(?:先去睡(?:了|啦)?|去睡(?:了|啦)|晚安|先忙去(?:了|啦)?|回头聊|改天聊|先到这[里儿]?)[呀吧哦哈啦～~。！!\s]*)$/u.test(visible)) {
+    return "顺着对方结束这一段，简短道别，把下一次开口留给之后。";
+  }
+  if (/^(?:(?:等等|不对|不是这个意思)[，,。！! ]|(?:我的意思是|我说的是))/u.test(visible)) {
+    return "简短确认刚纠正的地方，随后按新的信息接下去。";
+  }
+  if (/(?:^|[。！？；;，,])\s*(?:这次|这会儿|现在|今天|本轮|先|只|你|请|就)*\s*(?:别|不要|不用)\s*(?:先)?(?:分析(?:原因)?|给(?:我)?建议|追问)(?:了|啦|吧)?(?:[。！？；;，,]|$)/u.test(visible)) {
+    return "先回应具体发生的那件事，给对方留出说话空间。";
+  }
+  if (/(?:我(?:有点|现在|今天|真的|有些|好)?(?:难受|委屈|失落|害怕|心烦)|(?:又|刚)被(?:拒|退)(?:稿)?)/u.test(visible)
+    && !/[？?]|(?:怎么|怎么办|能不能|帮我)/u.test(visible)) {
+    return "先回应眼前的难处，语气放轻。需要时只给一句具体的陪伴。";
+  }
+  if (/(?:[？?]|^(?:请|帮我|能不能|可不可以)|(?:怎么办|怎么做|为什么|是什么|还记得吗)[。！!\s]*$)/u.test(visible)) {
+    return "先答对方在问的事。缺一个关键条件时，再简短问这一点。";
+  }
+  if (/^(?:哈哈+|笑死|好好笑|太搞笑)/u.test(visible)) return "可以从对方刚开的玩笑里挑一个细节接一句，给对方留点接话空间。";
+  return "";
+}
+
+export function buildCompanionSpeakingContext(input: {
+  text: string;
+  messages: readonly SpeakingMessage[];
+  owner: boolean;
+  channel?: RelationshipChannel;
+  mode?: CompanionReplyMode;
+  nickname?: string;
+}): string {
+  const recent = recentCompletedReplies(input.messages);
+  const channel = input.channel === "wechat" ? "微信私聊" : input.channel === "qq" ? "QQ 私聊"
+    : input.channel === "feishu" ? "飞书私聊" : "当前私聊";
+  return [
+    "【说话前的准备】",
+    `身份与关系：以昔涟的身份在${channel}回应。把现有的称呼、关系设定和相处边界用于这轮交流。`,
+    "场景与动作：先看对方此刻在说什么。世界快照只提供昔涟亲历或获知的虚拟场景，需要时挑一个有关的细节。用措辞和停顿表达情绪，动作只描述有当前场景依据的部分。",
+    recent.length ? `对话延续：优先参考本会话最近 ${recent.length} 个已完成轮次和现在这句话。话题有变化时顺着新话题。` : "",
+    `本轮接话：${chooseSpeakingAction(input.text, input.mode) || "顺着现在最具体的事情开口，给对方留出接话空间。"}`,
+    phrasingHint(recent, input.owner ? input.nickname : undefined),
+  ].filter(Boolean).join("\n");
 }
 
 export const SHARED_CHAT_EXPRESSION = "【公开聊天】用日常语气回应当前对话中的人和事。只根据这里明确出现的称呼和话题开口，不沿用私聊里的昵称、相处方式或共同经历。";

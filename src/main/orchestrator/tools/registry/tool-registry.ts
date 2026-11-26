@@ -5,8 +5,8 @@ import { searchMemoryEntries } from "../../../rag/index";
 import type { ToolRiskLevel } from "../../../permission";
 import type { ToolContext } from "./tool-context";
 import type { ConversationMode } from "../../../../shared/chat-types";
-import { getMemoryModeVersion, isVectorMemoryEnabled, isWikiMemoryEnabled } from "../../../memory/memory-mode";
-import { isOwnerMemoryScope } from "../../../memory/memory-scope";
+import { getMemoryModeVersion, isPersonalMemoryEnabled, isVectorMemoryEnabled, isWikiMemoryEnabled } from "../../../memory/memory-mode";
+import { CHAT_HISTORY_TOOL_IDS, isOwnerMemoryScope } from "../../../memory/memory-scope";
 import { canReadWikiMemory } from "../../../memory/wiki-memory-health";
 import { isKnowledgeBaseAvailable } from "../../../knowledge-base/knowledge-base-service";
 
@@ -17,6 +17,7 @@ const KNOWLEDGE_TOOL_IDS = new Set(["knowledge_search", "knowledge_read"]);
 function isToolAvailable(tool: ToolDefinition): boolean {
   return tool.enabled && !tool.deprecated &&
     (isVectorMemoryEnabled() || !MEMORY_TOOL_IDS.has(tool.id)) &&
+    (!CHAT_HISTORY_TOOL_IDS.has(tool.id) || isPersonalMemoryEnabled()) &&
     ((isWikiMemoryEnabled() && canReadWikiMemory()) || !WIKI_TOOL_IDS.has(tool.id)) &&
     (isKnowledgeBaseAvailable() || !KNOWLEDGE_TOOL_IDS.has(tool.id));
 }

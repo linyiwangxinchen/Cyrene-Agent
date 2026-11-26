@@ -519,7 +519,7 @@ export type EnqueuePendingResult = {
   enqueued: boolean;
 } | {
   ok: false;
-  error: "session-not-found" | "empty-content" | "duplicate-id" | "invalid-attachments" | "invalid-companion-reply" | "write-failed";
+  error: "session-not-found" | "empty-content" | "duplicate-id" | "invalid-attachments" | "invalid-companion-reply" | "invalid-conversation-reference" | "write-failed";
 };
 /** 删除结果：removed=false 表示条目本就不在（幂等成功，未写盘）。 */
 export type RemovePendingResult = {
@@ -647,7 +647,7 @@ function normalizePendingAttachment(value: unknown): PendingChatAttachment | nul
   };
 }
 /** 待发条目校验与规范化：内容、附件逐条检查，enqueuedAt 由主进程填当前时间。 */
-function normalizePendingMessage(id: string, entry: PendingChatMessageInput): PendingChatMessage | "empty-content" | "invalid-attachments" | "invalid-companion-reply" {
+function normalizePendingMessage(id: string, entry: PendingChatMessageInput): PendingChatMessage | "empty-content" | "invalid-attachments" | "invalid-companion-reply" | "invalid-conversation-reference" {
   if (typeof id !== "string" || !id.trim())
     return "empty-content";
   if (typeof entry?.rawContent !== "string" || !entry.rawContent.trim())
@@ -656,6 +656,9 @@ function normalizePendingMessage(id: string, entry: PendingChatMessageInput): Pe
   const companionReply = normalizeCompanionReply(entry.companionReply);
   if (entry.companionReply !== undefined && !companionReply)
     return "invalid-companion-reply";
+  const referenceId = entry.conversationReferenceId;
+  if (referenceId !== undefined && (typeof referenceId !== "string" || !referenceId.trim() || referenceId.length > 256))
+    return "invalid-conversation-reference";
   let attachments: PendingChatAttachment[] | undefined;
   if (entry.attachments !== undefined) {
     if (!Array.isArray(entry.attachments))
@@ -677,6 +680,7 @@ function normalizePendingMessage(id: string, entry: PendingChatMessageInput): Pe
     ...(attachments ? { attachments } : {}),
     ...(typeof entry.userSticker === "string" && entry.userSticker.trim() ? { userSticker: entry.userSticker.trim() } : {}),
     ...(companionReply ? { companionReply } : {}),
+    ...(referenceId ? { conversationReferenceId: referenceId } : {}),
     enqueuedAt: Date.now(),
   };
 }
@@ -690,6 +694,8 @@ function pendingEntryEquals(a: PendingChatMessage, b: PendingChatMessage): boole
   if ((a.userSticker ?? "") !== (b.userSticker ?? ""))
     return false;
   if (a.companionReply?.mode !== b.companionReply?.mode || a.companionReply?.correction !== b.companionReply?.correction)
+    return false;
+  if (a.conversationReferenceId !== b.conversationReferenceId)
     return false;
   const aAtt = a.attachments ?? [];
   const bAtt = b.attachments ?? [];
@@ -727,6 +733,11 @@ export function enqueuePendingMessage(sessionId: string, entry: PendingChatMessa
     return pendingEntryEquals(existing, normalized)
       ? { ok: true, queue: queue.map((item) => ({ ...item })), enqueued: false }
       : { ok: false, error: "duplicate-id" };
+  }
+  if (normalized.conversationReferenceId) {
+    const source = readSessionRecordFile(normalized.conversationReferenceId);
+    if (session.mode !== "chat" || session.purpose || source?.mode !== "chat" || source.purpose || source.id === sessionId)
+      return { ok: false, error: "invalid-conversation-reference" };
   }
   const nextQueue: PendingChatMessage[] = [...queue, normalized];
   session.pendingMessages = nextQueue;
@@ -905,6 +916,7 @@ export function claimPendingMessage(sessionId: string, expectedHead?: string): C
       messageId: head.id,
       claimedAt,
       ...(head.companionReply ? { companionReply: head.companionReply } : {}),
+      ...(head.conversationReferenceId ? { conversationReferenceId: head.conversationReferenceId } : {}),
       userMessage: {
         id: head.id,
         at: claimedAt,
@@ -953,6 +965,7 @@ export function claimPendingMessage(sessionId: string, expectedHead?: string): C
     messageId: head.id,
     claimedAt,
     ...(head.companionReply ? { companionReply: head.companionReply } : {}),
+    ...(head.conversationReferenceId ? { conversationReferenceId: head.conversationReferenceId } : {}),
   };
   session.updatedAt = claimedAt;
   if (initializeTitle)
@@ -1115,7 +1128,7 @@ export function markPendingAdjust(sessionId: string, messageId: string, runId: s
     return { ok: true, queue: snapshot() };
   if (target.adjustRunId)
     return { ok: false, error: "already-adjusting", queue: snapshot() };
-  if (target.attachments && target.attachments.length > 0) {
+  if (target.attachments?.length || target.conversationReferenceId) {
     return { ok: false, error: "has-attachments", queue: snapshot() };
   }
   if (target.companionReply) {

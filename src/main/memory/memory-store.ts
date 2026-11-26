@@ -94,6 +94,7 @@ class MemoryStoreManager {
         memoryIds: [...new Set([...(previous?.memoryIds ?? []), ...(store.forgetting?.memoryIds ?? [])])],
         sourceKeys: [...new Set([...(previous?.sourceKeys ?? []), ...(store.forgetting?.sourceKeys ?? [])])],
         factKeys: [...new Set([...(previous?.factKeys ?? []), ...(store.forgetting?.factKeys ?? [])])],
+        derivedSourceKeys: [...new Set([...(previous?.derivedSourceKeys ?? []), ...(store.forgetting?.derivedSourceKeys ?? [])])],
         socialFactKeys: [...new Set([...(previous?.socialFactKeys ?? []), ...(store.forgetting?.socialFactKeys ?? [])])],
         wikiClaimKeys: [...new Set([...(previous?.wikiClaimKeys ?? []), ...(store.forgetting?.wikiClaimKeys ?? [])])],
         profileRecords: [...new Map([...(previous?.profileRecords ?? []), ...(store.forgetting?.profileRecords ?? [])].map(record => [JSON.stringify(record), record])).values()],
@@ -146,6 +147,7 @@ class MemoryStoreManager {
     const forgetting = store.forgetting ??= { memoryIds: [], sourceKeys: [], wikiClaimKeys: [] }
     const key = memoryFactKey(source, content)
     forgetting.factKeys = [...new Set([...(forgetting.factKeys ?? []), key])]
+    forgetting.derivedSourceKeys = [...new Set([...(forgetting.derivedSourceKeys ?? []), memorySourceKey(source)])]
     await this.save(store)
   }
 
@@ -410,6 +412,8 @@ class MemoryStoreManager {
     if (!mem) return null
     if (mem.content === content) return mem
     mem.content = content
+    delete mem.gist
+    delete mem.eventDate
     mem.keywords = extractMemoryKeywords(`${content} ${mem.triggerText}`)
     mem.syncStatus = "pending_sync"
     await this.save(store)

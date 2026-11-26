@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import React, { act, createElement, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type { ComposerAttachment } from "./ChatComposer";
+import type { ConversationReferenceChoice } from "./ConversationReferencePicker";
 
 // 只 mock 与 IPC/资产耦合的子控件，保留 Sender / antd 真实渲染与键盘逻辑
 vi.mock("./ReasoningControl", () => ({ ReasoningControl: () => null }));
@@ -38,6 +39,9 @@ const handlers = {
 };
 
 interface MountOptions {
+  mode?: string;
+  conversationId?: string;
+  allowConversationReference?: boolean;
   waitingToSend?: boolean;
   modelBusy?: boolean;
   attachments?: ComposerAttachment[];
@@ -55,9 +59,13 @@ async function mountComposer(options: MountOptions = {}) {
 
   function Harness() {
     const [value, setValue] = useState("");
+    const [conversationReference, setConversationReference] = useState<ConversationReferenceChoice>();
     return createElement(ChatComposer, {
       value,
-      mode: "chat",
+      mode: options.mode ?? "chat",
+      conversationId: options.conversationId,
+      conversationReference,
+      onConversationReferenceChange: options.allowConversationReference ? setConversationReference : undefined,
       docked: true,
       attachments: options.attachments ?? [],
       modelBusy: options.modelBusy ?? false,
@@ -346,5 +354,52 @@ describe("ChatComposer 队列与附件展示", () => {
     expect(host!.querySelector(".cy-composer__attachment")?.textContent).toContain("report.txt");
     const uploadButton = buttonByLabel(t("composer.uploadFile"));
     expect(uploadButton.disabled).toBe(false);
+  });
+});
+
+describe("ChatComposer 旧会话引用", () => {
+  it("用共享会话列表搜索，选择及移除时保留原消息草稿", async () => {
+    const meta = { identityId: null, mode: "chat", updatedAt: 100, createdAt: 50, messageCount: 2 };
+    const list = vi.fn().mockResolvedValue([
+      { ...meta, id: "current", title: "当前会话" },
+      { ...meta, id: "previous", title: "旧的旅行计划" },
+      { ...meta, id: "another", title: "读过的书", updatedAt: 200 },
+      { ...meta, id: "proactive", title: "主动会话", purpose: "proactive-chat" },
+      { ...meta, id: "work", title: "开发项目", mode: "work" },
+      { ...meta, id: "empty", title: "空白会话", messageCount: 0 },
+    ]);
+    vi.stubGlobal("chatStore", { list });
+    await mountComposer({ conversationId: "current", allowConversationReference: true });
+    input("接着刚才的话题");
+    expect(list).not.toHaveBeenCalled();
+    const opener = host!.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
+    await act(async () => opener.click());
+    expect(list).toHaveBeenCalledWith({ mode: "chat" });
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain(t("composer.conversationReference.hint"));
+    expect([...dialog.querySelectorAll<HTMLButtonElement>(".cy-sidebar-search-dialog__result")]
+      .map((item) => item.querySelector("[title]")?.getAttribute("title"))).toEqual(["读过的书", "旧的旅行计划"]);
+
+    const search = dialog.querySelector<HTMLInputElement>(`input[aria-label="${t("composer.conversationReference.search")}"]`)!;
+    const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    act(() => {
+      setValue.call(search, "旅行");
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const filtered = dialog.querySelectorAll<HTMLButtonElement>(".cy-sidebar-search-dialog__result");
+    expect(filtered).toHaveLength(1);
+    await act(async () => filtered[0].click());
+    expect(opener.getAttribute("aria-expanded")).toBe("false");
+    expect(host!.querySelector(".cy-composer__attachment")?.textContent).toContain("旧的旅行计划");
+    expect(textarea().value).toBe("接着刚才的话题");
+    act(() => buttonByLabel(t("composer.conversationReference.remove", { title: "旧的旅行计划" })).click());
+    expect(host!.querySelector(".cy-composer__attachment")).toBeNull();
+    expect(textarea().value).toBe("接着刚才的话题");
+    expect(handlers.onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("在任务模式中隐藏引用，即使上层传入回调", async () => {
+    await mountComposer({ mode: "work", allowConversationReference: true });
+    expect(host!.textContent).not.toContain(t("composer.conversationReference.label"));
   });
 });

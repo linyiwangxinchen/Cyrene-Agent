@@ -8,6 +8,7 @@ import { assertValidTranscriptDraft, userRevisionKey, type TranscriptAppendInput
 import { validateLoadedTranscriptEntry } from "../orchestrator/conversation-transcript-validation";
 import type { ChatSessionRecord } from "../../shared/chat-types";
 import { ConversationStoreError } from "./conversation-store-error";
+import { migrateConversationHistoryIndex } from "./conversation-history-index-schema";
 export { ConversationStoreError } from "./conversation-store-error";
 /** JSON is the persistence boundary: transient undefined properties do not affect retries. */
 export function persisted<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
@@ -140,6 +141,7 @@ export class ConversationDatabase {
    CREATE INDEX IF NOT EXISTS memory_social_pending ON memory_social_jobs(status, conversation_id);
    INSERT INTO schema_migrations VALUES(10)`));
     }
+    migrateConversationHistoryIndex(this);
     this.transaction(() => {
       const rows = this.db.prepare("SELECT run_id,record_json FROM runs WHERE status IN ('prepared','running')").all();
       for (const row of rows) {

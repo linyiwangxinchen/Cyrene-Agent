@@ -2,8 +2,8 @@ import type { XilianWorldStore } from "../xilian-world/world-store";
 import type { AmphoreusState, NarrativeAttempt } from "../../shared/amphoreus-world";
 import { worldClock } from "./clock";
 import { InvalidNarrative, narrativeMessages, parseDailyPlan, parsePersonalPlans, parseResolutions, resolutionMessages, reviewMessages } from "./narrative";
-import { reviewAccepted } from "./canon-guard";
-import { applyResolutions, modelBudgetUsed } from "./engine";
+import { parseCanonReview } from "./canon-guard";
+import { applyResolutions, modelBudgetUsed, resolutionTargetsUnchanged } from "./engine";
 import type { WorldMessages } from "./prompts";
 import { AMPHOREUS_REQUEST_TIMEOUT_MS } from "../../shared/amphoreus-world";
 import { AgentRuntimeError } from "../orchestrator/agent-runtime-error";
@@ -40,7 +40,7 @@ export function createAmphoreusService(options: AmphoreusServiceOptions) {
       for (const attempt of state.attempts) if (attempt.status === "generating" && attempt.retryAt <= started) { attempt.status = "cancelled"; attempt.error = "interrupted"; attempt.retryAt = 0; changed = true; }
       return changed;
     });
-    let state = options.store.readDataSnapshot().amphoreus;
+    const state = options.store.readDataSnapshot().amphoreus;
     if (!state || stopped || !state.narrativeEnabled || modelBudgetUsed(state, clock.date) >= state.dailyModelBudget) return;
     const due = state.days.flatMap((day) => day.events).filter((event) => event.status === "awaiting_resolution").sort((a, b) => a.endsAt - b.endsAt).slice(0, 6);
     // Every resolution can propose an access change. Keep a review slot before paying
@@ -63,17 +63,17 @@ export function createAmphoreusService(options: AmphoreusServiceOptions) {
       put(world, attempt); claimed = true; return true;
     });
     if (!claimed) return;
-    state = options.store.readDataSnapshot().amphoreus!;
-    const expectedRevision = state.revision;
+    const requestedState = options.store.readDataSnapshot().amphoreus!;
     const requestController = controller = new AbortController();
     let next: NarrativeAttempt = attempt;
-    const valid = () => { const current = worldClock(now(), options.timezone()); return !requestController.signal.aborted && !stopped && current.date === clock.date && current.timezone === clock.timezone; };
+    const valid = (at: number) => { const current = worldClock(at, options.timezone()); return !requestController.signal.aborted && !stopped && current.date === clock.date && current.timezone === clock.timezone; };
     try {
-      const output = await request(purpose === "plan" ? narrativeMessages(state, started, clock.timezone) : resolutionMessages(state, due, started), requestController);
-      if (!valid()) { next = { ...attempt, status: "cancelled", error: "interrupted", retryAt: now() + RETRY_MS }; return; }
-      const plan = purpose === "plan" ? parseDailyPlan(output, clock.date, clock.timezone, now(), state) : undefined;
-      const personalPlans = plan ? parsePersonalPlans(output, state, clock.date, clock.timezone, now(), plan.events) : undefined;
-      const resolutions = purpose === "resolve" ? parseResolutions(output, due, state) : undefined;
+      const output = await request(purpose === "plan" ? narrativeMessages(requestedState, started, clock.timezone) : resolutionMessages(requestedState, due, started), requestController);
+      const parsedAt = now();
+      if (!valid(parsedAt)) { next = { ...attempt, status: "cancelled", error: "interrupted", retryAt: parsedAt + RETRY_MS }; return; }
+      const plan = purpose === "plan" ? parseDailyPlan(output, clock.date, clock.timezone, started, requestedState) : undefined;
+      const resolutions = purpose === "resolve" ? parseResolutions(output, due, requestedState) : undefined;
+      let reviewed: ReturnType<typeof parseCanonReview> | undefined;
       if (resolutions && (due.some((event) => event.severity === "major") || resolutions.some((r) => r.effects.some((effect) => effect.kind === "access")))) {
         const reviewKey = `review:${started}:${attempt.count}`;
         let reviewClaimed = false;
@@ -82,26 +82,35 @@ export function createAmphoreusService(options: AmphoreusServiceOptions) {
           put(world, { ...attempt, key: reviewKey, count: 1 }); reviewClaimed = true; return true;
         });
         if (!reviewClaimed) throw new InvalidNarrative();
-        let accepted = false;
         let reviewFailure: NarrativeAttempt["failure"];
-        try { accepted = reviewAccepted(await request(reviewMessages(resolutions), requestController)); }
-        catch (error) { reviewFailure = narrativeFailure(error); throw error; }
-        finally { options.store.updateAmphoreus((world) => { const review = world.attempts.find((a) => a.key === reviewKey); if (!review) return false; review.status = accepted ? "success" : "failed"; review.error = accepted ? undefined : reviewFailure ? "request_failed" : "invalid_output"; review.failure = reviewFailure; review.retryAt = 0; return true; }); }
-        if (!accepted) throw new InvalidNarrative();
+        try { reviewed = parseCanonReview(await request(reviewMessages(resolutions, due), requestController), due); }
+        catch (error) { if (!(error instanceof InvalidNarrative)) reviewFailure = narrativeFailure(error); throw error; }
+        finally { options.store.updateAmphoreus((world) => { const review = world.attempts.find((a) => a.key === reviewKey); if (!review) return false; review.status = reviewed ? "success" : "failed"; review.error = reviewed ? undefined : reviewFailure ? "request_failed" : "invalid_output"; review.failure = reviewFailure; review.retryAt = 0; return true; }); }
       }
-      if (!valid()) { next = { ...attempt, status: "cancelled", error: "interrupted", retryAt: now() + RETRY_MS }; return; }
+      const commitAt = now();
+      if (!valid(commitAt)) { next = { ...attempt, status: "cancelled", error: "interrupted", retryAt: commitAt + RETRY_MS }; return; }
+      // Time can advance while the provider is busy even with no observation-page reads.
+      options.store.advance({ now: commitAt, timezone: clock.timezone });
       let committed = false;
       options.store.updateAmphoreus((world) => {
         const lease = world.attempts.find((a) => a.key === key);
-        if (!world.narrativeEnabled || lease?.attemptedAt !== started || lease.count !== attempt.count || world.revision !== expectedRevision) return false;
+        if (!world.narrativeEnabled || lease?.attemptedAt !== started || lease.count !== attempt.count || lease.status !== "generating" || world.canonRevision !== requestedState.canonRevision) return false;
         if (plan) {
-          if (world.days.some((day) => day.date === clock.date)) return false;
-          world.days = [...world.days, plan].sort((a, b) => a.date.localeCompare(b.date)); world.revision++;
+          if (world.days.some((day) => day.date >= clock.date)) return false;
+          let latestPlan, personalPlans;
+          try {
+            latestPlan = world.revision === requestedState.revision && commitAt === started ? plan : parseDailyPlan(output, clock.date, clock.timezone, commitAt, world);
+            personalPlans = parsePersonalPlans(output, world, clock.date, clock.timezone, commitAt, latestPlan.events);
+          } catch (error) {
+            if (error instanceof InvalidNarrative) return false;
+            throw error;
+          }
+          world.days = [...world.days, { ...latestPlan, canonRevision: requestedState.canonRevision }].sort((a, b) => a.date.localeCompare(b.date)); world.revision++;
           if (personalPlans !== undefined) {
             world.personalActions = world.personalActions.filter((action) => action.status !== "planned" || action.origin === "user_suggestion" || action.startsAt < started || worldClock(action.startsAt, clock.timezone).date !== clock.date);
             world.personalActions.push(...personalPlans.filter((action) => !world.personalActions.some((existing) => existing.startsAt < action.endsAt && existing.endsAt > action.startsAt && existing.status !== "interrupted")));
           }
-        } else if (!resolutions || !applyResolutions(world, resolutions, now(), expectedRevision)) return false;
+        } else if (!resolutions || !resolutionTargetsUnchanged(requestedState, world, resolutions) || !applyResolutions(world, resolutions, commitAt, world.revision, reviewed)) return false;
         next = { ...attempt, status: "success", retryAt: 0 }; put(world, next); committed = true; return true;
       });
       if (!committed) next = { ...attempt, status: "cancelled", error: "interrupted", retryAt: now() + RETRY_MS };

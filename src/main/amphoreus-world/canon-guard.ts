@@ -1,4 +1,5 @@
 import { AMPHOREUS_FACTS } from "../../shared/amphoreus-canon";
+import type { AmphoreusEvent } from "../../shared/amphoreus-world";
 export class InvalidNarrative extends Error { constructor() { super("invalid_output"); } }
 export class FutureWorldVersion extends Error { constructor() { super("Unsupported Amphoreus world version; existing file preserved"); } }
 export function check(condition: unknown): asserts condition { if (!condition) throw new InvalidNarrative(); }
@@ -20,7 +21,24 @@ export function assertCanonText(value: string): void {
   }
 }
 export function storyText(value: unknown, max: number): string { const text = boundedText(value, max); assertCanonText(text); return text; }
-export function reviewAccepted(output: string): boolean {
+export function reviewFactsForEvent(event: AmphoreusEvent) {
+  const relatedIds = new Set(["history:irontomb", ...event.participants.map((id) => `identity:${id}`)]);
+  return AMPHOREUS_FACTS.filter((fact) => fact.scope === "canon" && relatedIds.has(fact.id));
+}
+export function parseCanonReview(output: string, events: AmphoreusEvent[]): ReadonlyMap<string, string[]> {
   const raw = jsonObject(output);
-  return raw.consistent === true && Array.isArray(raw.factIds) && new Set(raw.factIds).size >= 2 && raw.factIds.every((id) => AMPHOREUS_FACTS.some((fact) => fact.id === id));
+  onlyKeys(raw, ["consistent", "reviews"]);
+  check(raw.consistent === true);
+  const reviews = new Map<string, string[]>();
+  for (const value of list(raw.reviews, events.length, events.length)) {
+    const entry = record(value);
+    onlyKeys(entry, ["eventId", "factIds"]);
+    const event = events.find((candidate) => candidate.id === entry.eventId);
+    check(event && !reviews.has(event.id));
+    const allowed = reviewFactsForEvent(event);
+    const facts = list(entry.factIds, 2, allowed.length).map((id) => boundedText(id, 160));
+    check(new Set(facts).size === facts.length && facts.includes("history:irontomb") && facts.every((id) => allowed.some((fact) => fact.id === id)));
+    reviews.set(event.id, facts);
+  }
+  return reviews;
 }

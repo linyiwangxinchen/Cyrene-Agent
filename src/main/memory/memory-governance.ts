@@ -118,11 +118,14 @@ export function createMemoryGovernance(deps: MemoryGovernanceDependencies) {
           }
           if (command.action === "edit") {
             const target = next.l2.find(item => item.id === command.id)!;
-            const oldFactKeys = candidateSources(memory).map(source => memoryFactKey(source, memory.content));
-            const nextFactKeys = new Set(candidateSources(memory).map(source => memoryFactKey(source, command.content.trim())));
+            const changedSources = candidateSources(memory).filter(source =>
+              memoryFactKey(source, memory.content) !== memoryFactKey(source, command.content.trim()));
             const forgetting = next.forgetting ??= { memoryIds: [], sourceKeys: [], wikiClaimKeys: [] };
-            forgetting.factKeys = [...new Set([...(forgetting.factKeys ?? []), ...oldFactKeys.filter(key => !nextFactKeys.has(key))])];
+            forgetting.factKeys = [...new Set([...(forgetting.factKeys ?? []), ...changedSources.map(source => memoryFactKey(source, memory.content))])];
+            forgetting.derivedSourceKeys = [...new Set([...(forgetting.derivedSourceKeys ?? []), ...changedSources.map(memorySourceKey)])];
             target.content = command.content.trim();
+            delete target.gist;
+            delete target.eventDate;
             target.syncStatus = "pending_sync";
             target.keywords = extractMemoryKeywords(command.content);
             target.status = memory.status;

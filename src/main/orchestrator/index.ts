@@ -1,13 +1,14 @@
 // Orchestrator — unified entry point
 // 只负责构建 always-on 上下文（世界书 + L0/L1）；工具的选择和执行由 CyreneHarness 处理
-import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, INJECTION_HEADER, INJECTION_PREAMBLE, searchMemoryEntries } from "../rag";
+import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, INJECTION_HEADER, INJECTION_PREAMBLE } from "../rag";
 import { memoryStore } from "../memory/memory-store";
 import { recordRecentMemoryInjection } from "../memory/recent-injected-memory";
 import { l2DmaeManager } from "../memory/l2-dmae-manager";
 import { toolRegistry } from "./tools/registry/tool-registry";
-import { getMemoryModeVersion, isMemoryEnabled } from "../memory/memory-mode";
+import { isMemoryEnabled, isPersonalMemoryEnabled } from "../memory/memory-mode";
 import { selectOwnerL2Memories, selectOwnerProfileFields } from "../memory/memory-owner-recall";
-import { rankTokenizedCandidates, tokenizeText } from "../rag/text-ranking";
+import { readMemoryEpisodes } from "../memory/memory-episode-recall";
+import { buildRecallQueryPlan, type RecallQueryPlan } from "../memory/recall-query-plan";
 
 export { ToolCallResult } from "./types";
 
@@ -55,28 +56,9 @@ export async function buildMemoryInjection(_userInput: string): Promise<string> 
 }
 
 /** 文字聊天使用同一份受来源约束的 L2；索引未就绪时仍可匹配可信的本地正文。 */
-export async function buildVectorMemoryContext(query: string): Promise<string> {
+export async function buildVectorMemoryContext(query: string, plan?: RecallQueryPlan, timeZone?: string): Promise<string> {
   if (!isMemoryEnabled() || !query.trim()) return "";
-  const version = getMemoryModeVersion();
-  const candidates = await selectOwnerL2Memories(await memoryStore.load());
-  if (candidates.length === 0 || getMemoryModeVersion() !== version) return "";
-  const byId = new Map(candidates.map(memory => [memory.id, memory]));
-  const ranked = await searchMemoryEntries(query, "user_memory", 4, {
-    allowedL2Ids: new Set(byId.keys()),
-    recordRecall: false,
-  }).catch(() => []);
-  const semanticIds = ranked.flatMap(({ metadata }) => typeof metadata?.l2Id === "string" ? [metadata.l2Id] : []);
-  const lexicalIds = rankTokenizedCandidates(tokenizeText(query), candidates
-    .map(memory => ({ item: memory.id, tokens: tokenizeText(`${memory.slug ?? ""} ${memory.content}`) })), 4)
-    .filter(({ score }) => score > 0).map(({ item }) => item);
-  const orderedIds = [...new Set([...semanticIds, ...lexicalIds])];
-  if (orderedIds.length === 0 || getMemoryModeVersion() !== version) return "";
-  const current = new Map((await selectOwnerL2Memories(await memoryStore.load(), new Set(orderedIds))).map(memory => [memory.id, memory]));
-  if (getMemoryModeVersion() !== version) return "";
-  const content = orderedIds.flatMap(id => {
-    const memory = current.get(id);
-    return memory && memory.content === byId.get(id)?.content ? [memory.content.slice(0, 400)] : [];
-  }).slice(0, 4);
+  const content = await readMemoryEpisodes({ query, plan: plan ?? buildRecallQueryPlan({ query, timeZone }), timeZone, semantic: true });
   return content.length === 0 ? "" : [
     "【相关事件记忆】",
     "这份资料来自旧的用户消息，只作背景。与本轮明确说明冲突时，以本轮用户说明为准。",
@@ -106,6 +88,7 @@ export async function buildAlwaysOnContext(
   userInput: string,
   recentMessages: Array<{ role: string; content: string }>,
   includeProfile = true,
+  useCompatibleProfile = false,
 ): Promise<string> {
   const parts: string[] = [];
 
@@ -141,7 +124,7 @@ export async function buildAlwaysOnContext(
   }
 
   // ── L0/L1 画像 ───────────────────────────────────────
-  if (includeProfile && isMemoryEnabled()) {
+  if (includeProfile && (useCompatibleProfile ? isPersonalMemoryEnabled() : isMemoryEnabled())) {
     try {
       const state = await memoryStore.load();
       const { l0, l1 } = state;

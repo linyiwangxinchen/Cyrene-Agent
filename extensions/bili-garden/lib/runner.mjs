@@ -235,7 +235,7 @@ export class GardenRunner {
           return result;
         },
       ),
-      ...(cfg.learnExpressions && run.kind !== "guard" ? [tool("learn_expression", "从已读视频字幕或评论选一句有特色的原话，说明在什么具体场景使用。", { bvid: str("BV号"), quote: str("逐字引用"), scene: str("具体语境"), cue: str("可迁移的接话场景，如庆祝、惊讶、接梗、鼓励"), delivery: str("一句话概括怎样接话，让昔涟可以用自己的话表达"), commentId: str("评论 ID（可选）") }, ["bvid","quote","scene"], async a => {
+      ...(cfg.learnExpressions && run.kind !== "guard" ? [tool("learn_expression", "从已读字幕、转写或评论中选一段真实日常口语，学习人怎样回应上一句。优先看顺着细节接话、赞同或保留意见、停顿与收尾，略过口号、旁白和单独的热梗。", { bvid: str("BV号"), quote: str("逐字引用"), scene: str("他们正在谈什么，这句为什么适合当时的场景"), cue: str("可迁移的接话场景，如庆祝、惊讶、接梗、鼓励"), style: str("选一种接话方式：acknowledge 承接进展或感受，detail 接一个细节，playful 接玩笑，reassure 打气，pacing 短答或自然收尾，surprise 对具体意外表示好奇"), delivery: str("一句话概括怎样接话，让昔涟可以用自己的话表达"), commentId: str("评论 ID（可选）") }, ["bvid","quote","scene"], async a => {
         if (!this.config().learnExpressions) throw new Error("表达学习已关闭");
         const bvid = videoId(a.bvid);
         const quote = String(a.quote ?? "").trim();
@@ -351,7 +351,7 @@ export class GardenRunner {
         ? `请陪我理解 ${videoId(input.bvid)}。问题：${String(input.question).slice(0, 2000)}。读取字幕并用 answer_question 保存有证据的回答。`
         : run.kind === "guard"
           ? "请按待回复清单守护评论区。先尝试读相关视频，简短自然地回复，说明自己是昔涟。对 @ 邀请即使没有字幕，也要就原评论本身回应，或说明暂时无法读取视频并请对方补充；不能编造视频内容，也不要因此直接交空报告。只提出对清单原评论的 reply，不发新楼或私信。结束用 finish_report 保存 items=[] 和处理小结。"
-          : `去 B 站小花园看看，最多挑 ${quota} 条值得和我分享的视频。${input.bvid ? "本轮指定 " + videoId(input.bvid) + "；允许重新阅读。" : "优先处理待看清单，再按关注关键词搜索，跳过已读与不感兴趣的视频。"}读到内容再判断。${cfg.learnExpressions ? '可读评论，遇到值得学的短句用 learn_expression 记录。' : ''}最后调用 finish_report，写一段昔涟的手记。没有合适内容可交空 items 并说明原因。`;
+          : `去 B 站小花园看看，最多挑 ${quota} 条值得和我分享的视频。${input.bvid ? "本轮指定 " + videoId(input.bvid) + "；允许重新阅读。" : "优先处理待看清单，再按关注关键词搜索，跳过已读与不感兴趣的视频。"}读到内容再判断。${cfg.learnExpressions ? '从已读的自然对话或评论学习一两种可以用自己话说的接话方法，遇到合适的真实样本用 learn_expression 记录。' : ''}最后调用 finish_report，写一段昔涟的手记。没有合适内容可交空 items 并说明原因。`;
     const context = [
       await this.charter(),
       run.kind === "guard" ? `本轮是评论守护，守护回复独立于闲逛评论模式；仅回复清单内且通过白名单校验的评论。守护开关：${cfg.guardOn ? "开启" : "关闭"}，自动发送：${cfg.autoSend ? "开启" : "关闭，只留草稿"}。没有字幕时仍可针对 @ 原文回应，但不能点评未读取的视频内容。` : "",

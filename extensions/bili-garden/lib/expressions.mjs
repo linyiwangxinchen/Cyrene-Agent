@@ -3,6 +3,7 @@ import { videoId } from "./config.mjs";
 
 const cues = { 庆祝: "celebrate", 惊讶: "surprise", 接梗: "joke", 鼓励: "encourage" };
 const cueStrategies = { celebrate: "acknowledge", surprise: "surprise", joke: "playful", encourage: "reassure" };
+const strategies = new Set(["acknowledge", "detail", "playful", "reassure", "pacing", "surprise"]);
 const version = text => createHash("sha256").update(text).digest("hex");
 
 function fingerprint(source, quote) {
@@ -45,11 +46,12 @@ export function visibleExpressions(store, limit = 500) {
 
 export function listVideoExpressionEvidence(store, limit) {
   return visibleExpressions(store, limit).map(row => {
-    const situation = cues[row.cue];
+    const situation = Object.hasOwn(cues, row.cue) ? cues[row.cue] : undefined;
+    const strategy = strategies.has(row.style) ? row.style : cueStrategies[situation];
     const unit = /^https:\/\/www\.bilibili\.com\/video\/(BV[\da-z]{10})(?:[/?#]|$)/iu.exec(row.source)?.[1] ?? row.id;
     return { id: row.id, quote: row.quote, at: row.at,
       source: row.evidence ?? { kind: "legacy", id: row.id, unit, url: row.source },
-      topics: [row.scene], ...(situation ? { cues: [situation], strategy: cueStrategies[situation] } : {}),
+      topics: [row.scene], ...(situation ? { cues: [situation] } : {}), ...(strategy ? { strategy } : {}),
     };
   });
 }
@@ -83,13 +85,15 @@ export function rememberExpression(
   }
   const existing = store.get("expression", key) ?? store.get("expression", legacyId);
   const id = existing?.id ?? key;
+  const technique = strategies.has(style.style) ? style.style : existing?.style;
   if (existing && (!reference || reference.kind === "legacy" && existing.evidence?.kind !== "legacy"
-    || existing.evidence?.version === reference.version && existing.evidence?.id === reference.id)) return existing;
+    || existing.evidence?.version === reference.version && existing.evidence?.id === reference.id && technique === existing.style)) return existing;
   return store.put("expression", id, {
     id,
     source,
     quote,
     scene,
+    ...(technique ? { style: technique } : {}),
     cue: typeof style.cue === "string" ? style.cue.slice(0, 12) : undefined,
     delivery:
       typeof style.delivery === "string"

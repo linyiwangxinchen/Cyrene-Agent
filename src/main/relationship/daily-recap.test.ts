@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { RelationshipLogStore } from "./relationship-log-core";
 import { createDailyRecaps } from "./daily-recap";
+import { XilianWorldStore } from "../xilian-world/world-store";
 import type { ExpressionSample } from "../../shared/memory-graph";
 import type { XilianDiaryEntry } from "../../shared/xilian-world";
 
@@ -86,4 +87,53 @@ it("catches up a previous day after restart and withdraws an archived entry on r
   expect(archived.list()[0]).toMatchObject({ date: "2026-11-24", status: "written" });
   f.store.retainCompanionFeedbackTurns("private", new Set());
   expect(archived.list()).toEqual([]);
+});
+
+it("leaves a completed conversation-only invitation out of the global preview and model request", async () => {
+  const f = fixture();
+  vi.setSystemTime(new Date("2026-11-24T08:08:00Z"));
+  const world = new XilianWorldStore(join(root, "amphoreus-world.json"));
+  world.advance({ now: Date.now(), timezone: "UTC" });
+  const title = "只留在原会话里的观星计划";
+  const action = world.addPersonalIntention({ id: "recap-private", conversationId: "private", title, intent: "写一点想在原会话里分享的感想" });
+  expect(action).toBeDefined();
+  vi.setSystemTime(action!.endsAt + 1_000);
+  world.advance({ now: Date.now(), timezone: "UTC" });
+  expect(world.readDataSnapshot().diary.find(entry => entry.eventId === action!.id)).toMatchObject({ title, visibility: "private" });
+  const service = createDailyRecaps({ ...f.deps, timezone: () => "UTC", worldDiary: () => world.readDataSnapshot().diary });
+  vi.setSystemTime(new Date("2026-11-24T21:30:00Z"));
+  expect(JSON.stringify(service.list())).not.toContain(title);
+  await service.tick();
+  expect(f.write).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(f.write.mock.calls)).not.toContain(title);
+});
+
+it("withdraws an already archived recap derived from a now private world entry", async () => {
+  const f = fixture();
+  const entry: XilianDiaryEntry = { id: "diary:known", eventId: "known", dateKey: "2026-11-24", writtenAt: Date.now(),
+    title: "已保存的活动", text: "后来只允许原会话再查看。", mood: "平静", source: "life_event", locationId: "okhema", visibility: "shareable" };
+  f.world.push(entry);
+  vi.advanceTimersByTime(120_000);
+  await f.service.tick();
+  vi.advanceTimersByTime(24 * 3_600_000);
+  expect(createDailyRecaps(f.deps).list()[0]?.status).toBe("written");
+  entry.visibility = "private";
+  expect(createDailyRecaps(f.deps).list()).toEqual([]);
+});
+
+it("discards an in-flight result if all of its world material becomes private", async () => {
+  const f = fixture();
+  const entry: XilianDiaryEntry = { id: "diary:in-flight", eventId: "in-flight", dateKey: "2026-11-24", writtenAt: Date.now(),
+    title: "等待回顾的活动", text: "曾经可分享。", mood: "平静", source: "life_event", locationId: "okhema", visibility: "shareable" };
+  f.world.push(entry);
+  vi.advanceTimersByTime(120_000);
+  let resolve!: (text: string) => void;
+  f.write.mockImplementationOnce(() => new Promise<string>(accept => { resolve = accept; }));
+  const pending = f.service.tick();
+  expect(f.write).toHaveBeenCalledTimes(1);
+  entry.visibility = "private";
+  resolve("包含现在私有的素材");
+  await pending;
+  expect(f.service.list()).toEqual([]);
+  expect(f.store.dailyRecapMaterial().saved).toEqual([]);
 });

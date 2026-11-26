@@ -15,6 +15,7 @@ import { reduceTranscriptProjection, isUserTurnRewindableInModelView } from "../
 import { buildLegacyBackfillDrafts } from "../orchestrator/conversation-transcript-coordinator";
 import { diagnosticHash } from "./conversation-store-error";
 import { runMemoryCommand } from "./conversation-memory-repository";
+import { currentHistorySourcePointers, purgeConversationHistoryIndex, readConversationHistory, searchConversationHistory } from "./conversation-history-repository";
 const database = initializeConversationDatabase(workerData.root);
 chats.initialize();
 importRuns(database);
@@ -162,6 +163,9 @@ async function execute(method: string, args: any[]): Promise<unknown> {
   }
   if (method === 'barrier')
     return;
+  if (method === 'history.search') return searchConversationHistory(database, args[0], importTranscript);
+  if (method === 'history.read') return readConversationHistory(database, args[0], importTranscript);
+  if (method === 'history.sources') return currentHistorySourcePointers(database, args[0], args[1]);
   if (method.startsWith('memory.')) {
     if (method === 'memory.record') await importTranscript(args[0].conversationId);
     if (method === 'memory.batch') await importTranscript(args[0]);
@@ -317,12 +321,18 @@ async function execute(method: string, args: any[]): Promise<unknown> {
     if (/^(get|list)/.test(name))
       return (fn as (...args: any[]) => unknown)(...args);
     try {
-      return database.transaction(() => {
+      const result = database.transaction(() => {
         const result = (fn as (...args: any[]) => unknown)(...args) as any;
         if (result?.ok === false && result.error === 'write-failed')
           throw new ConversationStoreError('CONVERSATION_STORE_WRITE_FAILED');
         return result;
       });
+      if (name === 'deleteSession') {
+        // Derived data can be retried independently of the authoritative deletion.
+        try { purgeConversationHistoryIndex(database, args[0]); }
+        catch { /* Deleted conversations are ineligible even if derivative cleanup failed. */ }
+      }
+      return result;
     }
     catch (error) {
       if (isWriteFailure(error) && /^(enqueuePending|removePending|editPending|markPending|beginPending|commitPending|completePending)/.test(name))

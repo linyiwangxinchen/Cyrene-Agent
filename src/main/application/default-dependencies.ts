@@ -608,10 +608,12 @@ export async function createRuntimeDependencies(
           citaService: services.cita,
           socialContextScheduler: services.social.scheduler,
           chatsStore,
-          buildSummaryMemoryContext: (conversationId) => loadSummaryMemoryContext({
+          buildSummaryMemoryContext: (conversationId, recallPlan, timeZone) => loadSummaryMemoryContext({
             conversationId,
             userDataRoot: app.getPath("userData"),
             getSessionRecord: chatsStore.getSessionRecord,
+            recallPlan,
+            timeZone,
           }),
           scheduleSummaryTurn: (input) => scheduleSummaryTurn(input),
           scheduleWikiTurn: (input) => scheduleWikiTurn(input),

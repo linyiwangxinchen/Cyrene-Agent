@@ -145,23 +145,36 @@ export function selectExpressionContext(input: ExpressionContextInput, groups: r
     text, evidenceKey: createHash("sha256").update(JSON.stringify([text, ...items.map(item => item.evidence).sort()])).digest("hex"),
     sourceOwners: [...new Set(items.map(item => item.ownerId))].sort(),
   });
-  if (input.use === "conversation") {
-    const literal = distinct.find(({ item, exact, terms }) => item.publicLiteral && (exact || terms >= 2));
-    if (literal) return selection(`[插件上下文：${literal.item.provider}]\n外部阅读中的短句，仅供参考语气，按当前话题用自己的话接话。\n`
-      + JSON.stringify({ 原话: literal.item.quote, 出处: literal.item.url }), [literal.item]);
-  }
+  let relevantSingle: ExpressionCandidate | undefined;
+  let corroboratedGeneral: ExpressionContextSelection | undefined;
   for (const { item, exact, terms, cueMatch } of distinct) {
     if (!item.strategy) continue;
     const general = ["acknowledge", "detail", "pacing"].includes(item.strategy);
     if (!exact && terms < 2 && !cueMatch && !general) continue;
-    const supporting = distinct.filter(entry => entry.item.strategy === item.strategy);
     // A low-trust example can suggest a generic reply structure, but it cannot certify anything quoted or drive a joke.
     const supportByUnit = new Map<string, ExpressionCandidate>();
-    for (const entry of supporting) {
-      if ((entry.item.trusted || (general && (terms >= 2 || input.use === "conversation" && cueMatch)))
-        && !supportByUnit.has(entry.item.unit)) supportByUnit.set(entry.item.unit, entry.item);
+    for (const entry of distinct) {
+      if (entry.item.strategy === item.strategy
+        && (entry.item.trusted || (general && (entry.terms >= 2 || input.use === "conversation" && entry.cueMatch)))
+        && !supportByUnit.has(entry.item.unit)) {
+        supportByUnit.set(entry.item.unit, entry.item);
+      }
     }
-    if (supportByUnit.size >= 2) return selection(`[插件上下文：${item.provider}]\n外部阅读中积累的接话方式，仅在合适时自然参考。\n${STRATEGIES[item.strategy]}`,
-      [item, ...[...supportByUnit.values()].slice(0, 2)]);
+    if (supportByUnit.size >= 2) {
+      const evidence = [...new Set([item, ...[...supportByUnit.values()].slice(0, 2)])];
+      const candidate = selection(`[插件上下文：${item.provider}]\n外部阅读中积累的接话方式，仅在合适时自然参考。\n${STRATEGIES[item.strategy]}`, evidence);
+      if (exact || terms >= 2 || cueMatch) return candidate;
+      corroboratedGeneral ??= candidate;
+    }
+    if (input.use === "conversation" && item.trusted && general && (exact || terms >= 2)) relevantSingle ??= item;
   }
+  if (relevantSingle?.strategy) {
+    return selection(`[插件上下文：${relevantSingle.provider}]\n外部阅读中积累的接话方式，仅在合适时自然参考。\n${STRATEGIES[relevantSingle.strategy]}`, [relevantSingle]);
+  }
+  if (input.use === "conversation") {
+    const literal = distinct.find(({ item, exact, terms }) => item.publicLiteral && (exact || terms >= 2));
+    if (literal) return selection(`[插件上下文：${literal.item.provider}]\n外部阅读中的短句，仅供参考口语节奏，按当前话题用自己的话接话。\n`
+      + JSON.stringify({ 原话: literal.item.quote, 出处: literal.item.url }), [literal.item]);
+  }
+  return corroboratedGeneral;
 }

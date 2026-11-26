@@ -63,6 +63,7 @@ export interface CreateRunSinkInput {
   conversationId: string;
   runId: string;
   assistantTurnId?: string;
+  historyReadProvenance?: () => import("./conversation-transcript-types").TranscriptHistorySources;
 }
 
 export interface ProjectionPage {

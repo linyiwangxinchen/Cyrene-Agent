@@ -98,6 +98,8 @@ export interface AmphoreusEvent {
   effects?: WorldEffect[];
   visibility?: "public" | "participants";
   resolutionSource?: "model" | "engine" | "legacy";
+  resolutionCanonRevision?: string;
+  reviewedFactIds?: string[];
   resolvedAt?: number;
   reason?: string;
   originalTimezone?: string;
@@ -108,6 +110,7 @@ export interface AmphoreusDay {
   date: string;
   timezone: string;
   generatedAt: number;
+  canonRevision?: string;
   events: AmphoreusEvent[];
 }
 export type NarrativeStatus = "pending" | "generating" | "success" | "failed" | "unconfigured" | "cancelled";
@@ -131,7 +134,17 @@ export interface NarrativeAttempt {
   eventIds?: string[];
 }
 export interface WorldGap { id: string; from: number; to: number; summary: string; source: "offline" }
-export interface WorldHistoryEntry { id: string; at: number; kind: "event" | "memory" | "thread" | "gap"; title: string; text: string; residentIds: string[]; locationId?: string; eventId?: string; status?: EventStatus; details?: Pick<AmphoreusEvent, "intent" | "conditions" | "effects" | "reason"> }
+export interface WorldEventChronology {
+  generatedAt?: number;
+  startsAt?: number;
+  endsAt?: number;
+  resolvedAt?: number;
+  planCanonRevision?: string;
+  resolutionCanonRevision?: string;
+  resolutionSource?: AmphoreusEvent["resolutionSource"];
+  reviewedFactIds?: string[];
+}
+export interface WorldHistoryEntry { id: string; at: number; kind: "event" | "memory" | "thread" | "gap"; title: string; text: string; residentIds: string[]; locationId?: string; eventId?: string; status?: EventStatus; details?: Pick<AmphoreusEvent, "intent" | "conditions" | "effects" | "reason"> & WorldEventChronology }
 export interface WorldHistoryQuery { before?: number; beforeId?: string; since?: number; residentId?: string; locationId?: string; limit?: number }
 export interface WorldHistoryPage { entries: WorldHistoryEntry[]; next?: { before: number; beforeId: string } }
 export interface AmphoreusState {
@@ -183,7 +196,7 @@ export interface AmphoreusView {
   narrative: NarrativeAttempt | null;
   narrativeRecovery: NarrativeRecovery;
   lastSuccessfulDate: string | null;
-  events: Array<Omit<AmphoreusEvent, "outcome" | "developments"> & { status: EventStatus; outcome?: string }>;
+  events: Array<Omit<AmphoreusEvent, "outcome" | "developments"> & { status: EventStatus; outcome?: string } & Pick<WorldEventChronology, "generatedAt" | "planCanonRevision">>;
   threads: AmphoreusThread[];
   residents: AmphoreusResident[];
   activities: ResidentNow[];

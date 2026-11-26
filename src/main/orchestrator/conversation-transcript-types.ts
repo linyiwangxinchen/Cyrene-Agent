@@ -18,7 +18,7 @@ import type {
 import type { SideEffectKind, TodoItem, ToolCallOutcome, UncertainEffect } from "./harness/types";
 import type { ChatMessage as CanonicalChatMessage } from "./vendors/types";
 import { isContextUsageSnapshot } from "../../shared/context-usage";
-import { isCompanionReferenceList } from "../../shared/companion-references";
+import { isCompanionReferenceList, type HistorySourcePointer } from "../../shared/companion-references";
 import { normalizeMusicCardData } from "../../shared/music-card";
 import { normalizeMailDraftCardData } from "../../shared/mail-draft-card";
 import { SHELL_VISIBLE_OUTPUT_LIMIT } from "../../shared/shell-output";
@@ -43,6 +43,12 @@ export type TranscriptUserPayload = {
   text: string;
   attachments?: PendingChatAttachment[];
 };
+
+export interface TranscriptHistorySources {
+  /** Trusted run-time provenance. This is not part of the model or renderer message. */
+  historySources?: HistorySourcePointer[];
+  historySourcesIncomplete?: true;
+}
 
 export type TranscriptPresentationPatch = ChatPresentationCheckpointPatch;
 
@@ -285,7 +291,7 @@ export type TranscriptEntry =
   | (TranscriptEnvelopeBase & { kind: "background_event_pending"; payload: { jobId: string; sourceWorkspace?: string; sourceToolCallId?: string; message: CanonicalChatMessage } })
   | (TranscriptEnvelopeBase & { kind: "background_event_retired"; payload: { jobId: string; sourceSeq?: number } })
   | (TranscriptEnvelopeBase & { kind: "user"; payload: TranscriptUserPayload })
-  | (TranscriptEnvelopeBase & { kind: "assistant"; payload: CanonicalChatMessage })
+  | (TranscriptEnvelopeBase & TranscriptHistorySources & { kind: "assistant"; payload: CanonicalChatMessage })
   | (TranscriptEnvelopeBase & {
       kind: "tool_result";
       payload: {

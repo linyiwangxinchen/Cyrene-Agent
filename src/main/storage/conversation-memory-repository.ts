@@ -4,8 +4,9 @@ import type { MemoryPendingStore, PendingMemoryBatch, PendingMemoryTurn } from "
 import type { MemorySourceLocator } from "../../shared/memory-governance";
 import type { SocialExtractionInput } from "../social-context/types";
 import type { SummaryMemoryTurnLookup } from "../memory/summary-memory-sources";
+import { historyDependentMemoryEntries } from "../memory/memory-source-policy";
 
-type ActiveSource = { userTurnId: string; userEntryId: string; assistantEntryId: string };
+type ActiveSource = { userTurnId: string; userEntryId: string; assistantEntryId: string; historyDependent: boolean };
 
 /** Immutable transcript entry IDs are the source version; presentation patches are not evidence. */
 function activeSources(database: ConversationDatabase, id: string, key: "user-turn" | "owner-assistant" = "user-turn") {
@@ -13,6 +14,7 @@ function activeSources(database: ConversationDatabase, id: string, key: "user-tu
   if (database.db.prepare('SELECT deleted FROM conversations WHERE id=?').get(id)?.deleted) return sources;
   const entries = database.entries(id, true);
   const nodes = reduceTranscriptProjection(entries).state?.nodes ?? [];
+  const historyDependent = historyDependentMemoryEntries(entries);
   const byId = new Map(entries.map(entry => [entry.id, entry]));
   const localTurnIds = key === "owner-assistant"
     ? new Set(entries.flatMap(entry => entry.kind === 'user' && entry.id.startsWith('user:v1:') ? [entry.turnId] : []))
@@ -36,6 +38,7 @@ function activeSources(database: ConversationDatabase, id: string, key: "user-tu
         !(byId.get(source.entryId)?.kind === 'turn_rewind' && localTurnIds.has(source.turnId))) continue;
       sources.set(key === "owner-assistant" ? node.entryId : source.turnId, {
         userTurnId: source.turnId, userEntryId: source.entryId, assistantEntryId: node.entryId,
+        historyDependent: historyDependent.has(node.entryId),
       });
     }
   }
@@ -80,6 +83,32 @@ function current(database: ConversationDatabase, turns: PendingMemoryTurn[]): bo
 }
 
 export function runMemoryCommand(database: ConversationDatabase, method: string, args: any[]): unknown {
+  if (method === 'memory.activeSourceFacts') {
+    const lookups = args[0] as readonly MemorySourceLocator[];
+    const factsByConversation = new Map<string, Map<string, { at: number; text: string; role: "user" | "assistant" }>>();
+    return lookups.map(({ conversationId, messageId }) => {
+      let facts = factsByConversation.get(conversationId);
+      if (!facts) {
+        facts = new Map();
+        const deleted = database.db.prepare('SELECT deleted FROM conversations WHERE id=?').get(conversationId)?.deleted;
+        if (!deleted) {
+          const entries = database.entries(conversationId, true);
+          const active = new Set(reduceTranscriptProjection(entries).state?.nodes.map(node => node.entryId));
+          const historyDependent = historyDependentMemoryEntries(entries);
+          for (const entry of entries) {
+            if (!active.has(entry.id) || historyDependent.has(entry.id)) continue;
+            const text = entry.kind === 'user' ? entry.payload.text
+              : entry.kind === 'turn_rewind' ? entry.payload.replacementUser?.text
+              : entry.kind === 'assistant' && entry.payload.visibility !== 'internal' && typeof entry.payload.content === 'string' ? entry.payload.content
+              : undefined;
+            if (text !== undefined) facts.set(entry.id, { at: entry.at, text: text.slice(0, 4_000), role: entry.kind === "assistant" ? "assistant" : "user" });
+          }
+        }
+        factsByConversation.set(conversationId, facts);
+      }
+      return facts.get(messageId);
+    });
+  }
   if (method === 'memory.socialRecord') {
     const input = args[0] as SocialExtractionInput;
     if (!input.source || !input.memoryScope) return undefined;
@@ -121,7 +150,7 @@ export function runMemoryCommand(database: ConversationDatabase, method: string,
     return lookups.map(({ conversationId, userTurnId, assistantEntryId }) => {
       if (!byConversation.has(conversationId)) byConversation.set(conversationId, activeSources(database, conversationId, "owner-assistant"));
       const source = byConversation.get(conversationId)?.get(assistantEntryId);
-      return source?.userTurnId === userTurnId ? source.userEntryId : undefined;
+      return source?.userTurnId === userTurnId && !source.historyDependent ? source.userEntryId : undefined;
     });
   }
   if (method === 'memory.activeSources') {
@@ -152,7 +181,8 @@ export function runMemoryCommand(database: ConversationDatabase, method: string,
     database.db.prepare(`INSERT INTO memory_pending_turns(conversation_id,user_turn_id,user_entry_id,assistant_entry_id,payload_json,active,processed)
       VALUES(?,?,?,?,?,1,0) ON CONFLICT(conversation_id,user_turn_id) DO UPDATE SET
       user_entry_id=excluded.user_entry_id,assistant_entry_id=excluded.assistant_entry_id,payload_json=excluded.payload_json,active=1,processed=0`)
-      .run(turn.conversationId, turn.userTurnId, source.userEntryId, turn.assistantEntryId, JSON.stringify({ userInput: turn.userInput, assistantReply: turn.assistantReply }));
+      .run(turn.conversationId, turn.userTurnId, source.userEntryId, turn.assistantEntryId,
+        JSON.stringify({ userInput: turn.userInput, assistantReply: source.historyDependent ? "" : turn.assistantReply }));
     const row = database.db.prepare('SELECT seq FROM memory_pending_turns WHERE conversation_id=? AND user_turn_id=?').get(turn.conversationId, turn.userTurnId)!;
     return { roundCount: roundCount(database), added: !old, seq: Number(row.seq) };
   }

@@ -32,7 +32,7 @@ rememberExpression(
   "花盆加班",
   "阳台浇水",
   biliExcerpt.text,
-  {},
+  { style: "detail" },
   biliExcerpt.source,
 );
 garden.close();
@@ -101,7 +101,7 @@ const gateway = createServer(async (req, res) => {
   const body = JSON.parse(Buffer.concat(parts).toString());
   captured.push(body);
   const prompt = JSON.stringify([body.instructions, body.input ?? body.messages]);
-  const answer = prompt.includes("阅读论坛对话")
+  let answer = prompt.includes("阅读论坛对话")
     ? JSON.stringify({
         summary: "摘录里用一个比喻形容网络断线。",
         evidence: [quote],
@@ -120,6 +120,24 @@ const gateway = createServer(async (req, res) => {
         : "已经收到。";
   const transport = req.url.includes("/responses") ? "responses" : "openai";
   let fixtureTool;
+  if (transport === "responses" && body.stream
+    && (prompt.includes("DESKTOP_HISTORY_TOOL_CHECK") || prompt.includes("call_desktop_history_"))) {
+    const input = body.input ?? [];
+    const search = input.find(item => item.type === "function_call_output" && item.call_id === "call_desktop_history_search");
+    const read = input.find(item => item.type === "function_call_output" && item.call_id === "call_desktop_history_read");
+    const result = item => JSON.parse(JSON.parse(item.output).output);
+    const available = (body.tools ?? []).map(tool => tool.name);
+    if (!search && available.includes("search_chat_history")) {
+      fixtureTool = { name: "search_chat_history", args: { query: "接力备忘" }, id: "desktop_history_search" };
+    } else if (typeof search?.output === "string" && !read && available.includes("read_chat_history")) {
+      const source = result(search).items?.find(item => item.title === "桌面引用来源");
+      if (source) fixtureTool = { name: "read_chat_history", args: {
+        conversationId: source.conversationId, ...(source.sourceRef ? { sourceRef: source.sourceRef } : {}),
+      }, id: "desktop_history_read" };
+    } else if (typeof read?.output === "string" && result(read).messages?.some(message => message.text.includes("DESKTOP_OLD_REFERENCE_TEXT"))) {
+      answer = "DESKTOP_HISTORY_TOOL_ANSWER";
+    }
+  }
   if (transport === "responses" && prompt.includes("DESKTOP_BROWSER_IMAGE_CHECK")) {
     const requests = (body.input ?? []).filter(item => item.type === "function_call");
     const wanted = ["browser_control_start", "browser_screenshot", "browser_control_stop"]
@@ -533,6 +551,7 @@ try {
   assert.match(everyday.modelInput, /plugin:tieba-garden:expressions/);
   assert.ok(everyday.modelInput.includes(styleHeader));
   assert.ok(everyday.modelInput.includes(styleTechnique));
+  assert.match(everyday.modelInput, /说话前的准备.*身份与关系.*场景与动作.*本轮接话/s);
   assert.ok(everyday.modelInput.includes(readingHeader));
   assert.ok(everyday.modelInput.includes(liveThreadSummary));
   for (const privateDetail of [quote, liveThreadQuote, liveThreadUrl, importedThreadUrl, "断线后的比喻"]) {
@@ -556,9 +575,12 @@ try {
   assert.ok(requestedWhileOff.modelInput.includes(importedThreadUrl));
   await panel("save", { learn: true });
   await invoke("plugins:set-enabled", "bili-garden", true);
-  assert.match((await ask("chat", "阳台浇水")).modelInput, /花盆加班/);
+  const biliSpeech = (await ask("chat", "阳台浇水")).modelInput;
+  assert.match(biliSpeech, /plugin:bili-garden:expressions/);
+  assert.match(biliSpeech, /顺着对方刚提到的一个具体细节接话/);
+  assert.doesNotMatch(biliSpeech, /花盆加班/);
   await invoke("plugins:set-enabled", "bili-garden", false);
-  assert.doesNotMatch((await ask("chat", "阳台浇水")).modelInput, /花盆加班/);
+  assert.doesNotMatch((await ask("chat", "阳台浇水")).modelInput, /plugin:bili-garden:expressions|花盆加班/);
   console.log(
     "PASS Bilibili SQLite expression reaches the model only while enabled",
   );

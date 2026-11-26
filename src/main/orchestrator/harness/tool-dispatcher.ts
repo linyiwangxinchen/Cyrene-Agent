@@ -51,6 +51,7 @@ import { resolveEffectKind, toolRegistry } from "../tools/registry/tool-registry
 import { getHookRunner, type HookRunner } from "../../hooks/hook-runner";
 import type { ToolOutputStore } from "./tool-output/tool-output-store";
 import { ToolOutputPersistenceError } from "./tool-output/file-tool-output-store";
+import { CHAT_HISTORY_TOOL_IDS } from "../../memory/memory-scope";
 
 const READ_ONLY_BUILTINS = new Set([
   ASK_USER_TOOL_ID,
@@ -479,7 +480,9 @@ export async function dispatchToolCall(
     truncated,
     preview,
     ...(tool.sensitiveOutput ? {
-      activityPreview: result.status === "succeeded"
+      activityPreview: CHAT_HISTORY_TOOL_IDS.has(call.name)
+        ? result.status === "succeeded" ? "已查阅过往会话" : "查阅过往会话未完成"
+        : result.status === "succeeded"
         ? tool.name.includes("draft") || args.action === "draft" ? "邮件草稿已准备" : "邮件操作已完成"
         : "邮件操作未成功",
     } : {}),

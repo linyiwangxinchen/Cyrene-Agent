@@ -4,7 +4,7 @@ import type { WikiChatSourceReader, WikiChatSourceTurn } from "./wiki-source";
 import { WikiStore } from "./wiki-store";
 import { markWikiSourcesFresh, markWikiSourcesStale } from "./wiki-memory-health";
 import { memoryStore } from "./memory-store";
-import { isForgottenSource } from "./memory-source-policy";
+import { isInvalidDerivedMemorySource } from "./memory-source-policy";
 
 export interface WikiMemorySchedulerOptions {
   userDataRoot: string;
@@ -25,6 +25,10 @@ export class WikiMemoryScheduler {
 
   constructor(private readonly options: WikiMemorySchedulerOptions) {
     this.store = new WikiStore(options.userDataRoot, { readForgetting: async () => (await memoryStore.load()).forgetting });
+  }
+
+  async readSourceConversation(conversationId: string) {
+    return this.options.sourceReader.readConversation(conversationId);
   }
 
   async setEnabled(enabled: boolean): Promise<void> {
@@ -166,12 +170,12 @@ export class WikiMemoryScheduler {
       if (!(await this.isCurrent(conversationId, generation))) return;
       const batch = pending.slice(start, start + 10);
       const memoryState = await memoryStore.load();
-      const turns: WikiChatSourceTurn[] = batch.map((item) => item.turn).filter(turn => !isForgottenSource(memoryState, { conversationId, messageId: turn.user.entryId }));
+      const turns: WikiChatSourceTurn[] = batch.map((item) => item.turn).filter(turn => !isInvalidDerivedMemorySource(memoryState, { conversationId, messageId: turn.user.entryId }));
       const controller = new AbortController();
       this.controllers.set(conversationId, controller);
       let candidates;
       try {
-        candidates = turns.length ? await extractWikiClaims({ conversation: { ...conversation, turns, messages: conversation.messages.filter(message => !isForgottenSource(memoryState, { conversationId, messageId: message.entryId })) }, turns, signal: controller.signal }) : [];
+        candidates = turns.length ? await extractWikiClaims({ conversation: { ...conversation, turns, messages: conversation.messages.filter(message => !isInvalidDerivedMemorySource(memoryState, { conversationId, messageId: message.entryId })) }, turns, signal: controller.signal }) : [];
       } finally {
         if (this.controllers.get(conversationId) === controller) this.controllers.delete(conversationId);
       }
@@ -189,7 +193,16 @@ export class WikiMemoryScheduler {
         }
         return;
       }
-      await this.store.applyClaims(candidates, { shouldCommit: () => this.isCurrent(conversationId, generation) });
+      const latestMemory = await memoryStore.load();
+      const blockedSourceIds = new Set(turns.flatMap(({ user, assistants }) => {
+        const messages = [user, ...assistants];
+        return (isInvalidDerivedMemorySource(latestMemory, { conversationId, messageId: user.entryId }) ? messages
+          : assistants.filter(message => isInvalidDerivedMemorySource(latestMemory, { conversationId, messageId: message.entryId })))
+          .map(message => message.sourceId);
+      }));
+      await this.store.applyClaims(candidates.filter(candidate => !blockedSourceIds.has(candidate.source.sourceId!)), {
+        shouldCommit: () => this.isCurrent(conversationId, generation),
+      });
       if (!(await this.isCurrent(conversationId, generation))) return;
       processed = Math.max(processed, ...batch.map((item) => item.seq));
       await this.store.markProcessedSeq(conversationId, processed);
@@ -232,6 +245,9 @@ export function initializeWikiMemoryScheduler(options: WikiMemorySchedulerOption
 }
 
 export function getWikiMemoryStore(): WikiStore | null { return scheduler?.store ?? null; }
+export async function readWikiMemorySourceConversation(conversationId: string) {
+  return scheduler?.readSourceConversation(conversationId);
+}
 export function enableWikiMemoryScheduler(enabled: boolean): Promise<void> { return scheduler?.setEnabled(enabled) ?? Promise.resolve(); }
 export function scheduleWikiTurn(input: Parameters<WikiMemoryScheduler["scheduleTurn"]>[0]): void { scheduler?.scheduleTurn(input); }
 export function refreshWikiMemorySources(id: string): Promise<void> { return scheduler?.refreshConversationSources(id) ?? Promise.resolve(); }

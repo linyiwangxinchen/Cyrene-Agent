@@ -1,5 +1,5 @@
 import { AMPHOREUS_CANON_REVISION, AMPHOREUS_FACTS, AMPHOREUS_HISTORY, AMPHOREUS_LOCATIONS, AMPHOREUS_PREMISE, AMPHOREUS_RESIDENTS, AMPHOREUS_ROUTES, AMPHOREUS_SOURCES, canonAuthority, initialAmphoreusThreads } from "../../shared/amphoreus-canon";
-import type { AmphoreusEvent, AmphoreusState, AmphoreusView, EventResolution, PersonalWorldView, ResidentNow, WorldHistoryEntry } from "../../shared/amphoreus-world";
+import type { AmphoreusDay, AmphoreusEvent, AmphoreusState, AmphoreusView, EventResolution, PersonalWorldView, ResidentNow, WorldHistoryEntry } from "../../shared/amphoreus-world";
 import type { XilianTimelineEvent, XilianWorldData } from "../../shared/xilian-world";
 import { worldClock, worldInstant } from "./clock";
 import { advanceResidents, createPlaces, createResidents, fitsRoutine, remember, residentActivity, terminalEvent, travelMinutes } from "./life";
@@ -93,7 +93,26 @@ function recordResolution(state: AmphoreusState, event: AmphoreusEvent, now: num
   state.appliedEventIds.push(event.id);
   state.eventFacts[event.id] = event.status as "completed" | "partial" | "failed" | "cancelled";
 }
-export function applyResolutions(state: AmphoreusState, resolutions: EventResolution[], now: number, expectedRevision: number): boolean {
+export function resolutionTargetsUnchanged(start: AmphoreusState, current: AmphoreusState, resolutions: EventResolution[]): boolean {
+  const target = (state: AmphoreusState, effect: EventResolution["effects"][number]) => {
+    if (effect.kind === "place" || effect.kind === "access") {
+      return state.places.find((place) => place.id === effect.placeId)?.[effect.kind === "place" ? effect.field : "access"];
+    }
+    const resident = state.residents.find((person) => person.id === effect.residentId);
+    if (effect.kind === "relationship") {
+      const relation = resident?.relations.find((entry) => entry.residentId === effect.otherId);
+      return relation && `${relation.trust}:${relation.eventId ?? ""}`;
+    }
+    const goal = resident?.goals.find((entry) => entry.id === effect.goalId);
+    return goal && `${goal.status}:${goal.progress}:${goal.cycle ?? 0}:${goal.lastActionId ?? ""}`;
+  };
+  return resolutions.every(({ effects, developments }) => effects.every((effect) => target(start, effect) === target(current, effect)) && developments.every(({ id }) => {
+    const before = start.threads.find((thread) => thread.id === id);
+    const after = current.threads.find((thread) => thread.id === id);
+    return before?.updatedAt === after?.updatedAt && before?.status === after?.status && before?.eventId === after?.eventId;
+  }));
+}
+export function applyResolutions(state: AmphoreusState, resolutions: EventResolution[], now: number, expectedRevision: number, review?: ReadonlyMap<string, string[]>): boolean {
   if (state.revision !== expectedRevision) return false;
   const all = state.days.flatMap((day) => day.events);
   if (!resolutions.every((resolution) => { const event = all.find((e) => e.id === resolution.eventId); return event && event.version === resolution.version && event.endsAt <= now && event.status === "awaiting_resolution" && !state.appliedEventIds.includes(event.id); })) return false;
@@ -101,7 +120,8 @@ export function applyResolutions(state: AmphoreusState, resolutions: EventResolu
     const event = all.find((e) => e.id === resolution.eventId)!;
     const obstruction = blocked(state, event);
     if (obstruction) closeWithoutSuccess(event, obstruction.reason, now);
-    else Object.assign(event, { status: resolution.status, outcome: resolution.outcome, effects: resolution.effects, developments: resolution.developments, resolutionSource: "model", resolvedAt: now, version: (event.version ?? 1) + 1 });
+    else Object.assign(event, { status: resolution.status, outcome: resolution.outcome, effects: resolution.effects, developments: resolution.developments,
+      resolutionSource: "model", resolutionCanonRevision: state.canonRevision, reviewedFactIds: review?.get(event.id), resolvedAt: now, version: (event.version ?? 1) + 1 });
     recordResolution(state, event, now);
   }
   state.revision++; return true;
@@ -171,6 +191,12 @@ export function reconcileAmphoreus(data: XilianWorldData, actualNow: number, tim
   data.version = 3;
 }
 export function modelBudgetUsed(state: AmphoreusState, date: string): number { return state.attempts.filter((attempt) => attempt.date === date).reduce((sum, attempt) => sum + attempt.count, 0); }
+function eventChronology(day: AmphoreusDay, event: AmphoreusEvent) {
+  return { generatedAt: day.generatedAt, startsAt: event.startsAt, endsAt: event.endsAt, planCanonRevision: day.canonRevision,
+    // Schema 1 inferred an end time for replay; its actual write time was never recorded.
+    resolvedAt: event.resolutionSource === "legacy" ? undefined : event.resolvedAt, resolutionSource: event.resolutionSource,
+    resolutionCanonRevision: event.resolutionCanonRevision, reviewedFactIds: event.reviewedFactIds };
+}
 export function amphoreusView(state: AmphoreusState, now: number, timezone: string): AmphoreusView {
   const clock = worldClock(now, timezone);
   const narrative = state.attempts.filter((attempt) => attempt.date === clock.date && !attempt.key?.startsWith("review:")).sort((a, b) => b.attemptedAt - a.attemptedAt)[0] ?? null;
@@ -178,7 +204,8 @@ export function amphoreusView(state: AmphoreusState, now: number, timezone: stri
   return { name: "翁法罗斯", canonRevision: state.canonRevision, premise: AMPHOREUS_PREMISE, clock, narrativeEnabled: state.narrativeEnabled,
     narrative, narrativeRecovery: narrativeRecovery(state, narrative, now, used),
     lastSuccessfulDate: state.days.at(-1)?.date ?? null,
-    events: state.days.flatMap((day) => day.events).sort((a, b) => b.startsAt - a.startsAt).slice(0, 160).map(({ outcome, developments: _developments, ...event }) => ({ ...event, effects: terminalEvent(event) ? event.effects : [], status: eventStatus(state, { ...event, developments: [] }, now), ...(terminalEvent(event) ? { outcome } : {}) })),
+    events: state.days.flatMap((day) => day.events.map((event) => ({ ...event, ...eventChronology(day, event) })))
+      .sort((a, b) => b.startsAt - a.startsAt).slice(0, 160).map(({ outcome, developments: _developments, ...event }) => ({ ...event, effects: terminalEvent(event) ? event.effects : [], status: eventStatus(state, { ...event, developments: [] }, now), ...(terminalEvent(event) ? { outcome } : {}) })),
     threads: state.threads.filter((t) => t.status === "open").concat(state.threads.filter((t) => t.status === "resolved").slice(-20)), residents: AMPHOREUS_RESIDENTS,
     activities: AMPHOREUS_RESIDENTS.map((r) => residentActivity(state, r, Math.max(now, state.lastReconciledAt), clock.timezone)), sources: AMPHOREUS_SOURCES, history: AMPHOREUS_HISTORY,
     facts: AMPHOREUS_FACTS, residentStates: state.residents.map(({ heardEventIds: _heard, ...resident }) => ({ ...resident, memories: resident.memories.slice(-12) })), places: state.places, routes: AMPHOREUS_ROUTES, gaps: state.gaps.slice(-10), revision: state.revision, budget: { limit: state.dailyModelBudget, used },
@@ -217,7 +244,8 @@ export function formatAmphoreusContext(view: AmphoreusView, conversationId?: str
 export function historyEntries(state: AmphoreusState): WorldHistoryEntry[] {
   return [
     ...state.personalActions.filter((action) => action.status === "completed" || action.status === "interrupted").map((action): WorldHistoryEntry => ({ id: action.id, at: action.resolvedAt ?? action.endsAt, kind: "event", title: action.title, text: action.outcome ?? action.reason ?? action.intent, residentIds: [action.residentId], locationId: action.locationId, eventId: action.id, status: action.status === "completed" ? "completed" : "cancelled", details: { intent: action.intent, reason: action.reason } })),
-    ...state.days.flatMap((day) => day.events).filter(terminalEvent).map((event): WorldHistoryEntry => ({ id: event.id, at: event.resolvedAt ?? event.endsAt, kind: "event", title: event.title, text: event.outcome ?? event.reason ?? event.summary, residentIds: event.participants, locationId: event.locationId, eventId: event.id, status: event.status, details: { intent: event.intent, conditions: event.conditions, effects: event.effects, reason: event.reason } })),
+    ...state.days.flatMap((day) => day.events.filter(terminalEvent).map((event): WorldHistoryEntry => ({ id: event.id, at: event.resolvedAt ?? event.endsAt, kind: "event", title: event.title, text: event.outcome ?? event.reason ?? event.summary, residentIds: event.participants, locationId: event.locationId, eventId: event.id, status: event.status,
+      details: { intent: event.intent, conditions: event.conditions, effects: event.effects, reason: event.reason, ...eventChronology(day, event) } }))),
     ...state.residents.flatMap((resident) => resident.memories.map((memory): WorldHistoryEntry => ({ id: memory.id, at: memory.at, kind: "memory", title: `${AMPHOREUS_RESIDENTS.find((p) => p.id === resident.id)!.name} · ${memory.kind === "heard" ? "听闻" : memory.kind === "experienced" ? "经历" : "日常"}`, text: memory.text, residentIds: [resident.id], locationId: memory.locationId, eventId: memory.eventId }))),
     ...state.threads.map((thread): WorldHistoryEntry => ({ id: `thread:${thread.id}:${thread.updatedAt}:${thread.eventId ?? "initial"}`, at: thread.updatedAt, kind: "thread", title: thread.title, text: `${thread.summary} 下一步：${thread.nextStep}`, residentIds: thread.participants, eventId: thread.eventId })),
     ...state.gaps.map((gap): WorldHistoryEntry => ({ id: gap.id, at: gap.to, kind: "gap", title: "离线后的生活接续", text: gap.summary, residentIds: [] })),

@@ -2,6 +2,7 @@ import path from "node:path";
 import { isTaskContinuity } from "./harness/task-continuity";
 import { assertValidPresentationPatch, userRevisionKey, type TranscriptEntry, type TranscriptSnapshotV2 } from "./conversation-transcript-types";
 import type { ChatMessage as CanonicalChatMessage } from "./vendors/types";
+import { isHistorySourcePointer, MAX_HISTORY_SOURCE_POINTERS } from "../../shared/companion-references";
 export function validateLoadedTranscriptEntry(entry: unknown): asserts entry is TranscriptEntry {
   if (!entry || typeof entry !== "object")
     throw new Error("TRANSCRIPT_CORRUPT_ROW");
@@ -56,7 +57,10 @@ function isValidTranscriptPayload(entry: Partial<TranscriptEntry>): boolean {
         typeof entry.payload.text === "string" &&
         (entry.payload.attachments === undefined || Array.isArray(entry.payload.attachments));
     case "assistant":
-      return isValidCanonicalChatMessage(entry.payload, "assistant");
+      return isValidCanonicalChatMessage(entry.payload, "assistant") &&
+        (entry.historySources === undefined || Array.isArray(entry.historySources)
+          && entry.historySources.length <= MAX_HISTORY_SOURCE_POINTERS && entry.historySources.every(isHistorySourcePointer)) &&
+        (entry.historySourcesIncomplete === undefined || entry.historySourcesIncomplete === true);
     case "tool_result":
       return typeof entry.payload.assistantEntryId === "string" &&
         typeof entry.payload.toolCallId === "string" &&

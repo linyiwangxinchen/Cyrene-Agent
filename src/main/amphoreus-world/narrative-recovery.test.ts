@@ -4,10 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { XilianWorldStore } from "../xilian-world/world-store";
 import { AgentRuntimeError } from "../orchestrator/agent-runtime-error";
-import { AMPHOREUS_FACTS } from "../../shared/amphoreus-canon";
 import { createAmphoreusService } from "./service";
 import { parseDailyPlan } from "./narrative";
-import { plan, resolutionOutput } from "./test-fixtures";
+import { plan, resolutionOutput, reviewOutput } from "./test-fixtures";
 
 let root: string, now: number, store: XilianWorldStore;
 beforeEach(() => {
@@ -104,7 +103,7 @@ it("gives settlement and review separate deadlines while retaining the cross-run
   resolveResult(resolutionOutput(state())); await vi.advanceTimersByTimeAsync(0);
   expect(generate).toHaveBeenCalledTimes(2);
   now += 140_000; await vi.advanceTimersByTimeAsync(140_000);
-  resolveReview(JSON.stringify({ consistent: true, factIds: AMPHOREUS_FACTS.slice(0, 2).map((fact) => fact.id) }));
+  resolveReview(reviewOutput(generate.mock.calls[1][0][1].content));
   await pending;
   expect(state().days[0].events[0].status).toBe("completed");
   expect(store.worldView().amphoreus!).toMatchObject({ narrative: { status: "success", count: 1 }, budget: { used: 2 } });

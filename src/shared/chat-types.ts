@@ -291,6 +291,8 @@ export interface PendingChatMessage {
   userSticker?: string;
   /** 只用于这条待发消息的回应。 */
   companionReply?: CompanionReplyInput;
+  /** 用户为本轮明确选择的历史会话。这里只保存标识，派发时读取原会话。 */
+  conversationReferenceId?: string;
   /**
    * 调整目标运行 id：非空表示该条目已被请求"插入当前运行下一步"。
    * 注入成功后条目移出队列；已接受的消息在运行结束时入册，留待下次用户续跑。
@@ -341,6 +343,7 @@ export interface PendingDispatchState {
   claimedAt: number;
   /** 认领至派发期间保留，独立于权威用户消息与回执。 */
   companionReply?: CompanionReplyInput;
+  conversationReferenceId?: string;
   /** v2 durable user intent；旧 v1 pendingDispatch 缺省。 */
   userMessage?: PendingDispatchUserSnapshot;
 }

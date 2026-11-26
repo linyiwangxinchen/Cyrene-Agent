@@ -41,12 +41,13 @@ import { getLocaleContext } from "./locale-context";
 import type { StyleId } from "../shared/style-sampling";
 import type { PendingTurnLifecycle } from "./plugin-host/pending-turn-lifecycle";
 import * as chatsStore from "./chats/chats-store";
+import { attachConversationReference, loadConversationReference } from "./chats/conversation-reference";
 import { createRunAdjustmentPoller } from "./chats/pending-adjustment";
 import { broadcastChatsChanged } from "./chats/chats-ipc";
 import { loadModelSettings, resolveSessionModelSettings } from "./settings/model-settings";
 import type { ChatMessage, ConversationMode, PendingChatAttachment } from "../shared/chat-types";
 import { normalizeCompanionReply, type CompanionReplyInput } from "../shared/companion";
-import { isCompanionReferenceList, type CompanionReference } from "../shared/companion-references";
+import { isCompanionReferenceList, isHistorySourcePointer, MAX_HISTORY_SOURCE_POINTERS, type CompanionReference, type HistorySourcePointer } from "../shared/companion-references";
 import { isGroupBoundConversation } from "./channels/conversation-binding-store";
 import { normalizeBrowserElementSelection } from "../shared/browser-panel-types";
 import { isModelFailureInfo } from "../shared/model-error";
@@ -883,6 +884,7 @@ export function registerAgUiIpc(
     try {
     // 运行时拒绝未知的历史旁路字段；类型层已不再声明 renderer messages。
     const { messages: _ignoredLegacyMessages, companionReply: _ignoredRendererReply,
+      conversationReferenceId: _ignoredRendererConversationReference,
       modelContext: _ignoredRendererModelContext,
       prepareTaskMethodRun: _ignoredTaskMethodRun, speechScope: _ignoredSpeechScope, memoryScope: _ignoredMemoryScope,
       ...safeInput } = input as AguiRunInput & Record<string, unknown>;
@@ -969,9 +971,30 @@ export function registerAgUiIpc(
       // 所有订阅前失败统一在外层结算。
       throw error;
     }
-    const { options, latestUserText, companionReferences } = built;
+    const { options, latestUserText } = built;
+    let companionReferences = built.companionReferences;
+    let historySourcesIncomplete = false;
     if (!background) runAbortController.signal.throwIfAborted();
     if (background && runAbortController.signal.aborted) throw new Error("SHELL_COMPLETION_CANCELLED");
+    const pendingReference = session.pendingDispatch;
+    if (currentUser && !input.transcriptRewind && pendingReference?.messageId === currentUser.turnId
+      && pendingReference.conversationReferenceId) {
+      const sourceId = pendingReference.conversationReferenceId;
+      const reference = speechScope === "owner" && !session.messages?.some(message => message.channelSource)
+        ? await loadConversationReference(sessionId, sourceId) : undefined;
+      runAbortController.signal.throwIfAborted();
+      if (!reference) throw new Error("引用的旧会话已不可用或没有可读取的正文，请重新选择。");
+      options.messages = attachConversationReference(options.messages, reference.context);
+      if (options.cleanMessages) options.cleanMessages = attachConversationReference(options.cleanMessages, reference.context);
+      const captionFallback = options.imageCaptionFallback;
+      if (captionFallback) {
+        options.imageCaptionFallback = async () => attachConversationReference(await captionFallback(), reference.context);
+      }
+      const source: CompanionReference = { kind: "conversation", title: reference.title, conversationId: sourceId };
+      companionReferences = [source, ...(companionReferences ?? [])].slice(0, 6);
+      // A user-selected excerpt has no canonical message-pair provenance.
+      historySourcesIncomplete = true;
+    }
     options.executionMode = agentExecutionMode;
     // 空闲续跑没有渲染端 Ask 会话，工具权限仍沿用正常检查。
     if (background) {
@@ -990,6 +1013,26 @@ export function registerAgUiIpc(
     // 一路传到 Agent / Harness adapter / ToolContext / 所有 AG-UI 事件。
     // ack.runId 与 RUN_STARTED.runId 必须一致。
     options.runId = runId;
+    const historySources = new Map<string, HistorySourcePointer>();
+    const openedHistorySources = new Set<string>();
+    if (speechScope === "owner" && !background) {
+      options.onHistorySourcesRead = (sources, usage, incomplete) => {
+        historySourcesIncomplete ||= incomplete === true;
+        for (const source of sources) {
+          if (!isHistorySourcePointer(source)) {
+            historySourcesIncomplete = true;
+            continue;
+          }
+          const key = JSON.stringify([source.conversationId, source.userEntryId, source.assistantEntryId, source.revision]);
+          if (!historySources.has(key) && historySources.size >= MAX_HISTORY_SOURCE_POINTERS) {
+            historySourcesIncomplete = true;
+            continue;
+          }
+          historySources.set(key, source);
+          if (usage === "read") openedHistorySources.add(key);
+        }
+      };
+    }
     // 用户派发和已持久化后台事件都写 canonical 回复；旧无锚点调用仍不写轨迹。
     const transcriptEnabled = Boolean(currentUser) || background;
     // 轨迹提交端（CTA）：每 run 一个 sink，entryId 全程确定性，canonical assistant /
@@ -999,6 +1042,10 @@ export function registerAgUiIpc(
       conversationId: sessionId,
       runId,
       ...(input.assistantTurnId ? { assistantTurnId: input.assistantTurnId } : {}),
+      historyReadProvenance: () => ({
+        ...(historySources.size ? { historySources: [...historySources.values()] } : {}),
+        ...(historySourcesIncomplete ? { historySourcesIncomplete: true } : {}),
+      }),
     }) : undefined;
     // AbortController 已在会话守卫注册前创建（守卫的 abort 需要引用它）。
     // signal 一路传到 Agent / harness；AGUI_CANCEL / takeover 调用 abort()，
@@ -1375,6 +1422,26 @@ export function registerAgUiIpc(
           if (agent.lastResult && isSuccessfulCompletion && !background) {
             const lastResult = agent.lastResult;
             const assistantEntryId = options.transcriptSink?.getLastAssistantEntryId?.();
+            if (speechScope === "owner" && assistantEntryId && lastResult.reply.trim() && openedHistorySources.size) {
+              try {
+                const { filterCurrentHistorySourcePointers } = await import("./chats/history-source-references.js");
+                const pointers = [...historySources].filter(([key]) => openedHistorySources.has(key)).map(([, source]) => source);
+                const active = await filterCurrentHistorySourcePointers(pointers, sessionId);
+                const manualIds = new Set(companionReferences?.filter(item => item.kind === "conversation").map(item => item.conversationId));
+                const historyReferences: CompanionReference[] = [];
+                for (const source of active) {
+                  if (manualIds.has(source.conversationId)) continue;
+                  manualIds.add(source.conversationId);
+                  historyReferences.push({ kind: "chat-history", ...source });
+                  if (historyReferences.length >= 3) break;
+                }
+                companionReferences = [
+                  ...(companionReferences ?? []).filter(item => item.kind === "conversation"),
+                  ...historyReferences,
+                  ...(companionReferences ?? []).filter(item => item.kind !== "conversation"),
+                ].slice(0, 6);
+              } catch (error) { console.warn("[AgUiBridge] 核对历史引用失败:", error); }
+            }
             if (speechScope === "owner" && assistantEntryId && lastResult.reply.trim() && companionReferences?.length
               && isCompanionReferenceList(companionReferences)) {
               const reply = lastResult.reply.normalize("NFKC");

@@ -11,6 +11,7 @@ import "../fs-tools";
 import { registerLifeTools, setTranslateConfig } from "../life-tools";
 import { registerMomentsTools } from "../moments-tools";
 import { registerRecallHistoryTool } from "../history-tools";
+import { registerChatHistoryTools } from "../chat-history-tools";
 import { registerWikiMemoryTools } from "../wiki-memory-tools";
 import { registerKnowledgeBaseTools } from "../knowledge-base-tools";
 import { registerSearchTextTool } from "../search-text-tools";
@@ -31,6 +32,7 @@ export function registerAllTools(deps: { lspManager: LspManager; gmailService?: 
   registerSearchTextTool();
   registerAstGrepTools();
   registerRecallHistoryTool();
+  registerChatHistoryTools();
   registerWikiMemoryTools();
   registerKnowledgeBaseTools();
   registerDocumentTools();

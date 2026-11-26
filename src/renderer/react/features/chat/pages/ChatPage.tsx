@@ -5,6 +5,7 @@ import { useTranslation } from "../../../i18n";
 import { DownOutlined } from "@ant-design/icons";
 import { Group, Panel, Separator, useDefaultLayout } from "react-resizable-panels";
 import { ChatComposer, parseComposerMessage, type ComposerAttachment } from "../components/ChatComposer";
+import type { ConversationReferenceChoice } from "../components/ConversationReferencePicker";
 import { ChatCompanionCorrection } from "../components/ChatCompanionCorrection";
 import { ChatCompanionFollowups } from "../components/ChatCompanionFollowups";
 import { ChatCompanionReplyMode } from "../components/ChatCompanionReplyMode";
@@ -173,6 +174,7 @@ interface SubmittingDraft {
   scope: string;
   content: string;
   attachments: ComposerAttachment[];
+  conversationReference?: ConversationReferenceChoice;
   committedId?: string;
   stop: { requested: boolean; pendingId?: string; sessionId?: string };
 }
@@ -224,6 +226,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
   const [mode, setMode] = useState<ConversationMode>(getInitialMode);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [companionReplyDrafts, setCompanionReplyDrafts] = useState<Record<string, CompanionReplyInput>>({});
+  const [conversationReferenceDrafts, setConversationReferenceDrafts] = useState<Record<string, ConversationReferenceChoice>>({});
   const submittedCompanionReplies = useRef(new WeakSet<CompanionReplyInput>());
 
   const [workspaceNames, setWorkspaceNames] = useState<Partial<Record<ConversationMode, string>>>({});
@@ -470,6 +473,16 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     && !(activeSession?.id === activeSessionId && activeSession?.purpose)
     && !messages.some((message) => message.channelSource?.chatType === "group");
   const companionReply = canUseCompanionControls ? companionReplyDrafts[scopeKey] : undefined;
+  const canReferenceConversation = canUseCompanionControls && !messages.some(message => message.channelSource);
+  const conversationReference = canReferenceConversation ? conversationReferenceDrafts[scopeKey] : undefined;
+  function updateConversationReference(source?: ConversationReferenceChoice) {
+    setConversationReferenceDrafts((current) => {
+      if (source) return { ...current, [scopeKey]: source };
+      const next = { ...current };
+      delete next[scopeKey];
+      return next;
+    });
+  }
   function updateCompanionReply(patch: Partial<CompanionReplyInput>) {
     setCompanionReplyDrafts((current) => {
       const next = { ...current };
@@ -1557,10 +1570,11 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     // 回执前保留草稿；连按 Enter 只提交同一份草稿一次。
     if ([...submissions.current.values()].some((other) =>
       !other.committedId && other.scope === scopeKey && other.content === content &&
+      other.conversationReference?.id === conversationReference?.id &&
       other.attachments.length === attachments.length && other.attachments.every((item, i) => item === attachments[i])
     )) return;
     const id = crypto.randomUUID();
-    const submission: SubmittingDraft = { scope: scopeKey, content, attachments, stop: { requested: false } };
+    const submission: SubmittingDraft = { scope: scopeKey, content, attachments, conversationReference, stop: { requested: false } };
     updateSubmittingDraft(id, submission);
     // 只串行等待持久入队，依赖等待与模型运行不占用后续提交的位置。
     const previous = submissionTails.current.get(scopeKey);
@@ -1599,7 +1613,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     const targetMode = mode;
     // 带会话内指引时，将消息留在点击发送时的会话，即使等待模型切换期间切了页面。
     if (companionReply && !activeSessionId && activeSessionIdsRef.current[targetMode]) return;
-    const sessionId = companionReply && activeSessionId ? activeSessionId : await ensureSession(targetMode);
+    const sessionId = activeSessionId ?? await ensureSession(targetMode);
     if (submission.scope !== sessionId) {
       submission = { ...submission, scope: sessionId };
       updateSubmittingDraft(userMessageId, submission);
@@ -1666,6 +1680,7 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
       visibleContent: visibleMessage,
       attachments: attachmentsForMessage,
       userSticker,
+      conversationReferenceId: submission.conversationReference?.id,
       onEnqueuing: (id) => { submission.stop.sessionId = sessionId; submission.stop.pendingId = id; },
       onCommitted: (committedId) => { updateSubmittingDraft(userMessageId, { ...submission, committedId }); release(); },
     });
@@ -1677,6 +1692,14 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
     // 请求期间用户继续输入时不清掉新内容：仅当草稿仍是发送时的文本才清空；
     // 附件同样只清随消息发送的那些（空快照不清任何附件），期间新加的保留
     setDrafts((current) => (current[scopeKey] === content ? { ...current, [scopeKey]: "" } : current));
+    if (submission.conversationReference) {
+      setConversationReferenceDrafts((current) => {
+        if (current[scopeKey] !== submission.conversationReference) return current;
+        const next = { ...current };
+        delete next[scopeKey];
+        return next;
+      });
+    }
     clearScopeAttachments(attachmentsForMessage);
     await queueFlow.consume(targetMode, sessionId);
   }
@@ -2262,6 +2285,8 @@ export function ChatPage({ onOpenSettings, scheduledTasksNavigation = 0 }: { onO
             attachmentBusy={attachmentBusy}
             modelBusy={isCurrentScopeRunning}
             waitingToSend={Boolean(waitingHead || showLocalWait)}
+            conversationReference={conversationReference}
+            onConversationReferenceChange={canReferenceConversation ? updateConversationReference : undefined}
             onCompactPhaseChange={handleCompactPhaseChange}
             pendingQueue={currentPendingQueue}
             companionControls={(canUseCompanionControls || quietCompanion.active) && (

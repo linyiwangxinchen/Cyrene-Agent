@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { XilianWorldStore } from "../xilian-world/world-store";
-import { AMPHOREUS_FACTS, AMPHOREUS_RESIDENTS } from "../../shared/amphoreus-canon";
+import { AMPHOREUS_CANON_REVISION, AMPHOREUS_RESIDENTS } from "../../shared/amphoreus-canon";
 import type { AmphoreusState, WorldEffect } from "../../shared/amphoreus-world";
 import { AMPHOREUS_REQUEST_TIMEOUT_MS } from "../../shared/amphoreus-world";
 import { applyResolutions, formatAmphoreusContext } from "./engine";
@@ -11,7 +11,8 @@ import { parseDailyPlan, parseResolutions } from "./narrative";
 import { residentActivity, routineProfile, travelMinutes } from "./life";
 import { createAmphoreusService } from "./service";
 import { worldClock, worldInstant } from "./clock";
-import { plan, resolutionOutput, rotatingPlan } from "./test-fixtures";
+import { plan, resolutionOutput, reviewOutput, rotatingPlan } from "./test-fixtures";
+import type { WorldMessages } from "./prompts";
 import { buildXilianLifeSnapshot } from "../xilian-world/life-context";
 
 let root: string, now: number, store: XilianWorldStore;
@@ -161,11 +162,54 @@ describe("validated model boundary", () => {
   });
   it.each([true, false])("requires a separate canon review for major outcomes (accepted=%s)", async (consistent) => {
     const value = plan(); value.events[0].severity = "major"; install(value); advance("10:30");
-    const generate = vi.fn(async (messages) => JSON.parse(messages[1].content).purpose === "review" ? JSON.stringify({ consistent, factIds: AMPHOREUS_FACTS.slice(0, 2).map((f) => f.id) }) : resolutionOutput(state()));
+    const generate = vi.fn(async (messages: WorldMessages) => JSON.parse(messages[1].content).purpose === "review" ? reviewOutput(messages[1].content, consistent) : resolutionOutput(state()));
     const runtime = createAmphoreusService({ store, now: () => now, timezone: () => "UTC", configured: () => true, generate }); await runtime.tick(); runtime.stop();
     expect(generate).toHaveBeenCalledTimes(2);
     expect(state().days[0].events[0].status).toBe(consistent ? "completed" : "awaiting_resolution");
     expect(store.worldView().amphoreus!.budget.used).toBe(2);
+  });
+  it.each(["wrong participant", "missing event", "duplicate event"])("rejects a canon review with %s before applying any effects", async (failure) => {
+    const value = plan(); value.events[0].severity = "major"; install(value); advance("16:00");
+    const supplies = state().places.find((place) => place.id === "okhema")!.supplies;
+    const effect: WorldEffect = { kind: "place", placeId: "okhema", field: "supplies", delta: 5, reason: "收到物资" };
+    const generate = async (messages: WorldMessages) => {
+      if (JSON.parse(messages[1].content).purpose !== "review") return resolutionOutput(state(), [effect]);
+      const result = JSON.parse(reviewOutput(messages[1].content));
+      expect(result.reviews).toHaveLength(2);
+      if (failure === "wrong participant") result.reviews[0].factIds[1] = "identity:cyrene";
+      if (failure === "missing event") result.reviews.pop();
+      if (failure === "duplicate event") result.reviews[1] = result.reviews[0];
+      return JSON.stringify(result);
+    };
+    const runtime = createAmphoreusService({ store, now: () => now, timezone: () => "UTC", configured: () => true, generate });
+    await runtime.tick(); runtime.stop();
+    expect(state().attempts).toEqual(expect.arrayContaining([expect.objectContaining({ purpose: "resolve", status: "failed", error: "invalid_output" })]));
+    expect(state().days[0].events.map((event) => event.status)).toEqual(["awaiting_resolution", "awaiting_resolution", "planned"]);
+    expect(state().places.find((place) => place.id === "okhema")!.supplies).toBe(supplies);
+  });
+  it("preserves scheduled time, actual settlement and review provenance through reload and replay", async () => {
+    const value = plan(); value.events[0].severity = "major";
+    const file = path.join(root, "amphoreus-world.json");
+    const generate = vi.fn(async (messages: WorldMessages) => {
+      const purpose = JSON.parse(messages[1].content).purpose;
+      if (purpose === "plan") return JSON.stringify(value);
+      if (purpose === "review") return reviewOutput(messages[1].content);
+      return resolutionOutput(state());
+    });
+    const runtime = createAmphoreusService({ store, now: () => now, timezone: () => "UTC", configured: () => true, generate });
+    await runtime.tick();
+    expect(state().days[0].canonRevision).toBe(AMPHOREUS_CANON_REVISION);
+    const earlierRevision = "2026-11-01.1";
+    store.updateAmphoreus((world) => { world.days[0].canonRevision = earlierRevision; return true; });
+    advance("10:30"); await runtime.tick(); runtime.stop();
+    const event = state().days[0].events[0];
+    const expected = { generatedAt: at("08:00"), startsAt: at("09:30"), endsAt: at("10:15"), resolvedAt: at("10:30"), planCanonRevision: earlierRevision,
+      resolutionCanonRevision: AMPHOREUS_CANON_REVISION, resolutionSource: "model", reviewedFactIds: ["history:irontomb", "identity:aglaea"] };
+    const restored = new XilianWorldStore(file, () => now); restored.advance({ now, timezone: "UTC" });
+    expect(restored.worldView().amphoreus!.events.find((entry) => entry.id === event.id)).toMatchObject(expected);
+    const archived = restored.queryWorldHistory({ locationId: event.locationId }).entries.filter((entry) => entry.id === event.id);
+    expect(archived).toHaveLength(1); expect(archived[0]).toMatchObject({ at: at("10:30"), details: expected });
+    expect(generate).toHaveBeenCalledTimes(3);
   });
   it("enforces the total daily model budget and cancels an uncooperative provider", async () => {
     store.updateAmphoreus((s) => { s.dailyModelBudget = 3; s.attempts = [0, 1, 2].map((n) => ({ key: `old:${n}`, date: "2026-11-10", timezone: "UTC", count: 1, status: "success", attemptedAt: now - n, retryAt: 0 })); return true; });
@@ -188,11 +232,16 @@ describe("durable history and upgrades", () => {
     const data = store.readDataSnapshot(), file = path.join(root, "amphoreus-world.json");
     const old = data.amphoreus! as unknown as { schema: number; days: AmphoreusState["days"] }; old.schema = 1;
     old.days[0].events[0].participants = ["tribios"]; old.days[0].events[1].outcome = "这是旧版预写的未来结果。";
+    delete old.days[0].events[0].resolutionCanonRevision;
     const bytes = JSON.stringify(data); fs.writeFileSync(file, bytes);
     store = new XilianWorldStore(file, () => now);
     expect(state().days[0].events[0].participants).toEqual(["tribbie", "trian", "trinnon"]);
     expect(state().days[0].events[0].outcome).toContain("留下了新的记录");
     expect(state().days[0].events[1].outcome).toBeUndefined();
+    expect(state().days[0].canonRevision).toBeUndefined();
+    expect(state().days[0].events[0].resolutionCanonRevision).toBeUndefined();
+    const legacyEvent = store.worldView().amphoreus!.events.find((event) => event.id === old.days[0].events[0].id)!;
+    expect(legacyEvent.resolutionSource).toBe("legacy"); expect(legacyEvent.resolvedAt).toBeUndefined();
     expect(fs.readFileSync(`${file}.schema1-backup.json`, "utf8")).toBe(bytes);
     expect(new XilianWorldStore(file, () => now).readDataSnapshot().amphoreus!.schema).toBe(3);
   });

@@ -26,3 +26,7 @@ export function resolutionOutput(state: AmphoreusState, effects: WorldEffect[] =
     developments: event.locationId === "okhema" ? [{ id: "daily-supplies", title: "日常物资", summary: "已完成一次供需核对。", nextStep: "明天核对配送情况。", participants: event.participants, status: "open" }] : [],
   })) });
 }
+export function reviewOutput(content: string, consistent = true) {
+  const { events } = JSON.parse(content) as { events: Array<{ id: string; participants: string[] }> };
+  return JSON.stringify({ consistent, reviews: consistent ? events.map((event) => ({ eventId: event.id, factIds: ["history:irontomb", `identity:${event.participants[0]}`] })) : [] });
+}

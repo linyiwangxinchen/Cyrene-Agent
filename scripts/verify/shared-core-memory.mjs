@@ -26,8 +26,8 @@ const vectorTurns = [
   '我这段时间在制作夜景摄影集。',
   '傍晚去了河边散步。',
   '天黑后桥上的灯亮起来了。',
-  '我找到了一个视野开阔的位置。',
-  '上周我在河边拍到了第一张星轨照片。',
+  '2026年11月20日，确认了红茶试饮，集合地点是茶社。',
+  '2026年11月19日，我在河边拍到了第一张星轨照片。',
 ];
 const vectorReply = '听起来挺有意思，愿意多聊聊吗？';
 const recallQuestions = [
@@ -39,11 +39,19 @@ const recallQuestions = [
   '这次在杨木码头集合，把手绘罗盘带上。',
   '这段聊天之前在做什么？（已验证来源）',
   '更正，集合点改为白水桥，手绘罗盘取消。',
+  '你还记得我那次拍下的星轨吗？（从向量切到摘要）',
+  '杨木码头那次的旧行程是怎样安排的？（从摘要切到向量）',
+  '我通常喜欢什么时候读书？（维基无工具）',
+  '我通常喜欢什么时候读书？（从维基切到摘要）',
+  '2026年11月19日星轨照片；2026年11月20日红茶试饮',
+  '2026年11月19日的红茶试饮',
+  '我想起老茶友提过的新发现，好像有红茶、沙画、水仙、菜价、竹子？',
 ];
 const vectorCandidates = [
   { layer: 'L0', field: 'preferredName', content: '小屿', evidenceIndex: 0 },
   { layer: 'L1', field: 'currentProject', content: '制作夜景摄影集', evidenceIndex: 1 },
-  { layer: 'L2', slug: '河边拍星轨', content: '用户在河边拍到了第一张星轨照片', evidenceIndex: 5 },
+  { layer: 'L2', slug: '河边拍星轨', content: '用户在河边拍到了第一张星轨照片', eventDate: '2026-11-19', evidenceIndex: 5 },
+  { layer: 'L2', slug: '红茶试饮', content: '确认了红茶试饮。集合地点是茶社。', gist: '确认了红茶试饮。', eventDate: '2026-11-20', evidenceIndex: 4 },
 ];
 const previousNodeOptions = process.env.NODE_OPTIONS;
 // Do not let an inherited warning-only policy hide a rejected background tail.
@@ -245,6 +253,23 @@ async function check(name, run) {
   const start = Date.now(); await run(); results.push({ name, ok: true, ms: Date.now() - start }); console.log('PASS', name);
 }
 
+async function ask(question, conversationId, transcriptRewind) {
+  const targetId = conversationId ?? (await invoke('chats:create', { mode: 'chat', title: question })).id;
+  const run = await invoke('agui:run', {
+    sessionId: targetId, styleId: 'default',
+    currentUser: { turnId: transcriptRewind?.anchorUserTurnId ?? randomUUID(), text: question, visibleContent: question },
+    assistantTurnId: randomUUID(),
+    ...(transcriptRewind ? { transcriptRewind } : {}),
+  });
+  assert.ok(run.success, JSON.stringify(run));
+  const terminal = () => aguiEvents.find(event => event.runId === run.runId && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type));
+  await waitFor(terminal, question);
+  assert.equal(terminal().result?.status, 'success', JSON.stringify(terminal()));
+  const prompt = recallPrompts.get(question);
+  assert.ok(prompt, 'the fixture must capture the actual outgoing model request');
+  return prompt;
+}
+
 function fixtureSettings(memoryMode, general) {
   return { version: 1, sessions: [], settings: {
     general: { proactiveChatMode: 'off', chatToolsEnabled: false, disclaimerAcceptedVersion: CURRENT_DISCLAIMER_VERSION, ...general },
@@ -287,7 +312,7 @@ async function verifyVectorMemory() {
   await waitFor(async () => {
     const memory = await readMemory();
     return memory?.l1.roundCount === vectorTurns.length
-      && memory.l2.some(entry => ['synced', 'sync_failed'].includes(entry.syncStatus));
+      && memory.l2.filter(entry => ['synced', 'sync_failed'].includes(entry.syncStatus)).length >= 2;
   }, 'vector judge persisted L2 and finalized the sixth turn');
   const memory = await readMemory();
   assert.equal(memory.l0.preferredName, '小屿');
@@ -296,27 +321,16 @@ async function verifyVectorMemory() {
   const entry = memory.l2.find(item => item.slug === '河边拍星轨');
   assert.equal(entry?.sourceQuote, vectorTurns[5]);
   assert.equal(entry?.sourceConversationId, session.id);
+  assert.equal(entry?.eventDate, '2026-11-19');
+  const tea = memory.l2.find(item => item.slug === '红茶试饮');
+  assert.equal(tea?.eventDate, '2026-11-20');
+  assert.equal(tea?.gist, '确认了红茶试饮。');
   assert.deepEqual(entry?.sourceMessageIds, [`user:v1:${turnIds[5]}:r1`]);
   assert.deepEqual(memory.profileSources['L0.preferredName'].sources, [{ conversationId: session.id, messageId: `user:v1:${turnIds[0]}:r1` }]);
   assert.deepEqual(memory.profileSources['L1.currentProject'].sources, [{ conversationId: session.id, messageId: `user:v1:${turnIds[1]}:r1` }]);
   assert.equal(vectorRequests.length, 1);
   assert.ok(!logs.some(line => String(line).includes('Fixture error:')), 'fixture assertions must all pass');
   console.log(`Vector store: L2 ${entry.syncStatus}; isolated memory: ${memoryPath}`);
-  async function ask(question, conversationId, transcriptRewind) {
-    const targetId = conversationId ?? (await invoke('chats:create', { mode: 'chat', title: question })).id;
-    const run = await invoke('agui:run', {
-      sessionId: targetId, styleId: 'default',
-      currentUser: { turnId: transcriptRewind?.anchorUserTurnId ?? randomUUID(), text: question, visibleContent: question }, assistantTurnId: randomUUID(),
-      ...(transcriptRewind ? { transcriptRewind } : {}),
-    });
-    assert.ok(run.success, JSON.stringify(run));
-    const terminal = () => aguiEvents.find(event => event.runId === run.runId && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.type));
-    await waitFor(terminal, question);
-    assert.equal(terminal().result?.status, 'success', JSON.stringify(terminal()));
-    const prompt = recallPrompts.get(question);
-    assert.ok(prompt, 'the fixture must capture the actual outgoing model request');
-    return prompt;
-  }
   const fact = vectorCandidates[2].content;
   function withVectorDatabase(run) {
     const database = new DatabaseSync(path.join(vectorDataDir, 'cyrene.sqlite'));
@@ -352,6 +366,18 @@ async function verifyVectorMemory() {
     assert.ok(prompt.includes(fact));
     assert.ok(!prompt.includes(vectorTurns[0]), 'the original transcript must not be carried into the fresh Chat');
   });
+  await check('One authenticated question recalls two independently dated topics and rejects a mismatched event date', async () => {
+    const prompt = await ask(recallQuestions[12]);
+    assert.ok(prompt.includes(fact));
+    assert.ok(prompt.includes(tea.content));
+    const wrongDate = await ask(recallQuestions[13]);
+    assert.doesNotMatch(wrongDate, /确认了红茶试饮|集合地点是茶社/);
+  });
+  await check('A weak match sends the verified gist without the complete detail', async () => {
+    const prompt = await ask(recallQuestions[14]);
+    assert.match(prompt, /简短线索[^\n]*确认了红茶试饮/);
+    assert.doesNotMatch(prompt, /集合地点是茶社/);
+  });
   await check('Explicit off suppresses personal memory in the model request while retaining stored data', async () => {
     seedPendingSocialJob('before-off-fixture');
     assert.equal((await invoke('settings:save-config', { memoryMode: 'off' })).memoryMode, 'off');
@@ -370,6 +396,12 @@ async function verifyVectorMemory() {
     assert.equal((await invoke('settings:save-config', { memoryMode: 'vector' })).memoryMode, 'vector');
     await close(); await launch(false, vectorDataDir);
     assert.deepEqual(socialJobStatus('startup-off-fixture'), { status: 'obsolete', payload_json: null });
+  });
+  await check('Switching from vector to summary retains the sourced episode and profile in a fresh Chat', async () => {
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'summary' })).memoryMode, 'summary');
+    const prompt = await ask(recallQuestions[8]);
+    assert.ok(prompt.includes('[兼容记忆]') && prompt.includes(fact));
+    assert.ok(prompt.includes('称呼：小屿'));
   });
   await check('After the source conversation is deleted the old episode cannot enter another request', async () => {
     await invoke('chats:delete', session.id);
@@ -413,6 +445,13 @@ async function verifyVectorMemory() {
     await writeSummaryFileAtomic(sessionPath, summary, 800, vectorDataDir, undefined, [original.source]);
     const included = await ask(recallQuestions[6], sourceSession.id);
     assert.ok(included.includes('当前会话摘要') && included.includes(summary));
+    await check('Switching from summary to vector reads a sourced, relevant old summary in a fresh Chat', async () => {
+      assert.equal((await invoke('settings:save-config', { memoryMode: 'vector' })).memoryMode, 'vector');
+      const prompt = await ask(recallQuestions[9]);
+      assert.ok(prompt.includes('[兼容记忆]') && prompt.includes(summary));
+      assert.ok(!prompt.includes(sessionPath), 'model sees the compatible summary without its filesystem path');
+      assert.equal((await invoke('settings:save-config', { memoryMode: 'summary' })).memoryMode, 'summary');
+    });
     // A rewrite affects the last Chat turn. Include the completed probe among
     // the tracked sources, leaving the first authentic source active.
     const latest = sourceFor(recallQuestions[6]);
@@ -500,6 +539,15 @@ try {
     assert.deepEqual(transcript(), originalTranscript);
     assert.ok((await invoke('chats:get', sessionId)).messages.some(message => message.content === userText));
     assert.ok(!logs.some(line => String(line).includes('Fixture error:')), 'fixture assertions must all pass');
+  });
+  await check('Wiki facts reach ordinary authenticated Chat with tools off and after switching to summary', async () => {
+    mode = 'vector'; // Ordinary responses, without changing the actual application setting.
+    assert.equal((await invoke('settings:get-general')).chatToolsEnabled, false);
+    const wiki = await ask(recallQuestions[10]);
+    assert.ok(wiki.includes('[兼容记忆]') && wiki.includes('喜欢在清晨读书'));
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'summary' })).memoryMode, 'summary');
+    const summary = await ask(recallQuestions[11]);
+    assert.ok(summary.includes('[兼容记忆]') && summary.includes('喜欢在清晨读书'));
   });
   await check('Six successful Web Chat turns persist source-backed L0/L1/L2 with social context enabled', verifyVectorMemory);
   const report = path.join(dataDir, 'verification-results.json');

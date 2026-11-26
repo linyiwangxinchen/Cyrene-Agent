@@ -16,6 +16,7 @@ import type { ConversationTranscriptStore } from "./conversation-transcript-stor
 import type { HarnessRunSession } from "./harness/run-store";
 import type { SideEffectKind, TodoItem, ToolCallOutcome } from "./harness/types";
 import type { ChatMessage } from "./vendors/types";
+import type { TranscriptHistorySources } from "./conversation-transcript-types";
 
 /** 轨迹写入失败：failedKind 标记断裂的协议点，cause 保留原始错误。 */
 export class TranscriptWriteError extends Error {
@@ -90,6 +91,7 @@ export function createTranscriptSink(input: {
   conversationId: string;
   runId: string;
   assistantTurnId?: string;
+  historyReadProvenance?: () => TranscriptHistorySources;
 }): TranscriptSink {
   const { store, conversationId, runId } = input;
   let assistantTurnId = input.assistantTurnId;
@@ -114,6 +116,7 @@ export function createTranscriptSink(input: {
         runId,
         ...(assistantTurnId ? { turnId: assistantTurnId } : {}),
         ...(roundId ? { roundId } : {}),
+        ...input.historyReadProvenance?.(),
         payload: message,
       });
       lastAssistantEntryId = entry.id;

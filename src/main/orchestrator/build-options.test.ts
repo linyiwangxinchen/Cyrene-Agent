@@ -20,6 +20,10 @@ import { ConversationTranscriptCompactor } from "./conversation-transcript-compa
 import { ConversationTranscriptStore } from "./conversation-transcript-store"
 import { ConversationJournalService } from "./conversation-journal-service"
 import { closeConversationDatabases } from "../storage/conversation-database-client"
+import { includesExternalConversation } from "../chats/conversation-reference"
+import { setMemoryMode } from "../memory/memory-mode"
+
+vi.mock("../chats/conversation-reference", () => ({ includesExternalConversation: vi.fn(() => false) }))
 
 function createBuildDeps(): BuildOptionsDeps {
   return {
@@ -232,6 +236,45 @@ describe("build-options", () => {
     }
   });
 
+  it("only offers old-chat tools and instructions in foreground owner Chat with current memory access", async () => {
+    const deps = createBuildDeps();
+    const ids = ["search_chat_history", "read_chat_history"];
+    deps.toolRegistry.getEnabled = () => ids.map(id => ({ id, enabled: true, name: id, chatBuiltin: true, privateContextOnly: true }));
+    deps.buildToolSystemPrompt = (_mode, tools) => tools.map(tool => (tool as { id: string }).id).join(" ");
+    const currentUser = { turnId: "turn", text: "上次聊到哪里了？", visibleContent: "上次聊到哪里了？" };
+    const input = { mode: "chat", executionMode: "chat", sessionId: "private", currentUser,
+      modelContext: { messages: [{ role: "user", content: currentUser.text }], uncertainEffects: [], throughSeq: 1 } };
+    const build = async (overrides = {}) => (await buildAgentRunOptions({ ...input, ...overrides }, deps)).options;
+    const assertUnavailable = (options: Awaited<ReturnType<typeof build>>) => {
+      for (const id of ids) {
+        expect(options.capabilities?.toolIds.has(id)).toBe(false);
+        expect(options.soulRuntimeContext).not.toContain(id);
+        expect(options.toolSystemContent).not.toContain(id);
+      }
+    };
+    try {
+      for (const mode of ["vector", "summary", "wiki"] as const) {
+        setMemoryMode(mode);
+        deps.loadModelSettings = () => ({ provider: "test", baseUrl: "https://example.test", model: "m", apiKey: "k", memoryMode: mode });
+        const options = await build();
+        expect([...options.capabilities!.toolIds]).toEqual(ids);
+        expect(options.soulRuntimeContext).toContain("先用 search_chat_history");
+      }
+      for (const excluded of [
+        { mode: "work", executionMode: "work" }, { channel: "qq", memoryScope: "peer:test-peer" },
+        { promptSource: "plugin-agent" }, { privateRelationshipContext: false }, { skipCurrentUserMood: true },
+      ]) assertUnavailable(await build(excluded));
+      vi.mocked(includesExternalConversation).mockReturnValueOnce(true);
+      assertUnavailable(await build());
+
+      deps.buildMemoryCompatibilityContext = async () => { setMemoryMode("off"); return ""; };
+      assertUnavailable(await build());
+      assertUnavailable(await build());
+    } finally {
+      setMemoryMode("vector");
+    }
+  });
+
   it("当轮纠正以独立请求上下文交给模型，不混入用户消息或历史", async () => {
     const currentUser = { turnId: "u1", text: "先听我说", visibleContent: "先听我说" };
     const input = {
@@ -264,7 +307,31 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).toContain("先接对方最后一句的具体意思");
     expect(result.options.soulSystemBaseContent).toContain("某条记录确实能回应眼前这句话时，才挑有依据的细节说");
     expect(result.options.soulRuntimeContext).toContain("维护一盏小灯");
+    expect(result.options.soulRuntimeContext).toContain("以昔涟的身份在微信私聊回应");
     expect(result.latestUserText).toBe(currentUser.text);
+  });
+
+  it("普通私聊从可见的最近轮次准备本轮动作，不重复注入对话正文", async () => {
+    const deps = createBuildDeps();
+    const text = "论文又被退了，今天先别分析原因。";
+    const currentUser = { turnId: "u-now", text, visibleContent: text };
+    const messages = Array.from({ length: 9 }, (_, index) => [
+      { role: "user" as const, content: `上一次的正文 ${index}` },
+      { role: "assistant" as const, content: `处理了第 ${index} 个问题` },
+    ]).flat();
+    const input = {
+      sessionId: "private", mode: "chat", executionMode: "chat", currentUser,
+      modelContext: { messages: [...messages, { role: "user" as const, content: text }], uncertainEffects: [], throughSeq: 19 },
+    };
+    const { options } = await buildAgentRunOptions(input, deps);
+    expect(options.soulRuntimeContext).toContain("最近 8 个已完成轮次");
+    expect(options.soulRuntimeContext).toContain("场景与动作");
+    expect(options.soulRuntimeContext).not.toContain("上一次的正文");
+    expect(options.companionReplyContext).toContain("省去建议、分析和追问");
+    expect(options.messages.at(-1)?.content).toContain(text);
+    expect(options.soulSystemBaseContent).not.toContain("说话前的准备");
+    expect((await buildAgentRunOptions({ ...input, privateRelationshipContext: false }, deps)).options.soulRuntimeContext)
+      .not.toContain("说话前的准备");
   });
 
   it("只把私聊当前用户可见的原话交给语气判断", async () => {
@@ -1824,6 +1891,55 @@ describe("本轮图片附件回归", () => {
     expect(deps.captionImageForFallback).toHaveBeenCalledWith(image.filePath)
     expect(fallback.at(-1)?.content).toContain("current.png：画面是一张安装截图")
     expect(imageBlocks(fallback.at(-1)?.content)).toHaveLength(0)
+  })
+
+  it.each([false, true])("转述期间关闭记忆会在请求前移除旧资料与工具，直发失败后重试=%s", async (fallback) => {
+    const { input } = createImageInput();
+    const deps = createBuildDeps();
+    deps.loadModelSettings = () => ({
+      provider: "test", baseUrl: "https://example.test", model: "caption-regression", apiKey: "k", memoryMode: "summary",
+      multimodal: fallback, vision: { baseUrl: "https://vlm.test/v1", apiKey: "k", model: "vlm-model" },
+    });
+    deps.buildMemoryCompatibilityContext = async () => "PRIVATE_COMPAT_MEMORY";
+    deps.buildSummaryMemoryContext = async () => ({ stablePrompt: "OLD_SUMMARY_POLICY", runtimeContext: "PRIVATE_SUMMARY_BODY" });
+    deps.toolRegistry.getEnabled = () => ["search_chat_history", "read_chat_history", "memory_recall"]
+      .map(id => ({ id, name: id, enabled: true, chatBuiltin: true, privateContextOnly: true }));
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    deps.captionImageForFallback = async () => {
+      entered.resolve();
+      await release.promise;
+      return { ok: true, caption: "转述结果" };
+    };
+    try {
+      setMemoryMode("summary");
+      const request = buildAgentRunOptions(input, deps);
+      let retried: Promise<unknown> | undefined;
+      if (fallback) {
+        const { options } = await request;
+        expect(options.soulRuntimeContext).toContain("PRIVATE_COMPAT_MEMORY");
+        expect(options.imageCaptionFallback).toBeDefined();
+        retried = options.imageCaptionFallback?.();
+      }
+      await entered.promise;
+      setMemoryMode("off");
+      release.resolve();
+      if (fallback) {
+        const payload = JSON.stringify(await retried);
+        expect(payload).toContain("转述结果");
+        expect(payload).not.toMatch(/PRIVATE_COMPAT_MEMORY|OLD_SUMMARY_POLICY|PRIVATE_SUMMARY_BODY|search_chat_history|read_chat_history/);
+      } else {
+        const { options } = await request;
+        expect(JSON.stringify(options.messages)).toContain("转述结果");
+        expect(options.capabilities?.toolIds.size).toBe(0);
+        expect(options.memoryScope).toBeUndefined();
+        expect([options.soulSystemBaseContent, options.soulRuntimeContext].join("\n"))
+          .not.toMatch(/PRIVATE_COMPAT_MEMORY|OLD_SUMMARY_POLICY|PRIVATE_SUMMARY_BODY|search_chat_history|read_chat_history/);
+      }
+    } finally {
+      release.resolve();
+      setMemoryMode("vector");
+    }
   })
 
   it("本轮图片无可用视觉路由时显示拒绝原因", async () => {

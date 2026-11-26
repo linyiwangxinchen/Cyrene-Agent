@@ -34,6 +34,7 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
     launchAtLogin: false,
     proactiveChatMode: "off",
     momentsEnabled: false,
+    language: "zh-CN",
     disclaimerAcceptedVersion: require("../../dist/server/shared/disclaimer.js")
       .CURRENT_DISCLAIMER_VERSION,
   });
@@ -109,8 +110,8 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
         throw Error(read.data.reading?.analysisError || "桌面读帖手记未生成");
       }
       const graph = await window.memoryPanel.getGraph();
-      async function ask(text, mode = "chat") {
-        const session = await window.chatStore.create({
+      async function ask(text, mode = "chat", existing) {
+        const session = existing ?? await window.chatStore.create({
           mode,
           title: "desktop fixture",
         });
@@ -149,9 +150,39 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
       const navigation = await window.browserPanel.navigate(browserFixtureUrl);
       if (!navigation.ok) throw Error(JSON.stringify(navigation));
       const browser = await ask("查看已打开的本地测试页截图。DESKTOP_BROWSER_IMAGE_CHECK", "work");
-      return { source: graph.nodes.some((n) => n.label === "气泡锚点"), everyday, explicit, browser };
+      const oldChat = await window.chatStore.create({ mode: "chat", title: "桌面引用来源" });
+      const oldAnswer = await ask("接力备忘 DESKTOP_OLD_REFERENCE_TEXT", "chat", oldChat);
+      await window.chatStore.rename(oldChat.id, "桌面引用来源");
+      await window.settings.saveConfig({ memoryMode: "summary" });
+      const toolChat = await window.chatStore.create({ mode: "chat", title: "桌面自主查阅" });
+      const toolAnswer = await ask("查查我们之前聊的接力备忘。DESKTOP_HISTORY_TOOL_CHECK", "chat", toolChat);
+      const toolHistory = await window.chatStore.get(toolChat.id);
+      const toolReference = toolHistory.messages.some(message => message.companionReferences?.some(reference =>
+        reference.kind === "chat-history" && reference.conversationId === oldChat.id));
+      await window.settings.saveConfig({ memoryMode: "off" });
+      const target = await window.chatStore.create({ mode: "chat", title: "桌面引用目标" });
+      await window.chatStore.openInReactChatWindow(target.id);
+      return { source: graph.nodes.some((n) => n.label === "气泡锚点"), everyday, explicit, browser, oldAnswer, toolAnswer, toolReference, targetId: target.id };
     }, { browserFixtureUrl, temporaryWorkspace: paths.documents });
-    assert.deepEqual(check, { source: true, everyday: "RUN_FINISHED", explicit: "RUN_FINISHED", browser: "RUN_FINISHED" });
+    const { targetId, ...outcomes } = check;
+    assert.deepEqual(outcomes, { source: true, everyday: "RUN_FINISHED", explicit: "RUN_FINISHED", browser: "RUN_FINISHED", oldAnswer: "RUN_FINISHED", toolAnswer: "RUN_FINISHED", toolReference: true });
+    const toolResults = captured.flatMap(body => Array.isArray(body.input) ? body.input.filter(item =>
+      item.type === "function_call_output" && item.call_id?.startsWith("call_desktop_history_")) : []);
+    assert.ok(toolResults.some(result => result.call_id === "call_desktop_history_search" && result.output.includes("桌面引用来源")));
+    assert.ok(toolResults.some(result => result.call_id === "call_desktop_history_read" && result.output.includes("DESKTOP_OLD_REFERENCE_TEXT")),
+      JSON.stringify(toolResults.map(({ call_id, output }) => ({ call_id, output: String(output).slice(0, 900) }))));
+    console.log("PASS Windows Electron model independently searches and reads an earlier Chat through Responses tools");
+    await page.getByRole("button", { name: "引用会话", exact: true }).click();
+    await page.getByRole("textbox", { name: "搜索聊天会话标题" }).fill("桌面引用来源");
+    await page.getByRole("button", { name: /桌面引用来源/ }).click();
+    const input = page.locator(".cy-composer textarea");
+    await input.fill("请接着聊 DESKTOP_MANUAL_REFERENCE_CHECK");
+    await input.press("Enter");
+    await page.getByText("本轮参考了什么", { exact: true }).waitFor({ timeout: 30_000 });
+    const quotedChat = await page.evaluate(id => window.chatStore.get(id), targetId);
+    assert.ok(quotedChat.messages.some(message => message.companionReferences?.some(reference =>
+      reference.kind === "conversation" && reference.title === "桌面引用来源")));
+    assert.equal(quotedChat.messages.find(message => message.role === "user")?.content, "请接着聊 DESKTOP_MANUAL_REFERENCE_CHECK");
     const secretsDir = path.join(paths.userData, "plugin-data", "tieba-garden", "secrets");
     const secretFiles = await readdir(secretsDir);
     assert.equal(secretFiles.length, 1);
@@ -176,6 +207,11 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
     const explicit = inputs("DESKTOP_READING_CHECK");
     assert.match(explicit, /plugin:tieba-garden:readings/);
     assert.ok(explicit.includes("https://tieba.baidu.com/p/54321"));
+    const referencedChat = inputs("DESKTOP_MANUAL_REFERENCE_CHECK");
+    assert.match(referencedChat, /DESKTOP_OLD_REFERENCE_TEXT/);
+    assert.match(referencedChat, /selected_conversation_excerpt/);
+    assert.doesNotMatch(referencedChat, /DESKTOP_STYLE_CHECK|DESKTOP_READING_CHECK/);
+    console.log("PASS Windows Electron composer quotes only the selected historical Chat in the Responses request");
     const screenshot = captured.filter(body => JSON.stringify(body.input).includes("DESKTOP_BROWSER_IMAGE_CHECK"))
       .flatMap(body => (body.input ?? []).filter(item => item.type === "function_call_output" && item.call_id === "call_browser_screenshot"))
       .flatMap(item => Array.isArray(item.output) ? item.output : [])

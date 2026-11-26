@@ -4,6 +4,7 @@ import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, L2Memory } from "./memory-types
 import { findPossibleConflictCandidate } from "./memory-conflict"
 import { scoreMemoryConflict, type ConflictEvidenceLevel } from "./memory-conflict-score"
 import { wasRecentlyInjectedMemory } from "./recent-injected-memory"
+import { validMemoryGist } from "./recall-presentation"
 import { addL2MemoryVector, searchMemoryEntries } from "../rag/index"
 import { candidateSources, isForgottenFact, isForgottenSource } from "./memory-source-policy"
 
@@ -113,8 +114,11 @@ export class MemoryManager {
   }
 
   private async writeL2(candidate: MemoryCandidate, assertSourceCurrent?: () => Promise<void>): Promise<boolean> {
+    const gist = validMemoryGist(candidate.gist, candidate.content)
     const l2Input: Omit<L2Memory, "id" | "createdAt" | "lastAccessedAt" | "accessCount" | "weight" | "status"> = {
       content: candidate.content,
+      ...(gist ? { gist } : {}),
+      ...(candidate.eventDate && candidate.sourceMessageIds?.length ? { eventDate: candidate.eventDate } : {}),
       triggerText: candidate.triggerText,
       sourceConversationId: candidate.sourceConversationId ?? "",
       sourceMessageIds: candidate.sourceMessageIds,

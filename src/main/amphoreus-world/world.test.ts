@@ -265,4 +265,59 @@ describe("autonomous daily service", () => {
     resolve(JSON.stringify(plan())); await pending;
     first.stop(); second.stop();
   });
+  it.each([false, true])("rechecks a daily plan after the world advances (route newly closed=%s)", async (closeRoute) => {
+    current = at("08:30") - 10_000;
+    let resolve!: (text: string) => void;
+    const { runtime, generate } = service(vi.fn(() => new Promise<string>((r) => { resolve = r; })));
+    const pending = runtime.tick();
+    const before = store.readDataSnapshot().amphoreus!.revision;
+    if (closeRoute) store.updateAmphoreus((state) => {
+      state.places.find((place) => place.id === "grove")!.access = "closed";
+      state.revision++;
+      return true;
+    });
+    current += 20_000; store.advance({ now: current, timezone: "UTC" });
+    expect(store.readDataSnapshot().amphoreus!.revision).toBeGreaterThan(before);
+    resolve(JSON.stringify(plan())); await pending; runtime.stop();
+    expect(store.readDataSnapshot().amphoreus!.days).toHaveLength(closeRoute ? 0 : 1);
+    expect(store.worldView().amphoreus).toMatchObject({ narrative: { status: closeRoute ? "cancelled" : "success" }, budget: { used: 1 } });
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+  it.each([false, true])("allows a routine tick but detects a changed settlement target (changed=%s)", async (changeSupplies) => {
+    await service().runtime.tick();
+    current = at("10:30") + 29 * 60_000 + 50_000;
+    let resolve!: (text: string) => void;
+    const { runtime, generate } = service(vi.fn(() => new Promise<string>((r) => { resolve = r; })));
+    const pending = runtime.tick();
+    const before = store.readDataSnapshot().amphoreus!;
+    if (changeSupplies) store.updateAmphoreus((state) => {
+      state.places.find((place) => place.id === "okhema")!.supplies += 2;
+      state.revision++;
+      return true;
+    });
+    current += 20_000; store.advance({ now: current, timezone: "UTC" });
+    expect(store.readDataSnapshot().amphoreus!.revision).toBeGreaterThan(before.revision);
+    resolve(resolutionOutput(before, [{ kind: "place", placeId: "okhema", field: "supplies", delta: 5, reason: "新送到的木料" }]));
+    await pending; runtime.stop();
+    const after = store.readDataSnapshot().amphoreus!;
+    expect(after.days[0].events[0].status).toBe(changeSupplies ? "awaiting_resolution" : "completed");
+    expect(after.places.find((place) => place.id === "okhema")!.supplies).toBe(before.places.find((place) => place.id === "okhema")!.supplies + (changeSupplies ? 2 : 5));
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+  it("preserves a private action that started during planning without an observation-page read", async () => {
+    current = at("08:08"); store.advance({ now: current, timezone: "UTC" });
+    const action = store.addPersonalIntention({ id: "during-planning", conversationId: "private", title: "看一眼星图", intent: "从家里翻几页" })!;
+    const draft = plan(undefined, true);
+    draft.events[2].startMinute = worldClock(action.startsAt, "UTC").minute;
+    current = action.startsAt - 10_000;
+    let resolve!: (text: string) => void;
+    const { runtime } = service(vi.fn(() => new Promise<string>((r) => { resolve = r; })));
+    const pending = runtime.tick();
+    current += 20_000;
+    resolve(JSON.stringify(draft)); await pending; runtime.stop();
+    const state = store.readDataSnapshot().amphoreus!;
+    expect(state.days).toHaveLength(0);
+    expect(state.attempts[0]).toMatchObject({ status: "cancelled", error: "interrupted" });
+    expect(state.personalActions.find((entry) => entry.id === action.id)).toMatchObject({ status: "active", conversationId: "private" });
+  });
 });

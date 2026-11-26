@@ -79,14 +79,15 @@ it("writes all three vector memory layers after six canonical private chat turns
     "今晚有点凉。",
     "这会儿喝杯茶。",
     "明天再聊。",
-    "上周我在河边拍到了第一张星轨照片。",
+    "2026年11月20日，我在河边拍到了第一张星轨照片。",
   ]
   state.judge.mockResolvedValue({ entities: [], candidates: [
     { layer: "L0", field: "preferredName", content: "小屿", confidence: 0.99,
       triggerText: userTexts[0], certainty: "explicit", attribution: "user_explicit", shouldWrite: true },
     { layer: "L1", field: "currentProject", content: "制作夜景摄影集", confidence: 0.95,
       triggerText: userTexts[1], certainty: "explicit", attribution: "user_explicit", shouldWrite: true },
-    { layer: "L2", slug: "河边拍星轨", content: "上周在河边拍到第一张星轨照片", confidence: 0.95,
+    { layer: "L2", slug: "河边拍星轨", content: "在河边拍到第一张星轨照片。那天夜里只带了一台相机。", confidence: 0.95,
+      gist: "在河边拍到第一张星轨照片。", eventDate: "2026-11-20",
       sourceQuote: userTexts[5], triggerText: userTexts[5], certainty: "explicit", attribution: "user_explicit", shouldWrite: true },
   ] })
 
@@ -97,7 +98,12 @@ it("writes all three vector memory layers after six canonical private chat turns
     const reply = `回复 ${index + 1}`
     await client.call("runs.admit", conversationId, userTurnId,
       { currentUser: { turnId: userTurnId, text: userText, visibleContent: userText } }, runId)
-    const sink = createTranscriptSink({ store: transcript, conversationId, runId, assistantTurnId })
+    const sink = createTranscriptSink({
+      store: transcript, conversationId, runId, assistantTurnId,
+      ...(index === 4 ? { historyReadProvenance: () => ({ historySources: [{
+        conversationId, userTurnId: "user-0", userEntryId: "user:v1:user-0:r1", assistantEntryId: "run-0:assistant:final",
+      }] }) } : {}),
+    })
     const assistantEntryId = await sink.appendAssistant({ message: { role: "assistant", content: reply }, roundId: "final" })
     await client.call("runs.terminal", runId, "completed")
     await onAgentRunFinished({ reply, toolResults: [], executionMode: "chat",
@@ -112,7 +118,7 @@ it("writes all three vector memory layers after six canonical private chat turns
   expect(scheduleSocialAtomExtraction).toHaveBeenCalledTimes(6)
   expect(await client.call("memory.count")).toBe(6)
   expect(state.judge).toHaveBeenCalledExactlyOnceWith(userTexts.map((userInput, index) => ({
-    userInput, assistantReply: `回复 ${index + 1}`,
+    userInput, assistantReply: index === 4 ? "" : `回复 ${index + 1}`,
   })), conversationId)
   expect(await client.call("memory.batch", conversationId)).toBeNull()
 
@@ -120,7 +126,10 @@ it("writes all three vector memory layers after six canonical private chat turns
   expect(stored).toMatchObject({
     l0: { preferredName: "小屿" },
     l1: { currentProject: "制作夜景摄影集", roundCount: 6 },
-    l2: [{ slug: "河边拍星轨", sourceConversationId: conversationId, sourceMessageIds: ["user:v1:user-5:r1"] }],
+    l2: [{
+      slug: "河边拍星轨", sourceConversationId: conversationId, sourceMessageIds: ["user:v1:user-5:r1"],
+      gist: "在河边拍到第一张星轨照片。", eventDate: "2026-11-20",
+    }],
   })
   const l0 = await memoryStore.getL0()
   const l1 = await memoryStore.getL1()

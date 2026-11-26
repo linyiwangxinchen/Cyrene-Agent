@@ -74,7 +74,8 @@ test("表达定位到真实字幕片段、评论与转写，忘记后跨重启�
   const comment = locateVideoExpression(BV, "春天种花", { comments, commentId: "57" });
   assert.equal(comment.source.kind, "video_comment");
   assert.equal(locateVideoExpression(BV, "春天种花", { video, comments, commentId: "58" }), undefined);
-  const row = rememberExpression(fixture.store, subtitle.source.url, "春天种花", "阳台晒太阳", subtitle.text, {}, subtitle.source);
+  const row = rememberExpression(fixture.store, subtitle.source.url, "春天种花", "阳台晒太阳", subtitle.text, { style: "detail" }, subtitle.source);
+  assert.equal(listVideoExpressionEvidence(fixture.store, 8)[0].strategy, "detail");
   assert.deepEqual(listVideoExpressionEvidence(fixture.store, 10)[0].source, subtitle.source);
   const reobserved = rememberExpression(fixture.store, comment.source.url, "春天，种花", "阳台晒太阳", "春天，种花晒会儿太阳。", {}, comment.source);
   assert.equal(row.id, reobserved.id);

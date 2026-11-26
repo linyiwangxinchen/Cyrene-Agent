@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelSettings } from "../settings/model-settings";
 import type { LlmClient } from "../services/llm/llm-client";
 import { AMPHOREUS_REQUEST_TIMEOUT_MS } from "../../shared/amphoreus-world";
-import { AMPHOREUS_FACTS } from "../../shared/amphoreus-canon";
 
 const mocks = vi.hoisted(() => ({
   root: "",
@@ -27,7 +26,7 @@ vi.mock("../services/llm/llm-client", () => ({
 
 import { XilianWorldStore } from "../xilian-world/world-store";
 import { createAmphoreusRuntime } from "./runtime";
-import { plan, resolutionOutput } from "./test-fixtures";
+import { plan, resolutionOutput, reviewOutput } from "./test-fixtures";
 
 let now: number, store: XilianWorldStore;
 const runtimes: ReturnType<typeof createAmphoreusRuntime>[] = [];
@@ -126,7 +125,7 @@ describe("shared Amphoreus model runtime", () => {
     now = at("10:30");
     mocks.chatNonStream.mockImplementation(async (_settings, messages) => response(
       JSON.parse(messages[1].content).purpose === "review"
-        ? JSON.stringify({ consistent: true, factIds: AMPHOREUS_FACTS.slice(0, 2).map((fact) => fact.id) })
+        ? reviewOutput(messages[1].content)
         : resolutionOutput(store.readDataSnapshot().amphoreus!),
     ));
     await value.tick();

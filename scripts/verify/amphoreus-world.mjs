@@ -23,13 +23,21 @@ const model = createServer(async (req, res) => {
     assert.ok(!input.includes('PRIVATE_USER_PROFILE'), 'User profile must not enter the world request');
     const context = JSON.parse(body.messages.findLast((m) => m.role === 'user').content);
     if (context.purpose === 'plan') assert.equal(context.residents.length, 21);
-    const event = (startMinute, locationId, participants, title) => ({ startMinute, durationMinutes: 45, locationId, participants, activity: 'work', severity: 'notable', title, summary: `准备${title}` });
+    const event = (startMinute, locationId, participants, title, severity = 'notable') => ({ startMinute, durationMinutes: 45, locationId, participants, activity: 'work', severity, title, summary: `准备${title}` });
     const plan = { date: context.date, events: [
-      event(570, 'okhema', ['aglaea', 'demeter', 'nike'], '协调物资'),
+      event(570, 'okhema', ['aglaea', 'demeter', 'nike'], '协调物资', 'major'),
       event(900, 'grove', ['anaxa', 'dan-heng'], '讨论研究'),
       event(1185, 'aedes-elysiae', ['phainon', 'hatonus'], '村落往来'),
     ] };
-    const content = JSON.stringify(context.purpose === 'resolve' ? { resolutions: context.events.map((event) => ({ eventId: event.id, version: event.version, status: 'completed', outcome: `${event.title}形成了可继续追踪的记录。`, effects: [{ kind: 'place', placeId: event.locationId, field: 'supplies', delta: -2, reason: '本次活动使用了少量公共物资' }], developments: [] })) } : plan);
+    let output = plan;
+    if (context.purpose === 'resolve') output = { resolutions: context.events.map((event) => ({ eventId: event.id, version: event.version, status: 'completed', outcome: `${event.title}形成了可继续追踪的记录。`, effects: [{ kind: 'place', placeId: event.locationId, field: 'supplies', delta: -2, reason: '本次活动使用了少量公共物资' }], developments: [] })) };
+    if (context.purpose === 'review') output = { consistent: true, reviews: context.events.map((event) => {
+      assert.equal(event.resolution.eventId, event.id);
+      const factIds = ['history:irontomb', `identity:${event.participants[0]}`];
+      assert.deepEqual(event.facts.map((fact) => fact.id).sort(), [factIds[0], ...event.participants.map((id) => `identity:${id}`)].sort());
+      return { eventId: event.id, factIds };
+    }) };
+    const content = JSON.stringify(output);
     if (body.stream) {
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
       res.end(`data: ${JSON.stringify({ id: 'world-fixture', model: body.model, choices: [{ index: 0, delta: { content }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({ id: 'world-fixture', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\ndata: [DONE]\n\n`);
@@ -94,6 +102,7 @@ try {
   assert.ok(Array.isArray(first.amphoreus.personal.actions));
   assert.ok(first.amphoreus.personal.changes.every(change => change.residentId === 'cyrene' && change.knownAt <= Date.now()));
   assert.equal(first.amphoreus.events.length, 3);
+  assert.ok(first.amphoreus.events.every((event) => Number.isFinite(event.generatedAt) && event.planCanonRevision === first.amphoreus.canonRevision));
   assert.equal(modelCalls, 1);
   assert.equal((await invoke('settings:get-general')).proactiveChatMode, 'off');
   assert.ok(!JSON.stringify(first).includes('fixture-only'));
@@ -129,7 +138,8 @@ try {
   await invoke('companion:world:configure', { narrativeEnabled: true });
   await invoke('companion:world:get');
   await waitFor(async () => (await invoke('companion:world:get')).amphoreus.events.every((e) => e.status === 'completed'), 'event resolution');
-  assert.equal(modelCalls, 2);
+  if (fixtureError) throw fixtureError;
+  assert.equal(modelCalls, 3);
   const saved = JSON.parse(await readFile(path.join(dataDir, 'amphoreus-world.json'), 'utf8'));
   assert.equal(saved.version, 3);
   assert.equal(saved.amphoreus.schema, 3);
@@ -137,8 +147,18 @@ try {
   assert.equal(history.entries.length, 2); assert.ok(history.next);
   const older = await invoke('companion:world:history', { ...history.next, limit: 80 });
   assert.ok(!older.entries.some((entry) => history.entries.some((first) => first.id === entry.id)));
+  const major = saved.amphoreus.days[0].events.find((event) => event.severity === 'major');
+  const recorded = [...history.entries, ...older.entries].find((entry) => entry.id === major.id);
+  assert.deepEqual(recorded.details.reviewedFactIds, ['history:irontomb', 'identity:aglaea']);
+  assert.equal(recorded.details.planCanonRevision, first.amphoreus.canonRevision);
+  assert.equal(recorded.details.resolutionCanonRevision, first.amphoreus.canonRevision);
+  assert.equal(recorded.details.resolutionSource, 'model');
+  assert.equal(recorded.details.startsAt, major.startsAt);
+  assert.equal(recorded.details.endsAt, major.endsAt);
+  assert.equal(recorded.details.resolvedAt, recorded.at);
+  assert.ok(recorded.details.endsAt < recorded.details.generatedAt && recorded.details.generatedAt < recorded.details.resolvedAt);
   assert.equal(await invoke('companion:world:artifact', '../../outside'), null);
-  results.push('restart preserves intentions and resolves due events once; authenticated history pagination and artifact ID boundary');
+  results.push('restart, authenticated history pagination, separate planning/schedule/result dates, event-specific canon review, persisted provenance and artifact ID boundary');
   await mkdir('.build-temp', { recursive: true });
   if (process.argv.includes('--ui')) {
     const { chromium } = await import('playwright');
@@ -159,12 +179,24 @@ try {
       assert.ok(await page.locator('.cy-amphoreus__personal').isVisible());
       assert.ok(await page.locator('.cy-amphoreus__personal-now').textContent());
       await page.screenshot({ path: '.build-temp/amphoreus-desktop.png' });
+      const eventDetails = (panel) => panel.locator('article').filter({ has: page.getByRole('heading', { name: major.title, exact: true }) });
+      const worldEvents = page.getByRole('tabpanel', { name: '世界动态', exact: true });
+      await worldEvents.getByRole('button', { name: '近期历史', exact: true }).click();
+      await eventDetails(worldEvents).locator('summary').click();
+      assert.ok(await eventDetails(worldEvents).getByText('结果记录时间', { exact: true }).isVisible());
       await page.getByRole('tab', { name: '居民', exact: true }).click();
       await page.getByRole('tabpanel', { name: '居民', exact: true }).locator('article').first().waitFor();
       assert.equal(await page.getByRole('tabpanel', { name: '居民', exact: true }).locator('article').count(), 21);
       await page.getByRole('tabpanel', { name: '居民', exact: true }).locator('details').first().locator('summary').click();
       await page.getByRole('button', { name: '查看此人的完整经历', exact: true }).first().click();
-      await page.getByRole('tabpanel', { name: '世界编年史', exact: true }).locator('article').first().waitFor();
+      const chronicle = page.getByRole('tabpanel', { name: '世界编年史', exact: true });
+      const chronicleEvent = eventDetails(chronicle);
+      await chronicleEvent.locator('summary').click();
+      const chronology = await chronicleEvent.locator('details').textContent();
+      for (const text of ['续写生成时间', '计划时段', '结果记录时间', '模型结算', first.amphoreus.canonRevision, 'identity:aglaea']) assert.ok(chronology.includes(text));
+      assert.deepEqual(await chronicleEvent.locator('details time').evaluateAll((nodes) => nodes.map((node) => node.dateTime)),
+        [recorded.details.generatedAt, major.startsAt, major.endsAt, recorded.at].map((at) => new Date(at).toISOString()));
+      await page.screenshot({ path: '.build-temp/amphoreus-chronicle-desktop.png' });
       await page.getByRole('tab', { name: '地点', exact: true }).click();
       await page.locator('.cy-amphoreus__map').waitFor();
       assert.equal(await page.locator('.cy-amphoreus__map button').count(), 10);
@@ -196,8 +228,15 @@ try {
       await client.detach();
       const overflow = await page.locator('.cy-amphoreus').evaluate((element) => element.scrollWidth - element.clientWidth);
       assert.ok(overflow <= 1, `World panel overflow: ${overflow}px`);
+      await page.locator('.cy-amphoreus__map').getByRole('button', { name: /奥赫玛/ }).click();
+      await page.getByRole('button', { name: '查看此地历史', exact: true }).click();
+      await chronicleEvent.locator('summary').click();
+      assert.ok(await chronicleEvent.getByText('审核引用的设定事实', { exact: true }).isVisible());
+      const chronicleOverflow = await chronicleEvent.evaluate((element) => element.scrollWidth - element.clientWidth);
+      assert.ok(chronicleOverflow <= 1, `Chronicle event overflow: ${chronicleOverflow}px`);
+      await page.screenshot({ path: '.build-temp/amphoreus-chronicle-mobile.png' });
       assert.deepEqual(errors, []);
-      results.push('desktop and 390px mobile browser: top-level entry, 21 residents, personal history, 10-place map, image preview, simulated 250ms latency refresh under 500 bytes, no panel overflow or page errors');
+      results.push('desktop and 390px mobile browser: top-level entry, 21 residents, personal history, chronicle dates and canon provenance, 10-place map, image preview, simulated 250ms latency refresh under 500 bytes, no panel overflow or page errors');
     } finally { await browser.close(); }
   }
   await writeFile('.build-temp/amphoreus-verification.json', JSON.stringify({ at: new Date().toISOString(), platform: process.platform, dataDir, model: 'isolated fixture', results, modelCalls }, null, 2));

@@ -28,13 +28,16 @@ export function readAmphoreusState(value: unknown, now: number): AmphoreusState 
         visibility: entry.visibility === "participants" ? "participants" : "public", developments: (!legacy || applied.includes(id)) ? list(entry.developments ?? [], 0, 3).map((v) => parseThread(v, true)) : [],
         ...(typeof entry.outcome === "string" && (!legacy || applied.includes(id)) ? { outcome: text(entry.outcome, 600) } : {}),
         effects: legacy ? [] : list(entry.effects ?? [], 0, 8) as AmphoreusEvent["effects"], resolutionSource: legacy ? "legacy" : entry.resolutionSource as AmphoreusEvent["resolutionSource"],
+        ...(typeof entry.resolutionCanonRevision === "string" ? { resolutionCanonRevision: text(entry.resolutionCanonRevision, 100) } : {}),
+        ...(Array.isArray(entry.reviewedFactIds) ? { reviewedFactIds: list(entry.reviewedFactIds, 2, AMPHOREUS_RESIDENTS.length + 1).map((id) => text(id, 160)) } : {}),
         ...(legacy && applied.includes(id) ? { resolvedAt: endsAt } : typeof entry.resolvedAt === "number" ? { resolvedAt: number(entry.resolvedAt) } : {}),
         ...(typeof entry.reason === "string" ? { reason: text(entry.reason, 400) } : {}),
         ...(typeof entry.deferCount === "number" ? { deferCount: number(entry.deferCount) } : {}),
         ...(typeof entry.originalTimezone === "string" ? { originalTimezone: text(entry.originalTimezone, 100) } : {}),
       };
     });
-    return { date: dayDate, timezone: worldTimezone(text(day.timezone, 100)), generatedAt: number(day.generatedAt), events };
+    return { date: dayDate, timezone: worldTimezone(text(day.timezone, 100)), generatedAt: number(day.generatedAt), events,
+      ...(typeof day.canonRevision === "string" ? { canonRevision: text(day.canonRevision, 100) } : {}) };
   });
   check(new Set(state.days.map((day) => day.date)).size === state.days.length);
   const ids = state.days.flatMap((day) => day.events.map((event) => event.id)); check(new Set(ids).size === ids.length);

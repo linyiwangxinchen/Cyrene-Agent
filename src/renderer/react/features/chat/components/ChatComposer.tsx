@@ -1,6 +1,6 @@
 import { Sender, Suggestion } from "@ant-design/x";
 import { Popover } from "antd";
-import { AlertTriangle, BookOpen, ChevronDown, ExternalLink, FolderOpen, Package, Plus, ScanLine, Terminal } from "lucide-react";
+import { AlertTriangle, BookOpen, ChevronDown, ExternalLink, FolderOpen, MessageSquareText, Package, Plus, ScanLine, Terminal } from "lucide-react";
 import { Dialog } from "radix-ui";
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useTranslation } from "../../../i18n";
@@ -23,6 +23,7 @@ import { PermissionControl } from "./PermissionControl";
 import { PlanModeToggle } from "./PlanModeToggle";
 import { ModelSelector } from "./ModelSelector";
 import { PendingQueueDock, type PendingQueueDockItem } from "./PendingQueueDock";
+import { ConversationReferencePicker, type ConversationReferenceChoice } from "./ConversationReferencePicker";
 import chatWelcomeUrl from "../../../assets/welcome/chat.png?url";
 import codeWelcomeUrl from "../../../assets/welcome/code.png?url";
 import learnWelcomeUrl from "../../../assets/welcome/learn.png?url";
@@ -48,6 +49,8 @@ interface ChatComposerProps {
   onCompactPhaseChange?: (phase: "idle" | "running" | "done" | "error") => void;
   pendingQueue?: PendingQueueDockItem[];
   companionControls?: ReactNode;
+  conversationReference?: ConversationReferenceChoice;
+  onConversationReferenceChange?: (source?: ConversationReferenceChoice) => void;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   onCancel?: () => void;
@@ -310,6 +313,8 @@ export function ChatComposer({
   onCompactPhaseChange,
   pendingQueue = [],
   companionControls,
+  conversationReference,
+  onConversationReferenceChange,
   onChange,
   onSubmit,
   onCancel,
@@ -363,6 +368,8 @@ export function ChatComposer({
   const supportsPlanToggle = mode === "code";
   const supportsStyle = mode === "chat" || mode === "learn";
   const supportsStickers = mode !== "code";
+  const selectConversationReference = mode === "chat" ? onConversationReferenceChange : undefined;
+  const selectedConversationReference = selectConversationReference ? conversationReference : undefined;
   const welcomeImageUrl = WELCOME_IMAGE_BY_MODE[mode] ?? chatWelcomeUrl;
   const welcomeGreeting = t(getWelcomeGreetingKey(welcomeGreetingDate), { name: preferredAddress });
   const requiresWorkspace = supportsWorkFiles;
@@ -415,7 +422,7 @@ export function ChatComposer({
     onChange(nextValue.replace(/ {2,}/g, " ").trim());
   };
 
-  const hasComposerHeader = attachments.length > 0 || selectedStickers.length > 0;
+  const hasComposerHeader = attachments.length > 0 || selectedStickers.length > 0 || selectedConversationReference !== undefined;
 
   latestComposerValueRef.current = value;
 
@@ -770,6 +777,16 @@ export function ChatComposer({
         ) : actionNode}
         header={hasComposerHeader ? (
           <div className="cy-composer__attachments" aria-label={t("composer.attachmentsLabel")}>
+            {selectedConversationReference && (
+              <div className="cy-composer__attachment" title={t("composer.conversationReference.hint")}>
+                <MessageSquareText size={16} aria-hidden="true" />
+                <span title={selectedConversationReference.title}>
+                  {t("composer.conversationReference.selected", { title: selectedConversationReference.title })}
+                </span>
+                <button type="button" onClick={() => selectConversationReference?.()}
+                  aria-label={t("composer.conversationReference.remove", { title: selectedConversationReference.title })}>×</button>
+              </div>
+            )}
             {attachments.map((attachment, index) => (
               <div className={`cy-composer__attachment ${attachment.kind === "image" && attachment.previewUrl ? "is-image" : ""}${attachment.kind === "web-element" ? " is-web-element" : ""}`} key={`${attachment.filePath ?? attachment.name}-${index}`}>
                 {attachment.kind === "web-element" && attachment.element ? (
@@ -818,6 +835,13 @@ export function ChatComposer({
               <ScanLine size={20} aria-hidden="true" />
             </button>}
             {supportsStickers && <StickerPicker onChoose={onChooseSticker} />}
+            {selectConversationReference && <ConversationReferencePicker
+              key={conversationId ?? "new"}
+              conversationId={conversationId}
+              disabled={restoringSession}
+              selected={selectedConversationReference}
+              onSelect={selectConversationReference}
+            />}
           </div>
         }
         />

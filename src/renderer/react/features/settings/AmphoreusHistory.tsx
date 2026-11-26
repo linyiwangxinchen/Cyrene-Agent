@@ -3,6 +3,7 @@ import { Alert, Button, Spin } from "antd";
 import type { AmphoreusView, WorldHistoryPage, WorldHistoryQuery } from "../../../../shared/amphoreus-world";
 import type { XilianLocation } from "../../../../shared/xilian-world";
 import { useTranslation } from "../../i18n";
+import { AmphoreusEventChronology } from "./AmphoreusEventChronology";
 
 export function AmphoreusHistory({ world, locations, residentId, locationId, since, onResident, onLocation, onSince }: {
   world: AmphoreusView; locations: readonly XilianLocation[]; residentId: string; locationId: string; since?: number;
@@ -40,6 +41,7 @@ export function AmphoreusHistory({ world, locations, residentId, locationId, sin
       <small><time>{new Intl.DateTimeFormat(locale, { timeZone: world.clock.timezone, dateStyle: "medium", timeStyle: "short" }).format(entry.at)}</time> · {label(`historyKind.${entry.kind}`)}{entry.status ? ` · ${label(`eventStatus.${entry.status}`)}` : ""}</small>
       <h3>{entry.title}</h3><p>{entry.text}</p>
       {entry.details && <details><summary>{label("causes")}</summary>
+        <AmphoreusEventChronology chronology={entry.details} timezone={world.clock.timezone} />
         <p>{label("intent")}：{entry.details.intent}</p>
         {entry.details.reason && <p>{entry.details.reason}</p>}
         {entry.details.conditions?.map((condition, i) => <p key={i}>{label("requires")}：{condition.kind === "event" ? condition.eventId : `${locations.find((p) => p.id === condition.placeId)?.name ?? condition.placeId} · ${label(condition.field === "supplies" ? "supplies" : "facilities")} ≥ ${condition.minimum}`}</p>)}

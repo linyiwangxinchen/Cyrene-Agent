@@ -36,6 +36,7 @@ import { decideRetry, getRetryParams, sleepWithJitter } from "./retry-policy";
 import { isToolBreakerTripped, nextToolFailureStreak, toolBreakerMessage } from "./tool-breaker";
 import { isCancellationError, raceWithSignal } from "../../abort-utils";
 import type { HarnessRun } from "./cyrene-harness";
+import { CHAT_HISTORY_TOOL_IDS } from "../../memory/memory-scope";
 
 /** 工具轮结果：completed = 结果已全部写回，继续下一轮；cancelled = 用户取消。 */
 export type ToolRoundOutcome = "completed" | "cancelled";
@@ -416,7 +417,9 @@ async function commitToolResult(
 }
 
 function sensitiveTranscriptToolResult(call: ToolCall, result: ToolDispatchResult): ChatMessage {
-  const message = result.outcome === "success"
+  const message = CHAT_HISTORY_TOOL_IDS.has(call.name)
+    ? result.outcome === "success" ? "已查阅过往会话，历史正文仅供该轮使用。" : "查阅过往会话未完成。"
+    : result.outcome === "success"
     ? "邮件工具已运行；邮件内容未写入会话轨迹。"
     : result.outcome === "unknown"
       ? "邮件操作结果未知；请先在 Gmail 中核对，再决定是否重试。"

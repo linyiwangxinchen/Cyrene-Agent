@@ -85,6 +85,24 @@ describe("TranscriptSink", () => {
     }));
   });
 
+  it("commits bounded historical locators beside the canonical message", async () => {
+    const store = makeStore();
+    const historySources = [{ conversationId: "earlier", userTurnId: "u", userEntryId: "ue", assistantEntryId: "ae", revision: "a".repeat(64) }];
+    const sink = createTranscriptSink({
+      store, conversationId: "c1", runId: "run-1",
+      historyReadProvenance: () => ({ historySources, historySourcesIncomplete: true }),
+    });
+    const message = { role: "assistant" as const, content: "found" };
+    await sink.appendAssistant({ message, roundId: "final" });
+    const [saved] = await store.readAuditEntries("c1");
+    expect(saved).toMatchObject({ kind: "assistant", payload: message, historySources, historySourcesIncomplete: true });
+    expect(saved.payload).not.toHaveProperty("historySources");
+    await expect(store.append("c1", {
+      kind: "assistant", id: "bad", payload: message,
+      historySources: [{ ...historySources[0], text: "private source content" } as typeof historySources[number]],
+    })).rejects.toThrow();
+  });
+
   it("closes cancellation with unknown only for started calls", async () => {
     const store = makeStore();
     const sink = createTranscriptSink({ store, conversationId: "c1", runId: "run-1" });

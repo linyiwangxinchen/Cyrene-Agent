@@ -17,6 +17,7 @@ import { captionImageSafe, IMAGE_CAPTION_PROMPT } from "../chat/image-caption";
 import { buildEnvironmentContext } from "./environment";
 import { buildToneInjection } from "./tone-injector";
 import { buildAlwaysOnContext, buildVectorMemoryContext, scheduleMemoryWrite } from "./index";
+import { buildMemoryCompatibilityContext } from "../memory/memory-compatibility-context";
 import { filterActiveSocialAtoms } from "../memory/memory-owner-recall";
 import { isOwnerMemoryScope, resolvePersonalMemoryScope } from "../memory/memory-scope";
 import { scheduleSummaryTurn } from "../memory/summary-memory-scheduler";
@@ -109,7 +110,7 @@ export interface AgentRuntimeDeps {
   socialContextScheduler: { schedule: (input: SocialExtractionInput) => void | Promise<void> };
   chatsStore: { getWorkspaceBinding: (conversationId: string) => ({ workspaceRoot: string; displayName: string; boundAt: number } | undefined) | Promise<{ workspaceRoot: string; displayName: string; boundAt: number } | undefined> };
   socialAtomStore: { listActive: (conversationId: string, now: number, memoryScope?: string) => SocialAtom[] };
-  buildSummaryMemoryContext?: (conversationId: string) => Promise<{ stablePrompt: string; runtimeContext: string }>;
+  buildSummaryMemoryContext?: BuildOptionsDeps["buildSummaryMemoryContext"];
   scheduleSummaryTurn?: (input: Parameters<typeof scheduleSummaryTurn>[0]) => void;
   scheduleWikiTurn?: (input: Parameters<typeof scheduleWikiTurn>[0]) => void;
   buildPluginPromptContext: (input: PluginPromptBuildInput, speechScope?: string) => Promise<string>;
@@ -286,8 +287,9 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       },
       buildToneInjection: (() => buildToneInjection()) as BuildOptionsDeps["buildToneInjection"],
       buildAlwaysOnContext: ((userText, messages, includeProfile) =>
-        buildAlwaysOnContext(userText, messages as any, includeProfile)) as BuildOptionsDeps["buildAlwaysOnContext"],
+        buildAlwaysOnContext(userText, messages as any, includeProfile, true)) as BuildOptionsDeps["buildAlwaysOnContext"],
       buildVectorMemoryContext,
+      buildMemoryCompatibilityContext,
       buildXilianLifeContext: (userText) => {
         if (!scope) return "";
         try {

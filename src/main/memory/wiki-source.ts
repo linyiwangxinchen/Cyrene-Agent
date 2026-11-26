@@ -5,6 +5,7 @@ import type { TranscriptEntry } from "../orchestrator/conversation-transcript-ty
 import type { ChatMessageContent } from "../orchestrator/vendors/types";
 import { wikiChatSourceId } from "./wiki-page";
 import { workspaceScope } from "./wiki-paths";
+import { historyDependentMemoryEntries } from "./memory-source-policy";
 
 type WikiSessionMeta = Pick<ChatSessionMeta, "id" | "mode" | "workspaceRoot" | "purpose">;
 type WikiChatRole = "user" | "assistant";
@@ -120,6 +121,11 @@ export class WikiChatSourceReader {
     const projection = reduceTranscriptProjection(entries);
     if (!projection.state) throw new Error("WIKI_SOURCE_PROJECTION_STATE_MISSING");
     const activeEntryIds = new Set(projection.state.nodes.map((node) => node.entryId));
+    const historyDependent = historyDependentMemoryEntries(entries);
+    // Older imported channel turns can use generic canonical IDs. Their
+    // presentation origin and original turn IDs still determine visibility.
+    const channelMessageIds = new Set(projection.messages.filter(message => message.channelSource).map(message => message.id));
+    const channelTurnIds = new Set(entries.flatMap(entry => entry.kind === "user" && entry.id.startsWith("channel:") && entry.turnId ? [entry.turnId] : []));
     const byEntryId = new Map<string, TranscriptEntry>();
     for (const entry of entries) {
       if (activeEntryIds.has(entry.id)) byEntryId.set(entry.id, entry);
@@ -132,16 +138,17 @@ export class WikiChatSourceReader {
       if (node.kind === "compaction") continue;
       const entry = byEntryId.get(node.entryId);
       if (!entry) throw new Error("WIKI_SOURCE_ACTIVE_ENTRY_MISSING");
-      const message = entryToMessage(conversationId, entry);
+      const message = historyDependent.has(entry.id) ? null : entryToMessage(conversationId, entry);
       if (node.kind === "user") {
         // Even an attachment-only user turn separates adjacent assistant turns.
         currentUserId = node.entryId;
-        currentUserAllowed = !node.entryId.startsWith("channel:") && !entry.runId?.startsWith("plugin:");
+        currentUserAllowed = !node.entryId.startsWith("channel:") && !channelMessageIds.has(node.messageId)
+          && !(node.turnId && channelTurnIds.has(node.turnId)) && !entry.runId?.startsWith("plugin:");
         if (currentUserAllowed && message?.role === "user") selectedMessages.push(message);
         continue;
       }
       if (entry.kind !== "assistant") throw new Error("WIKI_SOURCE_ACTIVE_ENTRY_KIND_MISMATCH");
-      if (!currentUserAllowed) continue;
+      if (!currentUserAllowed || channelMessageIds.has(node.messageId) || entry.runId?.startsWith("plugin:")) continue;
       // Multiple canonical assistant rounds share one assistant turn. Match the
       // UI's latest-round semantics so obsolete intermediate text is not learned.
       const groupKey = JSON.stringify([currentUserId ?? "", entry.turnId ?? entry.id]);

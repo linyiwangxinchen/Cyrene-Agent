@@ -63,13 +63,18 @@ export function createDailyRecaps(deps: Dependencies) {
       add({ date: worldClock(sample.at, zone).date, at: sample.at, kind: "expression", expressionId: sample.id,
         text: origin + "里学到「" + sample.quote + "」：" + clip(sample.scene, 110) });
     }
+    const privateWorldFacts = new Set<string>();
     for (const event of deps.worldDiary()) {
-      add({ date: event.dateKey, at: event.writtenAt, kind: "world", text: clip(event.title + "：" + event.text, 210) });
+      const fact: Fact = { date: event.dateKey, at: event.writtenAt, kind: "world", text: clip(event.title + "：" + event.text, 210) };
+      if (event.visibility === "shareable") add(fact);
+      else privateWorldFacts.add(factHash(fact));
     }
+    // Old recaps used the same fact hashes without preserving world visibility.
+    const usableSaved = material.saved.filter(entry => !entry.factHashes.some(hash => privateWorldFacts.has(hash)));
     const configured = deps.configured();
     const activeSamples = new Set(samples.map(s => s.id));
     const activeWords = new Set(material.expressions.map(s => s.quote));
-    const archive = material.saved.filter(s => s.text && s.date < clock.date && (!s.turns.length || material.enabled)
+    const archive = usableSaved.filter(s => s.text && s.date < clock.date && (!s.turns.length || material.enabled)
       && s.expressionIds.every(id => activeSamples.has(id)) && s.privateWords.every(word => activeWords.has(word)));
     for (const entry of archive) if (!days.has(entry.date)) days.set(entry.date, []);
     return [...days.keys()].sort().reverse().slice(0, 90).map(date => {
@@ -84,7 +89,7 @@ export function createDailyRecaps(deps: Dependencies) {
       }
       const sources = selected.map(({ kind, text }) => ({ kind, text }));
       const digest = factHash(selected);
-      const saved = material.saved.find(row => row.date === date);
+      const saved = usableSaved.find(row => row.date === date);
       // A completed day survives normal source-window rollover. Explicit deletion,
       // rewind and disabled sources revoke its provenance before it may be displayed.
       const archived = archive.find(entry => entry.date === date && rows.every(row => row.at <= (entry.writtenAt ?? 0)));

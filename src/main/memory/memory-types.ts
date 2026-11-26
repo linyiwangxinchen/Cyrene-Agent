@@ -45,6 +45,10 @@ export interface L2Memory {
    */
   sourceQuote?: string
   sourceConversationId: string
+  /** A short extract of the current detail, used for weaker recall. */
+  gist?: string
+  /** A complete event calendar date verified against the user's evidence. */
+  eventDate?: string
   createdAt: number
   lastAccessedAt: number
   accessCount: number
@@ -190,6 +194,8 @@ export interface MemoryCandidate {
   sourceConversationId?: string
   /** Only exact, unambiguous user-entry matches from the scheduler, never model-generated IDs. */
   sourceMessageIds?: string[]
+  gist?: string
+  eventDate?: string
 }
 
 export interface MemoryJudgeTurn {
@@ -226,6 +232,8 @@ export interface MemoryStore {
     memoryIds: string[]
     sourceKeys: string[]
     factKeys?: string[]
+    /** A summary or paraphrased Wiki claim may still contain a corrected fact. */
+    derivedSourceKeys?: string[]
     socialFactKeys?: string[]
     wikiClaimKeys: string[]
     profileRecords?: Array<{ key: string; sourceKeys: string[] }>

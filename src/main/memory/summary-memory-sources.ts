@@ -1,5 +1,5 @@
 import { getConversationDatabase } from "../storage/conversation-database-client";
-import { isForgottenSource } from "./memory-source-policy";
+import { isInvalidDerivedMemorySource } from "./memory-source-policy";
 import { memoryStore } from "./memory-store";
 
 export interface SummaryMemoryTurnSource {
@@ -20,7 +20,7 @@ export async function resolveSummaryMemorySources(
   return lookups.map((source, index) => {
     const userEntryId = userEntries[index];
     return userEntryId && (!source.userEntryId || source.userEntryId === userEntryId)
-      && !isForgottenSource(state, { conversationId: source.conversationId, messageId: userEntryId })
+      && !isInvalidDerivedMemorySource(state, { conversationId: source.conversationId, messageId: userEntryId })
       ? { ...source, userEntryId } : undefined;
   });
 }

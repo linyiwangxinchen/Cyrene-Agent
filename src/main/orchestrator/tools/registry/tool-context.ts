@@ -7,6 +7,7 @@ import { ContextRefRegistry } from "../../context-ref-registry";
 import type { ConversationMode } from "../../../../shared/chat-types";
 import type { ShellOutputUpdate } from "../../../../shared/shell-output";
 import type { ChannelChatType, ChannelId } from "../../../channels/types";
+import type { HistorySourceObserver } from "../../../../shared/companion-references";
 
 export const contextRefRegistry = new ContextRefRegistry();
 
@@ -19,7 +20,13 @@ export interface ToolContext {
   /** 当前聊天会话 ID；需要跨轮隔离状态的工具必须使用该字段。 */
   conversationId?: string;
   memoryScope?: string;
+  /** 运行开始时的记忆模式版本，用于拒绝设置变动后发起的查阅。 */
+  memoryModeVersion?: number;
   memoryUserTurnId?: string;
+  /** Records only verified historical text locators from the current tool result. */
+  onHistorySourcesRead?: HistorySourceObserver;
+  /** Calendar dates in history searches follow the verified user's configured timezone. */
+  historyTimeZone?: string;
   /** 外部渠道入站消息的可信投递目标。 */
   channelContext?: {
     channel: ChannelId;

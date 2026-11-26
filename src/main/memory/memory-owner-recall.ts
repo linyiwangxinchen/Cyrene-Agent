@@ -1,7 +1,7 @@
 import { app } from "electron";
 import type { MemorySourceLocator } from "../../shared/memory-governance";
 import { getConversationDatabase } from "../storage/conversation-database-client";
-import { candidateSources, isForgottenFact, isForgottenSocialFact, memorySourceKey } from "./memory-source-policy";
+import { candidateSources, isForgottenFact, isForgottenSocialFact, isForgottenSource, memorySourceKey } from "./memory-source-policy";
 import type { L2Memory, MemoryStore } from "./memory-types";
 import type { SocialAtom } from "../social-context/types";
 import { memoryStore } from "./memory-store";
@@ -17,6 +17,12 @@ export function activeMemorySourceEntry(conversationId: string, source: { userTu
 
 export async function activeOwnerSourceKeys(sources: MemorySourceLocator[]): Promise<Set<string>> {
   return activeMemorySourceKeys(sources, true);
+}
+
+export function activeMemorySourceFacts(sources: readonly MemorySourceLocator[], root = app.getPath("userData")):
+  Promise<Array<{ at: number; text: string; role: "user" | "assistant" } | undefined>> {
+  if (!sources.length) return Promise.resolve([]);
+  return getConversationDatabase(root).call("memory.activeSourceFacts", sources);
 }
 
 async function activeMemorySourceKeys(sources: MemorySourceLocator[], ownerOnly: boolean): Promise<Set<string>> {
@@ -43,7 +49,7 @@ export async function selectOwnerL2Memories(state: MemoryStore, ids?: ReadonlySe
   return candidates.filter(memory => {
     const sources = candidateSources(memory);
     return sources.length > 0 && sources.every(source => active.has(memorySourceKey(source))
-      && !isForgottenFact(state, source, memory.content));
+      && !isForgottenSource(state, source) && !isForgottenFact(state, source, memory.content));
   });
 }
 
@@ -55,7 +61,7 @@ export async function selectOwnerProfileFields(state: MemoryStore): Promise<Set<
     const profile = layer === "L0" ? state.l0 : layer === "L1" ? state.l1 : undefined;
     return profile && Reflect.get(profile, field) === record.content && (record.ownerManaged === true || (
       record.sources.length > 0 && record.sources.every(source => active.has(memorySourceKey(source))
-        && !isForgottenFact(state, source, record.content))
+        && !isForgottenSource(state, source) && !isForgottenFact(state, source, record.content))
     )) ? [key] : [];
   }));
 }

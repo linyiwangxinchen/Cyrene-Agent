@@ -17,4 +17,7 @@ export function isOwnerMemoryScope(scope?: string): boolean {
 }
 
 export const PERSON_MEMORY_TOOL_IDS = new Set(["memory_remember", "memory_recall", "memory_forget"]);
-export const OWNER_MEMORY_TOOL_IDS = new Set(["user_memory", "read_memory", "write_memory", "recall_history", "wiki_search", "wiki_read_page"]);
+export const CHAT_HISTORY_TOOL_IDS = new Set(["search_chat_history", "read_chat_history"]);
+export const OWNER_MEMORY_TOOL_IDS = new Set([
+  "user_memory", "read_memory", "write_memory", "recall_history", "wiki_search", "wiki_read_page", ...CHAT_HISTORY_TOOL_IDS,
+]);

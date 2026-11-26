@@ -133,6 +133,8 @@ export interface CyreneRunOptions {
   memoryScope?: string;
   memoryUserTurnId?: string;
   memoryModeVersion?: number;
+  onHistorySourcesRead?: import("../../shared/companion-references").HistorySourceObserver;
+  historyTimeZone?: string;
   /** 当前外部渠道消息的可信回信目标，供提醒等渠道工具绑定原会话。 */
   channelContext?: {
     channel: ChannelId;
@@ -622,6 +624,9 @@ export class CyreneAgent extends AbstractAgent {
               conversationId: options.conversationId ?? "default",
               memoryScope: options.memoryScope,
               memoryUserTurnId: options.memoryUserTurnId,
+              memoryModeVersion: options.memoryModeVersion,
+              onHistorySourcesRead: options.onHistorySourcesRead,
+              historyTimeZone: options.historyTimeZone,
               runId,
               contextRefs: contextRefRegistry,
               signal: abortController.signal,

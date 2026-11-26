@@ -58,6 +58,7 @@ export interface PendingQueueFlow {
       attachments?: ComposerAttachment[];
       userSticker?: string;
       companionReply?: CompanionReplyInput;
+      conversationReferenceId?: string;
       onEnqueuing?: (stableId: string) => void;
       onCommitted?: (stableId: string) => void;
     },
@@ -128,6 +129,7 @@ export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): Pen
       attachments?: ComposerAttachment[];
       userSticker?: string;
       companionReply?: CompanionReplyInput;
+      conversationReferenceId?: string;
       onEnqueuing?: (stableId: string) => void;
       onCommitted?: (stableId: string) => void;
     },
@@ -154,7 +156,8 @@ export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): Pen
     }
     // 稳定标识复用：上次同内容入队失败/异常（结果未知）时沿用原 id，
     // 若上次其实已成功，主进程幂等比较会返回现有队列而不重复写入
-    const cacheKey = JSON.stringify([sessionId, mode, entry.rawContent, entry.companionReply?.mode, entry.companionReply?.correction]);
+    const cacheKey = JSON.stringify([sessionId, mode, entry.rawContent, entry.companionReply?.mode,
+      entry.companionReply?.correction, entry.conversationReferenceId]);
     const id = failedEnqueueIds.get(cacheKey) ?? entry.id;
     const stableAttachments = (entry.attachments ?? []).map((attachment) => attachment.kind === "web-element" ? {
       kind: "web-element" as const,
@@ -182,6 +185,7 @@ export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): Pen
         ...(stableAttachments.length > 0 ? { attachments: stableAttachments } : {}),
         ...(entry.userSticker ? { userSticker: entry.userSticker } : {}),
         ...(entry.companionReply ? { companionReply: entry.companionReply } : {}),
+        ...(entry.conversationReferenceId ? { conversationReferenceId: entry.conversationReferenceId } : {}),
       });
     } catch (error) {
       // 入队请求异常（IPC 断连等）：结果未知，缓存原 id 供重试去重
@@ -197,7 +201,8 @@ export function createPendingQueueFlow(getHost: () => PendingQueueFlowHost): Pen
       rememberFailedEnqueue(cacheKey, id);
       const error = result.error === "invalid-companion-reply"
         ? t("composer.companionReply.unavailable")
-        : result.error;
+        : result.error === "invalid-conversation-reference"
+          ? t("composer.conversationReference.unavailable") : result.error;
       if (notifyError) host.reportError(t("chatPage.errorEnqueueFailed", { error }));
       return false;
     }

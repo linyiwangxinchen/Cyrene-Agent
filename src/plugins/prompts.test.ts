@@ -57,6 +57,28 @@ describe("PluginPromptRegistry", () => {
     expect(await registry.selectExpressionContext(active)).toBeUndefined();
   });
 
+  it("普通私聊优先使用 B 站和贴吧支持的接话方式，只把适用策略交给模型", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    registry.register("bili-garden", {
+      id: "expressions", provide: () => "",
+      listExpressionEvidence: () => [{ ...subtitle, strategy: "pacing" as const }],
+    }, signal, "builtin");
+    registry.register("tieba-garden", {
+      id: "expressions", provide: () => "",
+      listExpressionEvidence: () => [{
+        id: "floor", quote: "那你歇会儿再浇呗", at: 101, strategy: "pacing" as const, topics: ["阳台浇水"],
+        source: { kind: "forum_authenticated" as const, unit: "1234", id: "1234:post:1", url: "https://tieba.baidu.com/p/1234#post_content_1" },
+      }],
+    }, signal, "builtin");
+    const input = { use: "conversation", userText: privateChat.userText, allowedOwners: ["bili-garden", "tieba-garden"] } as const;
+    const selected = await registry.selectExpressionContext(input);
+    expect(selected?.sourceOwners).toEqual(input.allowedOwners);
+    expect(selected?.text).toContain("用短句回应重点");
+    expect(selected?.text).not.toMatch(/花盆加班|歇会儿|bilibili\.com|baidu\.com/);
+    expect(await registry.selectExpressionContext({ ...input, userText: "我难受，先听我说" })).toBeUndefined();
+  });
+
   it("普通私聊里的正式写作交给当前任务，同话题的日常提及仍可取用", async () => {
     const registry = createPluginPromptRegistry();
     const list = vi.fn(() => [subtitle]);

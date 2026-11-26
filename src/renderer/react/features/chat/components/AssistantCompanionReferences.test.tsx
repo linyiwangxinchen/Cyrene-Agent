@@ -7,7 +7,7 @@ import { AssistantCompanionReferences } from "./AssistantCompanionReferences";
 it("keeps the card collapsed and navigates using the source saved with the reply", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   const navigate = vi.fn().mockResolvedValue(true);
-  const get = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "preference-source" });
+  const get = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce({ id: "preference-source" }).mockResolvedValueOnce({ id: "history-source" });
   vi.stubGlobal("chatStore", { get, openInReactChatWindow: navigate });
   const host = document.createElement("div");
   document.body.append(host);
@@ -18,6 +18,7 @@ it("keeps the card collapsed and navigates using the source saved with the reply
     await act(async () => root.render(<AssistantCompanionReferences references={[
       { kind: "preference", topic: "questions", conversationId: "preference-source" },
       { kind: "expression", quote: "抱抱", appeared: true, conversationId: "expression-source" },
+      { kind: "chat-history", conversationId: "history-source", userTurnId: "u", userEntryId: "user-entry", assistantEntryId: "assistant-entry" },
     ]} />));
     const details = host.querySelector("details")!;
     expect(details.open).toBe(false);
@@ -33,6 +34,10 @@ it("keeps the card collapsed and navigates using the source saved with the reply
     await act(async () => items[0].querySelector("button")!.click());
     expect(navigate).toHaveBeenCalledExactlyOnceWith("preference-source");
     expect(host.querySelector('[role="alert"]')).toBeNull();
+    expect(items[2]?.textContent).toContain("查阅过的旧聊天");
+    expect(items[2]?.textContent).not.toContain("assistant-entry");
+    await act(async () => items[2].querySelector("button")!.click());
+    expect(navigate).toHaveBeenNthCalledWith(2, "history-source");
   } finally {
     await act(async () => root.unmount());
     host.remove();

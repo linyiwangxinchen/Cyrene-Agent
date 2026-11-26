@@ -6,6 +6,7 @@ import "./amphoreus-world-panel.css";
 import type { SettingsSearchItem } from "./settings-search-index";
 import { DailyRecapsPanel } from "./DailyRecapsPanel";
 import { AmphoreusHistory } from "./AmphoreusHistory";
+import { AmphoreusEventChronology } from "./AmphoreusEventChronology";
 import { AmphoreusMap } from "./AmphoreusMap";
 import { AmphoreusPersonalLife } from "./AmphoreusPersonalLife";
 
@@ -127,7 +128,7 @@ export function AmphoreusWorldPanel({ searchTarget }: { searchTarget?: SettingsS
           <div className="cy-amphoreus__events">{events.length === 0 ? <p className="cy-amphoreus__empty">{label("noEvents")}</p> : events.map((event) => <article key={event.id}>
             <div className="cy-amphoreus__meta"><time>{time(event.startsAt, true)}–{time(event.endsAt)}</time><Tag>{location(event.locationId)}</Tag><Tag color={event.status === "active" ? "blue" : undefined}>{label(`eventStatus.${event.status}`)}</Tag>{event.severity === "major" && <Tag color="gold">{label("major")}</Tag>}</div>
             <h3>{event.title}</h3><p>{event.summary}</p>{event.outcome && <p className="cy-amphoreus__outcome"><strong>{label("outcome")}</strong> {event.outcome}</p>}
-            <details><summary>{label("causes")}</summary><p>{label("intent")}：{event.intent ?? event.summary}</p>
+            <details><summary>{label("causes")}</summary><AmphoreusEventChronology chronology={event} timezone={world.clock.timezone} /><p>{label("intent")}：{event.intent ?? event.summary}</p>
               {event.conditions?.map((condition, i) => <p key={i}>{label("requires")}：{condition.kind === "event" ? world.events.find((e) => e.id === condition.eventId)?.title ?? label("earlierEvent") : `${location(condition.placeId)} · ${label(condition.field === "supplies" ? "supplies" : "facilities")} ≥ ${condition.minimum}`}</p>)}
               {event.reason && <p>{label("changedBecause")}：{event.reason}</p>}
               {event.effects?.map((effect, i) => <p key={i}>{label("changed")}：{effect.reason}</p>)}

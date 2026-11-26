@@ -209,7 +209,9 @@ export async function startHeadlessCore() {
     toolRegistry, skillRegistry, getStickerTextIndex: loadStickerTextIndex,
     broadcastRuntimeStateChanged: () => broadcast(IPC.RUNTIME_STATE_CHANGED, runtimeStateService.getState()),
     citaService: cita, socialContextScheduler: social.scheduler, chatsStore,
-    buildSummaryMemoryContext: id => loadSummaryMemoryContext({ conversationId: id, userDataRoot: root, getSessionRecord: chatsStore.getSessionRecord }),
+    buildSummaryMemoryContext: (id, recallPlan, timeZone) => loadSummaryMemoryContext({
+      conversationId: id, userDataRoot: root, getSessionRecord: chatsStore.getSessionRecord, recallPlan, timeZone,
+    }),
     scheduleSummaryTurn, scheduleWikiTurn, socialAtomStore: social.store,
     buildPluginPromptContext: (input, scope) => pluginPromptRegistry.build(input, input.privateCompanion && input.conversationId ? getRelationshipStore().blockedExpressions(input.conversationId, input.userText, scope) : undefined, loadGeneralSettings().conversationExpressionSources),
     publishPluginHostEvent: (event, payload) => plugins ? plugins.publishHostEvent(event, payload) : Promise.resolve(),

@@ -61,6 +61,25 @@ describe("chats pending queue store", () => {
     mocks.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-pending-queue-"));
   });
 
+  it("keeps the selected source through a real restart and queue claim without copying it into the user message", async () => {
+    const store = await import("./chats-store");
+    await store.initialize();
+    const source = await store.createSession({ mode: "chat" });
+    const other = await store.createSession({ mode: "chat" });
+    const destination = await store.createSession({ mode: "chat" });
+    const payload = entry({ conversationReferenceId: source.id });
+    expect(await store.enqueuePendingMessage(destination.id, payload)).toMatchObject({ ok: true, enqueued: true });
+    expect(await store.enqueuePendingMessage(destination.id, { ...payload, conversationReferenceId: other.id }))
+      .toEqual({ ok: false, error: "duplicate-id" });
+    expect(await store.enqueuePendingMessage(source.id, payload))
+      .toEqual({ ok: false, error: "invalid-conversation-reference" });
+    await closeConversationDatabases();
+    await store.initialize();
+    const claimed = await store.claimPendingMessage(destination.id);
+    expect(claimed).toMatchObject({ claimed: true, userMessage: { content: payload.visibleContent } });
+    expect(await store.getSessionRecord(destination.id)).toMatchObject({ pendingDispatch: { conversationReferenceId: source.id } });
+  });
+
   it("恢复待发回应方式，只在同一认领存在且不写入已发送消息", async () => {
     let store = await import("./chats-store");
     await store.initialize();

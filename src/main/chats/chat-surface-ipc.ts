@@ -9,6 +9,7 @@ import { getDefaultModelProfile, loadModelSettings, resolveSessionModelSettings 
 import * as chatsStore from "./chats-store";
 import * as sidebarOrganizationStore from "./sidebar-organization-store";
 import { isGroupBoundConversation } from "../channels/conversation-binding-store";
+import { includesExternalConversation } from "./conversation-reference";
 
 /** 读出口覆盖：把会话的上下文容量刷新为「按当前模型配置解析」的值。
  *  快照里的 contextWindowTokens 是生成那一刻的口径（run 前 / 压缩时），
@@ -119,6 +120,10 @@ export function registerChatSurfaceIpc(scope: IpcScope) {
       }
       if (entry.companionReply !== undefined && isGroupBoundConversation(sessionId)) {
         return { ok: false, error: "invalid-companion-reply" };
+      }
+      if (typeof entry.conversationReferenceId === "string"
+        && includesExternalConversation(sessionId, entry.conversationReferenceId)) {
+        return { ok: false, error: "invalid-conversation-reference" };
       }
       const result = (await chatsStore.enqueuePendingMessage(sessionId, entry));
       if (result.ok && result.enqueued) broadcastChanged(event.sender);

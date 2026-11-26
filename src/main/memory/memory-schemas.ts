@@ -112,6 +112,8 @@ export const MEMORY_JUDGE_JSON_SCHEMA: Record<string, unknown> = {
           summary: { type: "string" },
           slug: { type: "string" },
           sourceQuote: { type: "string" },
+          gist: { type: "string" },
+          eventDate: { type: "string" },
           content: { type: "string" },
           confidence: { type: "number" },
           triggerText: { type: "string" },
@@ -229,6 +231,8 @@ function parseMemoryCandidate(value: unknown): MemoryCandidate {
   if (layer === "L2" && isValidSourceQuote(obj.sourceQuote)) {
     result.sourceQuote = (obj.sourceQuote as string).trim();
   }
+  if (layer === "L2" && typeof obj.gist === "string" && obj.gist.trim() && obj.gist.trim().length <= 160) result.gist = obj.gist.trim();
+  if (layer === "L2" && typeof obj.eventDate === "string" && /^\d{4}-\d\d-\d\d$/u.test(obj.eventDate)) result.eventDate = obj.eventDate;
   if (VALID_IMPORTANCE.has(obj.importance as string)) result.importance = obj.importance as MemoryCandidate["importance"];
   if (VALID_STABILITY.has(obj.stability as string)) result.stability = obj.stability as MemoryCandidate["stability"];
   if (VALID_CERTAINTY.has(obj.certainty as string)) result.certainty = obj.certainty as MemoryCandidate["certainty"];

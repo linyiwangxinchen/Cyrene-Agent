@@ -31,6 +31,21 @@ function shellRecord(jobId) {
   } finally { database.close(); }
 }
 const requests = [], results = [], events = [], logs = [];
+const historyOnly = process.argv.includes('--history');
+const historyChecks = new Set([
+  'Unauthenticated API is blocked',
+  'An explicitly referenced old conversation supplies only its visible text for the claimed Web turn',
+  'Ordinary Chat can search and read past conversations through the model tools',
+  'Logout revokes the established WebSocket',
+]);
+function readToolResult(messages, toolName) {
+  const call = messages.flatMap(message => message.tool_calls ?? []).find(call => call.function?.name === toolName);
+  const message = messages.find(message => message.role === 'tool' && message.tool_call_id === call?.id);
+  if (!message) return null;
+  let value = JSON.parse(message.content);
+  if (typeof value.message === 'string') { try { value = JSON.parse(value.message); } catch {} }
+  return value;
+}
 const fixtureModel = createServer(async (req, res) => {
   let raw = ''; for await (const chunk of req) raw += chunk;
   const body = JSON.parse(raw || '{}'); requests.push(body);
@@ -51,14 +66,21 @@ const fixtureModel = createServer(async (req, res) => {
   else if (tools.includes('run_shell') && userText.includes('case:shell-background') && !toolMessages.length) {
     name = 'run_shell'; args = { command: backgroundCommand, cwd: workspace, shell: process.platform === 'win32' ? 'cmd' : 'bash', run_in_background: true };
   }
-  const toolResult = toolName => {
-    const call = toolCalls.find(call => call.function?.name === toolName);
-    const message = toolMessages.find(message => message.tool_call_id === call?.id);
-    if (!message) return null;
-    let value = JSON.parse(message.content);
-    if (typeof value.message === 'string') { try { value = JSON.parse(value.message); } catch {} }
-    return value;
-  };
+  const toolResult = toolName => readToolResult(roundMessages, toolName);
+  let historyAnswer;
+  if (userText.includes('case:history-agent')) {
+    const search = toolResult('search_chat_history');
+    const history = toolResult('read_chat_history');
+    if (!called('search_chat_history')) {
+      name = 'search_chat_history'; args = { query: 'legacy question', limit: 5 };
+    } else if (search?.items?.[0] && !called('read_chat_history')) {
+      const source = search.items[0];
+      name = 'read_chat_history'; args = { conversationId: source.conversationId, ...(source.sourceRef ? { sourceRef: source.sourceRef } : {}), limit: 4 };
+    } else if (history?.messages) {
+      const reply = history.messages.find(message => message.role === 'assistant');
+      if (typeof reply?.text === 'string') historyAnswer = `旧对话中的原回答是：${reply.text}`;
+    }
+  }
   if (userText.includes('case:exam')) {
     const plan = toolResult('learn_exam_create_plan'), added = toolResult('learn_exam_add_single_choice'), published = toolResult('learn_exam_publish');
     if (!plan) { name = 'learn_exam_create_plan'; args = { schemaVersion: 1, title: 'Parity arithmetic', subject: 'Math', durationMinutes: 15, totalPoints: 10, quotas: [{ type: 'single_choice', count: 1, points: 10, learningObjectives: ['arithmetic'] }] }; }
@@ -98,7 +120,7 @@ const fixtureModel = createServer(async (req, res) => {
   }
   const content = JSON.stringify(body.messages ?? []).includes('sessionSummary') && JSON.stringify(body.messages ?? []).includes('workspaceSummary')
     ? JSON.stringify({ sessionSummary: '本地验收已完成，后续任务以最新用户指令为准。', workspaceSummary: '这是隔离验收工作区。' })
-    : '昔涟在这里，验收完成。';
+    : historyAnswer ?? '昔涟在这里，验收完成。';
   if (!body.stream) { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ id: 'fixture', object: 'chat.completion', model: body.model, choices: [{ index: 0, message: { role: 'assistant', content }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 12, total_tokens: 112 } })); return; }
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   const chunk = (delta, finish_reason = null, usage) => res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', model: body.model, choices: [{ index: 0, delta, finish_reason }], ...(usage ? { usage } : {}) })}\n\n`);
@@ -112,7 +134,10 @@ const modelUrl = `http://127.0.0.1:${fixtureModel.address().port}/v1`;
 await mkdir(path.join(data, 'prompts'));
 await writeFile(path.join(data, 'prompts', 'chat_identity.md'), await readFile('prompts/chat_identity.md', 'utf8') + '\nPARITY_USER_PROMPT_OVERRIDE');
 await writeFile(path.join(data, 'web-data.json'), JSON.stringify({ version: 1, sessions: [], recentProjects: [workspace], settings: { general: { uiTheme: 'charcoal-pink', uiThemeRadius: false, taskCharacterPersonaEnabled: true, chatToolsEnabled: false, maxParallelToolCalls: 4, momentsEnabled: true, cyreneMomentsPostingEnabled: false, cyreneMomentsReactionsEnabled: false, momentsCharacterReactionsEnabled: false, proactiveChatMode: 'off', plugins: { 'parity-plugin': true } }, config: { memoryMode: 'summary', runtimeSync: 'off' }, modelProfiles: [{ id: 'fixture-profile', provider: 'ChatGPT（OpenAI）', displayName: 'Fixture', apiKey: 'fixture-local-only', baseUrl: modelUrl, explicitTransport: 'openai', model: 'fixture-model', models: ['fixture-model'], multimodal: true }], defaultModelProfileId: 'fixture-profile' } }));
-await writeFile(path.join(data, 'web-features.json'), JSON.stringify({ profile: { nickname: 'Fixture', timezone: 'Asia/Shanghai' }, channels: { wechat: { enabled: false }, feishu: { enabled: false }, qq: { enabled: false }, qqbot: { enabled: false } }, memory: { l0: { preferredName: '验收用户' }, l1: {}, l2: [], reflections: [] }, schedules: [], knowledge: { enabled: true, collections: [] }, moments: { posts: [], comments: [], reactions: [] }, enabledPlugins: { 'parity-plugin': true } }));
+// Keep this short persistence check away from the evening recap scheduler on every runner.
+const utcHour = new Date().getUTCHours();
+const fixtureTimezone = utcHour < 7 ? 'Asia/Shanghai' : utcHour < 17 ? 'UTC' : 'Pacific/Honolulu';
+await writeFile(path.join(data, 'web-features.json'), JSON.stringify({ profile: { nickname: 'Fixture', timezone: fixtureTimezone }, channels: { wechat: { enabled: false }, feishu: { enabled: false }, qq: { enabled: false }, qqbot: { enabled: false } }, memory: { l0: { preferredName: '验收用户' }, l1: {}, l2: [], reflections: [] }, schedules: [], knowledge: { enabled: true, collections: [] }, moments: { posts: [], comments: [], reactions: [] }, enabledPlugins: { 'parity-plugin': true } }));
 const pluginDir = path.join(data, 'plugins', 'parity-plugin'); await mkdir(pluginDir, { recursive: true });
 await writeFile(path.join(pluginDir, 'manifest.json'), JSON.stringify({ apiVersion: 1, id: 'parity-plugin', name: 'Parity fixture', version: '1.0.0', description: 'Isolated parity fixture', author: 'Fixture', entry: 'index.cjs', defaultEnabled: true, settingsPanel: 'panel.html' }));
 await writeFile(path.join(pluginDir, 'index.cjs'), `module.exports={register(ctx){require('node:fs').writeFileSync(${JSON.stringify(path.join(data, 'plugin-activated.txt'))},'activated');ctx.registerTool({id:'parity-plugin_echo',name:'Parity echo',description:'Echo fixture value',enabled:true,risk:'safe',modes:['work'],effectKind:'read',inputSchema:{type:'object',properties:{value:{type:'string'}},required:['value']},execute:async args=>'plugin:'+args.value});},unregister(){}};`);
@@ -121,7 +146,8 @@ const skillDir = path.join(data, 'skills', 'parity-skill'); await mkdir(skillDir
 await writeFile(path.join(skillDir, 'SKILL.md'), '---\nname: Parity fixture\ndescription: A fixture for instruction loading\neffectKind: read\nmodes: [work, code, learn]\n---\nPARITY_SKILL_INSTRUCTIONS: inspect the fixture, then report the result.');
 // Old Windows/headless installations must survive the first SQLite startup.
 const legacyConversation = { schemaVersion: 1, id: 'legacy-storage-fixture', title: 'Legacy storage fixture', mode: 'chat', createdAt: 1, updatedAt: 2,
-  messages: [{ id: 'legacy-user', role: 'user', content: 'legacy question', at: 1 }, { id: 'legacy-assistant', role: 'model', content: 'legacy reply', at: 2 }] };
+  messages: [{ id: 'legacy-user', role: 'user', content: 'legacy question', modelContext: 'HIDDEN_REFERENCE_CONTEXT_MARKER', at: 1 },
+    { id: 'legacy-assistant', role: 'model', content: 'legacy reply', reasoning: 'HIDDEN_REFERENCE_REASONING_MARKER', at: 2 }] };
 const legacyTask = { schemaVersion: 1, id: 'legacy-task-fixture', parentConversationId: legacyConversation.id, parentRunId: 'legacy-parent-run', childRunId: 'legacy-child-run',
   description: 'Legacy task', subagentType: 'general', contextOpen: true, mode: 'work', status: 'completed', messages: [{ role: 'user', content: 'legacy task prompt' }], trace: [], todoItems: [], resultText: 'legacy task result', createdAt: 1, updatedAt: 2, completedAt: 2 };
 const legacyFiles = [
@@ -141,7 +167,13 @@ async function http(route, method = 'GET', body, headers = {}) {
 }
 async function invoke(channel, ...args) { const { response, value } = await http('/api/core/invoke', 'POST', { channel, args }, { 'X-Cyrene-Client': clientToken }); if (!response.ok) throw new Error(`${channel}: ${JSON.stringify(value)}`); return value; }
 async function send(channel, ...args) { const result = await http('/api/core/send', 'POST', { channel, args }, { 'X-Cyrene-Client': clientToken }); assert.equal(result.response.status, 200); }
-async function check(name, action) { const started = Date.now(); await action(); results.push({ name, ok: true, ms: Date.now() - started }); console.log('PASS', name); }
+async function check(name, action) {
+  if (historyOnly && !historyChecks.has(name)) return;
+  const started = Date.now();
+  await action();
+  results.push({ name, ok: true, ms: Date.now() - started });
+  console.log('PASS', name);
+}
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function cssOutput(runId) {
   const root = path.join(data, 'cyrene-runs', 'tool-results');
@@ -153,9 +185,9 @@ async function cssOutput(runId) {
   throw new Error('CSS output artifact missing');
 }
 async function waitFor(predicate, label, timeout = 15000) { const deadline = Date.now() + timeout; while (!predicate()) { if (Date.now() > deadline) throw new Error(`Timed out: ${label}`); await delay(30); } }
-async function run(session, text) {
+async function run(session, text, { turnId = `user-${randomUUID()}`, conversationReferenceId } = {}) {
   const prior = events.length;
-  const ack = await invoke('agui:run', { sessionId: session.id, currentUser: { turnId: `user-${randomUUID()}`, text, visibleContent: text }, assistantTurnId: `assistant-${randomUUID()}`, styleId: 'default' });
+  const ack = await invoke('agui:run', { sessionId: session.id, currentUser: { turnId, text, visibleContent: text }, assistantTurnId: `assistant-${randomUUID()}`, styleId: 'default', ...(conversationReferenceId ? { conversationReferenceId } : {}) });
   assert.equal(ack.success, true, JSON.stringify(ack));
   await waitFor(() => events.slice(prior).some(event => event.channel === 'agui:event' && ['RUN_FINISHED', 'RUN_ERROR'].includes(event.args[0]?.type) && event.args[0]?.runId === ack.runId), 'agent terminal', 45000);
   const stream = events.slice(prior).filter(event => event.channel === 'agui:event' && event.args[0]?.runId === ack.runId).map(event => event.args[0]);
@@ -315,6 +347,125 @@ try {
     assert.equal((await invoke('chats:pending-complete-dispatch', { sessionId: session.id, messageId: entry.id })).ok, true); assert.equal((await invoke('chats:pending-list', session.id)).length, 0);
     assert.equal(await invoke('chats:delete', session.id), true); assert.equal(await invoke('chats:get', session.id), null);
   });
+  await check('An explicitly referenced old conversation supplies only its visible text for the claimed Web turn', async () => {
+    const { memoryMode } = await invoke('settings:get-config');
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'off' })).memoryMode, 'off');
+    try {
+      const destination = await invoke('chats:create', { title: 'Reference destination', mode: 'chat' });
+      const unrelated = await invoke('chats:create', { title: 'Unrelated reference fixture', mode: 'chat' });
+      const unrelatedText = 'case:reference-unrelated UNRELATED_CONVERSATION_MARKER';
+      await run(unrelated, unrelatedText);
+
+      async function claimReference(conversationReferenceId, text) {
+        const entry = { id: `queued-${randomUUID()}`, rawContent: text, visibleContent: text, conversationReferenceId };
+        const queued = await invoke('chats:pending-enqueue', { sessionId: destination.id, entry });
+        assert.equal(queued.enqueued, true, JSON.stringify(queued));
+        const claim = await invoke('chats:pending-claim', destination.id);
+        assert.equal(claim.claimed, true, JSON.stringify(claim));
+        assert.equal(claim.session.pendingDispatch.conversationReferenceId, conversationReferenceId);
+        return entry.id;
+      }
+
+      const question = 'case:reference-selected 请接续我选的旧会话。';
+      const turnId = await claimReference(legacyConversation.id, question);
+      let start = requests.length;
+      await run(destination, question, { turnId });
+      const outgoing = requests.slice(start).find(request => request.stream);
+      assert.ok(outgoing, 'the explicitly quoted turn must reach the model');
+      const referencedUser = outgoing.messages.find(message => message.role === 'user' && typeof message.content === 'string' && message.content.startsWith(question));
+      assert.ok(referencedUser, 'the reference must be attached to the selected user turn');
+      assert.match(referencedUser.content, /selected_conversation_excerpt/);
+      assert.match(referencedUser.content, /legacy question/);
+      assert.match(referencedUser.content, /legacy reply/);
+      assert.doesNotMatch(JSON.stringify(outgoing.messages), /UNRELATED_CONVERSATION_MARKER|HIDDEN_REFERENCE_CONTEXT_MARKER|HIDDEN_REFERENCE_REASONING_MARKER/);
+      const saved = await invoke('chats:get', destination.id);
+      assert.deepEqual(saved.messages.filter(message => message.role === 'user').map(message => message.content), [question]);
+      assert.doesNotMatch(JSON.stringify(saved.messages), /selected_conversation_excerpt|legacy question|legacy reply/);
+      assert.deepEqual(saved.messages.find(message => message.role === 'model')?.companionReferences?.find(reference => reference.kind === 'conversation'), {
+        kind: 'conversation', conversationId: legacyConversation.id, title: legacyConversation.title,
+      });
+      assert.equal((await invoke('chats:pending-complete-dispatch', { sessionId: destination.id, messageId: turnId })).ok, true);
+
+      start = requests.length;
+      await run(destination, 'case:reference-next 普通后续问题。');
+      const next = requests.slice(start).find(request => request.stream);
+      assert.ok(next, 'the following ordinary turn must reach the model');
+      assert.doesNotMatch(JSON.stringify(next.messages), /selected_conversation_excerpt|legacy question|legacy reply/);
+
+      start = requests.length;
+      await run(destination, 'case:reference-forged 尝试未经队列授权的引用。', { conversationReferenceId: unrelated.id });
+      const forged = requests.slice(start).find(request => request.stream);
+      assert.ok(forged, 'the forged field must not change ordinary AGUI execution');
+      assert.doesNotMatch(JSON.stringify(forged.messages), /selected_conversation_excerpt|UNRELATED_CONVERSATION_MARKER/);
+
+      const staleQuestion = 'case:reference-deleted 请读取已经删除的来源。';
+      const staleTurnId = await claimReference(unrelated.id, staleQuestion);
+      assert.equal(await invoke('chats:delete', unrelated.id), true);
+      start = requests.length;
+      await assert.rejects(() => run(destination, staleQuestion, { turnId: staleTurnId }), /引用的旧会话已不可用/);
+      assert.ok(!requests.slice(start).some(request => request.stream || JSON.stringify(request.messages).includes(staleQuestion)), 'a deleted reference must stop before reaching the model');
+    } finally {
+      await invoke('settings:save-config', { memoryMode });
+    }
+  });
+  await check('Ordinary Chat can search and read past conversations through the model tools', async () => {
+    const { memoryMode } = await invoke('settings:get-config');
+    assert.equal(memoryMode, 'summary');
+    assert.equal((await invoke('settings:get-general')).chatToolsEnabled, false);
+    const destination = await invoke('chats:create', { title: 'Chat history tools fixture', mode: 'chat' });
+    let start = requests.length;
+    const result = await run(destination, 'case:history-agent 帮我找出之前讨论兼容性时，你当时原话怎么回答的？');
+    const sent = requests.slice(start).filter(request => request.stream);
+    assert.ok(sent.length >= 3, 'search and read results must each reach a subsequent model request');
+    assert.doesNotMatch(JSON.stringify(sent[0].messages), /legacy question|legacy reply/);
+    const calls = result.stream.filter(event => event.type === 'TOOL_CALL_START').map(event => event.toolCallName);
+    assert.ok(calls.indexOf('search_chat_history') !== -1 && calls.indexOf('read_chat_history') > calls.indexOf('search_chat_history'));
+    const found = sent.map(request => readToolResult(request.messages, 'search_chat_history')).find(Boolean);
+    const read = sent.map(request => readToolResult(request.messages, 'read_chat_history')).find(Boolean);
+    assert.equal(found?.items?.[0]?.conversationId, legacyConversation.id);
+    assert.equal(read?.conversationId, found.items[0].conversationId);
+    assert.deepEqual(read.messages.map(({ role, text }) => ({ role, text })), [
+      { role: 'user', text: 'legacy question' }, { role: 'assistant', text: 'legacy reply' },
+    ]);
+    assert.doesNotMatch(JSON.stringify(read.messages), /HIDDEN_REFERENCE_CONTEXT_MARKER|HIDDEN_REFERENCE_REASONING_MARKER/);
+    assert.match(result.stream.filter(event => event.type === 'TEXT_MESSAGE_CONTENT').map(event => event.delta).join(''), /旧对话中的原回答是：legacy reply/);
+    const database = new DatabaseSync(path.join(data, 'cyrene.sqlite'), { readOnly: true });
+    try {
+      const trace = database.prepare("SELECT kind,entry_json FROM transcript_entries WHERE conversation_id=? AND kind IN ('assistant','tool_result')").all(destination.id);
+      assert.ok(trace.some(row => row.kind === 'tool_result' && row.entry_json.includes('read_chat_history')));
+      assert.doesNotMatch(JSON.stringify(trace.filter(row => row.kind === 'tool_result')), /legacy question|legacy reply|legacy-storage-fixture/);
+      assert.ok(trace.some(row => row.kind === 'assistant' && JSON.parse(row.entry_json).historySources?.some(source =>
+        source.conversationId === legacyConversation.id && /^[a-f0-9]{64}$/.test(source.revision))));
+      assert.doesNotMatch(JSON.stringify(trace.map(row => JSON.parse(row.entry_json).historySources)), /legacy question|legacy reply/);
+    } finally { database.close(); }
+    const referenceEvent = result.stream.find(event => event.name === 'cyrene.companion.references');
+    assert.ok(referenceEvent?.value?.some(reference => reference.kind === 'chat-history' && reference.conversationId === legacyConversation.id));
+    const saved = await invoke('chats:get', destination.id);
+    assert.ok(saved.messages.some(message => message.companionReferences?.some(reference =>
+      reference.kind === 'chat-history' && reference.userTurnId === 'legacy-user')));
+
+    start = requests.length;
+    await run(destination, 'case:history-follow-up 谢谢，换个话题。');
+    const followUp = requests.slice(start).find(request => request.stream);
+    assert.ok(followUp);
+    assert.doesNotMatch(JSON.stringify(followUp.messages), /legacy question|legacy-storage-fixture/);
+
+    assert.equal((await invoke('settings:save-config', { memoryMode: 'off' })).memoryMode, 'off');
+    try {
+      start = requests.length;
+      const isolated = await invoke('chats:create', { title: 'Chat history off fixture', mode: 'chat' });
+      await run(isolated, 'case:history-off 回忆一下我们之前的聊天。');
+      const disabled = requests.slice(start).filter(request => request.stream);
+      assert.ok(disabled.length);
+      for (const request of disabled) {
+        const toolNames = (request.tools ?? []).map(tool => tool.function?.name ?? tool.name);
+        assert.ok(!toolNames.includes('search_chat_history') && !toolNames.includes('read_chat_history'));
+        assert.doesNotMatch(JSON.stringify(request.messages), /legacy question|legacy reply|search_chat_history|read_chat_history/);
+      }
+    } finally {
+      await invoke('settings:save-config', { memoryMode });
+    }
+  });
   await check('Avatar and sticker uploads use real file dialogs and media resources', async () => {
     const imagePath = path.join(workspace, 'avatar.png'); await writeFile(imagePath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==', 'base64'));
     const prior = events.length, pending = invoke('cyrene-avatar:upload'); await waitFor(() => events.slice(prior).some(event => event.channel === 'host:dialog'), 'avatar file dialog'); const dialog = events.slice(prior).find(event => event.channel === 'host:dialog').args[0];
@@ -355,8 +506,13 @@ try {
     const actions = [], gateway = new WebSocket(`ws://127.0.0.1:${port}/onebot/v11/ws`, { headers: { Authorization: 'Bearer fixture-onebot', 'X-Self-ID': '9000' } });
     gateway.on('message', raw => { const action = JSON.parse(String(raw)); actions.push(action); const result = action.action === 'get_login_info' ? { user_id: 9000, nickname: 'Fixture QQ' } : action.action === 'get_version_info' ? { app_name: 'NapCat', app_version: '4.8.115', protocol_version: 'v11' } : { message_id: 'fixture-reply' }; gateway.send(JSON.stringify({ status: 'ok', retcode: 0, echo: action.echo, data: result })); });
     try { await new Promise((resolve, reject) => { gateway.once('open', resolve); gateway.once('error', reject); }); await waitFor(() => actions.some(action => action.action === 'get_version_info'), 'QQ handshake');
-      gateway.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), self_id: 9000, post_type: 'message', message_type: 'private', message_id: 'qq-proof', user_id: 1000, sender: { user_id: 1000, nickname: 'Fixture' }, message: [{ type: 'text', data: { text: 'case:channel' } }] }));
+      const question = 'case:channel 记得之前聊过的兼容性问题吗？';
+      const start = requests.length;
+      gateway.send(JSON.stringify({ time: Math.floor(Date.now() / 1000), self_id: 9000, post_type: 'message', message_type: 'private', message_id: 'qq-proof', user_id: 1000, sender: { user_id: 1000, nickname: 'Fixture' }, message: [{ type: 'text', data: { text: question } }] }));
       await waitFor(() => actions.some(action => action.action === 'send_private_msg'), 'QQ model reply', 30000); assert.ok(JSON.stringify(actions).includes('昔涟在这里'));
+      const channelRequests = requests.slice(start).filter(request => request.stream && JSON.stringify(request.messages).includes(question));
+      assert.ok(channelRequests.length, 'the QQ question must reach the real shared model transport');
+      assert.doesNotMatch(JSON.stringify(channelRequests), /search_chat_history|read_chat_history|legacy question|legacy reply/);
       assert.ok(JSON.stringify(await invoke('channels:log:get', 100)).includes('case:channel')); const bindings = await invoke('channels:context-bindings:get'); assert.ok(JSON.stringify(bindings).includes('1000'));
     } finally { gateway.close(); await invoke('channels:save-config', { qq: { enabled: false } }); await invoke('channels:restart'); }
   });
@@ -451,8 +607,10 @@ try {
     for (const [file, content] of legacyFiles) assert.deepEqual(JSON.parse(await readFile(path.join(data, file), 'utf8')), content);
   });
   await check('Logout revokes the established WebSocket', async () => { let closed = false; socket.once('close', code => { closed = code === 1008; }); await http('/api/auth/logout', 'POST'); await waitFor(() => closed, 'logout websocket revocation'); assert.equal((await http('/api/core/capabilities', 'POST', {})).response.status, 401); });
-  await mkdir('docs/verification', { recursive: true });
-  await writeFile('docs/verification/shared-core-parity-results.json', JSON.stringify({ at: new Date().toISOString(), dataDir: data, results, requests: requests.map(request => ({ model: request.model, stream: request.stream, tools: request.tools?.map(tool => tool.function?.name || tool.name) })), handlerCount: runtimeCapabilities.handlers?.length ?? null, engine: runtimeCapabilities.engine }, null, 2));
+  if (!historyOnly) {
+    await mkdir('docs/verification', { recursive: true });
+    await writeFile('docs/verification/shared-core-parity-results.json', JSON.stringify({ at: new Date().toISOString(), dataDir: data, results, requests: requests.map(request => ({ model: request.model, stream: request.stream, tools: request.tools?.map(tool => tool.function?.name || tool.name) })), handlerCount: runtimeCapabilities.handlers?.length ?? null, engine: runtimeCapabilities.engine }, null, 2));
+  }
   console.log('ALL PASSED', results.length, 'checks; fixture data retained at', data);
 } catch (error) { console.error('FAIL', error); console.error('Recent core logs:', logs.slice(-8).join('\n')); console.error('Request diagnostics:', JSON.stringify(requests.slice(-2).map(body => ({ model: body.model, user: body.messages?.map(message => ({ role: message.role, text: JSON.stringify(message.content).slice(0, 150), cases: JSON.stringify(message.content).match(/case:[\w-]+/g) })) })), null, 2)); console.error('Fixture:', data); process.exitCode = 1; }
 finally {

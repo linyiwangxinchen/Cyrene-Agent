@@ -63,6 +63,7 @@ import {
 } from "../prompt-layers";
 import { buildToolCatalog } from "../tools/registry/tool-catalog";
 import { persistGeneratedImages } from "../../chats/generated-image-store";
+import { CHAT_HISTORY_TOOL_IDS } from "../../memory/memory-scope";
 
 const LOG_PREFIX = "[CyreneHarness]";
 
@@ -809,13 +810,14 @@ function toAssistantMessage(response: ChatResponse): ChatMessage {
   };
 }
 
-/** 邮件工具参数可能含收件人、主题或正文；运行期保留原消息给模型，轨迹只保留工具声明。 */
+/** 运行期保留含敏感参数的原消息给模型，轨迹只保留工具声明。 */
 function transcriptSafeAssistantToolCalls(message: ChatMessage, tools: HarnessInput["tools"]): ChatMessage {
   const sensitiveIds = new Set(tools.filter((tool) => tool.sensitiveArgs).map((tool) => tool.id));
   if (!message.toolCalls?.some((call) => sensitiveIds.has(call.name))) return message;
   return {
     role: "assistant",
-    content: "[邮件工具调用已脱敏]",
+    content: message.toolCalls.some(call => CHAT_HISTORY_TOOL_IDS.has(call.name))
+      ? "[查阅历史会话的参数仅供该轮使用]" : "[邮件工具调用已脱敏]",
     toolCalls: message.toolCalls.map((call) => sensitiveIds.has(call.name) ? { ...call, arguments: "{}" } : call),
   };
 }

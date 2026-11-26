@@ -35,6 +35,7 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
       memoryIds: Array.isArray(store.forgetting?.memoryIds) ? store.forgetting.memoryIds.filter(id => typeof id === "string") : [],
       sourceKeys: Array.isArray(store.forgetting?.sourceKeys) ? store.forgetting.sourceKeys.filter(id => typeof id === "string") : [],
       factKeys: Array.isArray(store.forgetting?.factKeys) ? store.forgetting.factKeys.filter(id => typeof id === "string") : [],
+      derivedSourceKeys: Array.isArray(store.forgetting?.derivedSourceKeys) ? store.forgetting.derivedSourceKeys.filter(id => typeof id === "string") : [],
       socialFactKeys: Array.isArray(store.forgetting?.socialFactKeys) ? store.forgetting.socialFactKeys.filter(id => typeof id === "string") : [],
       wikiClaimKeys: Array.isArray(store.forgetting?.wikiClaimKeys) ? store.forgetting.wikiClaimKeys.filter(id => typeof id === "string") : [],
       profileRecords: Array.isArray(store.forgetting?.profileRecords) ? store.forgetting.profileRecords.filter(record => typeof record?.key === "string" && Array.isArray(record.sourceKeys) && record.sourceKeys.every(key => typeof key === "string")) : [],
