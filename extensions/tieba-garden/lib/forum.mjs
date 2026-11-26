@@ -142,7 +142,9 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
       const current = data.readings.find(row => row.tid === reading.tid) ?? reading;
       for (const sample of accepted) {
         // Keep the original learning timestamp on re-analysis so daily recaps do not repeat it.
-        if (!samples.has(sample.id)) samples.set(sample.id, sample);
+        const existing = samples.get(sample.id);
+        if (!existing) samples.set(sample.id, sample);
+        else if (!existing.style && sample.style) samples.set(sample.id, { ...existing, style: sample.style });
       }
       const stored = {
         ...reading, summary: result.summary || reading.summary, evidence: result.evidence.length ? result.evidence : reading.evidence,
@@ -415,6 +417,7 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
 
   return {
     readings: () => data.readings,
+    learningEnabled: () => config().learn,
     learnedExpressions: () => config().learn ? data.samples : [],
     backgroundTick() {
       const cfg = config();

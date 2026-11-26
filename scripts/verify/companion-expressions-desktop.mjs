@@ -6,7 +6,7 @@ import { _electron as electron } from "playwright";
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 
-export async function verifyDesktop(profile, captured) {
+export async function verifyDesktop(profile, captured, { seedTiebaLearning, liveThreadQuote, styleHeader }) {
   const root = await mkdtemp(
     path.join(os.tmpdir(), "cyrene-expression-desktop-"),
   );
@@ -44,6 +44,7 @@ export async function verifyDesktop(profile, captured) {
     memoryMode: "off",
     runtimeSync: "off",
   });
+  await seedTiebaLearning(paths.userData);
   await writeFile(path.join(paths.userData, "gpu-acl-ok"), "fixture");
   const entry = path.join(root, "main.cjs");
   await writeFile(
@@ -108,38 +109,43 @@ export async function verifyDesktop(profile, captured) {
         throw Error(read.data.reading?.analysisError || "桌面读帖手记未生成");
       }
       const graph = await window.memoryPanel.getGraph();
-      const session = await window.chatStore.create({
-        mode: "chat",
-        title: "desktop fixture",
-      });
-      const text = "网络断线修复 DESKTOP_GATEWAY_CHECK";
-      const outcome = new Promise((resolve) => {
-        const off = window.agui.onEvent((e) => {
-          if (e.type === "RUN_FINISHED" || e.type === "RUN_ERROR") {
-            off();
-            resolve(e.type);
-          }
+      async function ask(text) {
+        const session = await window.chatStore.create({
+          mode: "chat",
+          title: "desktop fixture",
         });
-      });
-      const ack = await window.agui.run({
-        sessionId: session.id,
-        currentUser: {
-          turnId: crypto.randomUUID(),
-          text,
-          visibleContent: text,
-        },
-        assistantTurnId: crypto.randomUUID(),
-      });
-      if (!ack.success) throw Error(JSON.stringify(ack));
+        let stopListening;
+        let timeout;
+        const outcome = new Promise((resolve) => {
+          stopListening = window.agui.onEvent((e) => {
+            if (e.type === "RUN_FINISHED" || e.type === "RUN_ERROR") resolve(e.type);
+          });
+          timeout = setTimeout(() => resolve("timeout"), 25000);
+        });
+        try {
+          const ack = await window.agui.run({
+            sessionId: session.id,
+            currentUser: {
+              turnId: crypto.randomUUID(),
+              text,
+              visibleContent: text,
+            },
+            assistantTurnId: crypto.randomUUID(),
+          });
+          if (!ack.success) throw Error(JSON.stringify(ack));
+          return await outcome;
+        } finally {
+          clearTimeout(timeout);
+          stopListening();
+        }
+      }
       return {
         source: graph.nodes.some((n) => n.label === "气泡锚点"),
-        terminal: await Promise.race([
-          outcome,
-          new Promise((resolve) => setTimeout(() => resolve("timeout"), 25000)),
-        ]),
+        everyday: await ask("周末准备做点什么？ DESKTOP_STYLE_CHECK"),
+        explicit: await ask("你最近在贴吧看了什么？ DESKTOP_READING_CHECK"),
       };
     });
-    assert.deepEqual(check, { source: true, terminal: "RUN_FINISHED" });
+    assert.deepEqual(check, { source: true, everyday: "RUN_FINISHED", explicit: "RUN_FINISHED" });
     const secretsDir = path.join(paths.userData, "plugin-data", "tieba-garden", "secrets");
     const secretFiles = await readdir(secretsDir);
     assert.equal(secretFiles.length, 1);
@@ -151,10 +157,19 @@ export async function verifyDesktop(profile, captured) {
     }));
     assert.deepEqual(await readdir(secretsDir), []);
     assert.ok(!JSON.stringify(captured).includes("desktop_tieba_fixture"));
-    const body = captured.find((b) =>
-      JSON.stringify(b).includes("DESKTOP_GATEWAY_CHECK"),
-    );
-    assert.match(JSON.stringify(body) ?? "", /气泡锚点/);
+    const inputs = (marker) => {
+      const body = captured.find((request) => JSON.stringify(request).includes(marker));
+      assert.ok(body, "missing desktop model request: " + marker);
+      return JSON.stringify([body.instructions, body.input ?? body.messages]);
+    };
+    const everyday = inputs("DESKTOP_STYLE_CHECK");
+    assert.match(everyday, /plugin:tieba-garden:expressions/);
+    assert.ok(everyday.includes(styleHeader));
+    assert.doesNotMatch(everyday, /气泡锚点|tieba\.baidu\.com/);
+    assert.ok(!everyday.includes(liveThreadQuote));
+    const explicit = inputs("DESKTOP_READING_CHECK");
+    assert.match(explicit, /plugin:tieba-garden:readings/);
+    assert.ok(explicit.includes("https://tieba.baidu.com/p/54321"));
     console.log(
       "PASS Windows Electron main, plugin panel IPC, graph and real Responses request",
     );

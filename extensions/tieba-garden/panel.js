@@ -406,7 +406,7 @@
     el("sample-count").textContent = samples.length;
     el("schedule-summary").textContent = !config.auto ? "未开启" : localTime(next.nextVisitAt) || "等待巡游";
     el("learning-help").textContent = config.learn
-      ? "聊到相关话题时，昔涟会参考这里存下的说法。"
+      ? "昔涟会从这些收藏里学怎么接话，在私聊里用自己的话表达。"
       : "学习已关闭。之前的收藏仍可回看。";
     showSettings(config);
     showAuth(next.auth);

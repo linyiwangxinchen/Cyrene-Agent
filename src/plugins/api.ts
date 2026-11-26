@@ -645,6 +645,8 @@ export type PluginPromptBuildInput =
 export type PluginPromptProviderInput = PluginPromptBuildInput & {
   /** 插件停止时触发；Provider 应尽快结束仍在进行的异步工作。 */
   readonly signal: AbortSignal;
+  /** 内置贴吧表达 Provider 可检查自己的样本是否被当前私聊的表达纠正排除。 */
+  readonly isExpressionBlocked?: (text: string) => boolean;
 };
 
 export interface PluginPromptProvider {

@@ -13,6 +13,27 @@ afterEach(() => {
 });
 
 describe("PluginPromptRegistry", () => {
+  it("让内置贴吧表达在归纳前排除用户纠正过的样本", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    const input = { source: "conversation", mode: "chat", privateCompanion: true, userText: "我回来了" } as const;
+    const provide = vi.fn<import("./types").PluginPromptProvider["provide"]>(({ isExpressionBlocked }) => {
+      return isExpressionBlocked?.("月亮补给已经到了") ? "" : "接话时把眼前的事情说具体";
+    });
+    registry.register("tieba-garden", { id: "expressions", privateCompanionOnly: true, provide }, signal);
+    const unrelated = vi.fn<import("./types").PluginPromptProvider["provide"]>(({ isExpressionBlocked }) => {
+      expect(isExpressionBlocked).toBeUndefined();
+      return "";
+    });
+    registry.register("elsewhere", { id: "expressions", privateCompanionOnly: true, provide: unrelated }, signal);
+
+    expect(await registry.build(input)).toContain("接话时把眼前的事情说具体");
+    expect(await registry.build(input, ["月亮补给"])).toBe("");
+    expect(unrelated).toHaveBeenCalledTimes(2);
+    expect(await registry.build({ ...input, privateCompanion: undefined }, ["月亮补给"])).toBe("");
+    expect(provide).toHaveBeenCalledTimes(2);
+  });
+
   it("按注册顺序拼接命名空间内容，并按模式过滤", async () => {
     const registry = createPluginPromptRegistry();
     const first = new AbortController();

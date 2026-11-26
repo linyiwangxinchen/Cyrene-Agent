@@ -33,15 +33,50 @@ const captured = [];
 const quote = "气泡锚点";
 const liveThreadUrl = "https://tieba.baidu.com/p/23456";
 const liveThreadTitle = "夜景摄影讨论";
+const liveThreadQuote = "试试等日落后半小时再拍。";
+const liveThreadSummary = "建议在傍晚光线渐暗时拍夜景。";
+const importedThreadUrl = "https://tieba.baidu.com/p/12345";
+const styleHeader = "贴吧读帖里积累的接话习惯";
+const styleTechnique = "先顺着对方刚提到的事回应";
+const readingHeader = "近期实读的贴吧手记";
+const styleReply = "原来如此。你想从哪儿聊起？";
+
+async function seedTiebaLearning(root) {
+  const pluginData = path.join(root, "plugin-data", "tieba-garden");
+  const at = Date.now() - 86_400_000;
+  const source = liveThreadUrl + "#post_content_456";
+  await mkdir(pluginData, { recursive: true });
+  await writeFile(path.join(pluginData, "reading.json"), JSON.stringify({
+    tid: "23456",
+    url: liveThreadUrl,
+    title: liveThreadTitle,
+    bar: "摄影",
+    at,
+    imported: false,
+    floors: [{ body: liveThreadQuote, post: "456", page: 1 }],
+    summary: liveThreadSummary,
+    evidence: [{ quote: liveThreadQuote, source, post: "456" }],
+    analysisStatus: "complete",
+    sampleIds: ["legacy-style"],
+  }));
+  await writeFile(path.join(pluginData, "expressions.json"), JSON.stringify([{
+    id: "legacy-style",
+    tid: "23456",
+    quote: liveThreadQuote,
+    source,
+    at,
+    scene: "夜景摄影",
+    delivery: "先接住对方分享的经验，再谈自己的感受",
+  }]));
+}
+
 const gateway = createServer(async (req, res) => {
   const parts = [];
   for await (const chunk of req) parts.push(chunk);
   const body = JSON.parse(Buffer.concat(parts).toString());
   captured.push(body);
-  const extract = JSON.stringify(body.input ?? body.messages).includes(
-    "阅读论坛对话",
-  );
-  const answer = extract
+  const prompt = JSON.stringify([body.instructions, body.input ?? body.messages]);
+  const answer = prompt.includes("阅读论坛对话")
     ? JSON.stringify({
         summary: "摘录里用一个比喻形容网络断线。",
         evidence: [quote],
@@ -50,15 +85,12 @@ const gateway = createServer(async (req, res) => {
           scene: "网络断线修复",
           cue: "庆祝",
           delivery: "先接住对方的好消息，再轻轻开一句玩笑",
+          style: "acknowledge",
         }],
       })
-    : JSON.stringify(body.input ?? body.messages).includes(
-          "plugin:tieba-garden:expressions",
-        )
-      ? "先把这个气泡锚点修好。"
-      : JSON.stringify(body.input ?? body.messages).includes(
-            "你们在私聊中形成的说话习惯",
-          ) && JSON.stringify(body.input ?? body.messages).includes("好家伙")
+    : prompt.includes(styleHeader) && prompt.includes(styleTechnique)
+      ? styleReply
+      : prompt.includes("你们在私聊中形成的说话习惯") && prompt.includes("好家伙")
         ? "好家伙，周末想去哪逛逛？"
         : "已经收到。";
   const transport = req.url.includes("/responses") ? "responses" : "openai";
@@ -145,7 +177,7 @@ async function waitFor(predicate, label) {
     await new Promise((r) => setTimeout(r, 40));
   }
 }
-async function ask(mode, message, expected, existing, expectedReply) {
+async function ask(mode, message, { existing, reply } = {}) {
   const session =
     existing ?? (await invoke("chats:create", { mode, title: message }));
   if (mode !== "chat")
@@ -188,47 +220,26 @@ async function ask(mode, message, expected, existing, expectedReply) {
     body.instructions,
     body.input ?? body.messages,
   ]);
-  assert.equal(
-    modelInput.includes(quote),
-    expected,
-    mode + " expression in final payload",
-  );
-  assert.equal(
-    modelInput.includes("plugin:tieba-garden:expressions"),
-    expected,
-    mode + " expression provider",
-  );
-  if (expected)
+  if (reply)
     assert.ok(
       events.some(
         (e) =>
           e.channel === "agui:event" &&
           e.args[0]?.runId === ack.runId &&
           e.args[0].type === "TEXT_MESSAGE_CONTENT" &&
-          JSON.stringify(e.args[0]).includes(quote),
-      ),
-      "fixture reply rendered the learned expression",
-    );
-  if (expectedReply)
-    assert.ok(
-      events.some(
-        (e) =>
-          e.channel === "agui:event" &&
-          e.args[0]?.runId === ack.runId &&
-          e.args[0].type === "TEXT_MESSAGE_CONTENT" &&
-          JSON.stringify(e.args[0]).includes(expectedReply),
+          JSON.stringify(e.args[0]).includes(reply),
       ),
       "cross-chat expression in streamed reply",
     );
-  console.log("PASS", mode, message, expected);
-  return session;
+  console.log("PASS", mode, message);
+  return { session, modelInput };
 }
 try {
   if (process.argv.includes("--desktop")) {
     const { verifyDesktop } = await import(
       "./companion-expressions-desktop.mjs"
     );
-    await verifyDesktop(profile, captured);
+    await verifyDesktop(profile, captured, { seedTiebaLearning, liveThreadQuote, styleHeader });
   }
   await listen(handle.server);
   await http(
@@ -252,19 +263,7 @@ try {
   });
   await waitFor(() => token, "auth");
   await handle.startChannels();
-  if (process.argv.includes("--ui")) {
-    const pluginData = path.join(dataDir, "plugin-data", "tieba-garden");
-    await mkdir(pluginData, { recursive: true });
-    await writeFile(path.join(pluginData, "reading.json"), JSON.stringify({
-      tid: "23456",
-      url: liveThreadUrl,
-      title: liveThreadTitle,
-      bar: "摄影",
-      at: Date.now(),
-      imported: false,
-      floors: [{ body: "试试等日落后半小时再拍。", post: "456", page: 1 }],
-    }));
-  }
+  await seedTiebaLearning(dataDir);
   await invoke("plugins:set-enabled", "tieba-garden", true);
   const panel = async (cmd, args = {}) => {
     const reply = await invoke(
@@ -277,6 +276,9 @@ try {
     return reply.data;
   };
   await panel("save", { learn: true });
+  const beforeLearning = await ask("chat", "你今天过得怎么样？");
+  assert.ok(!beforeLearning.modelInput.includes(styleHeader));
+  assert.ok(beforeLearning.modelInput.includes(liveThreadSummary));
   const fixtureCookie = "__bid_n=web_tieba_fixture_browser; BDUSS=web_tieba_fixture~session; ab_sr=web_tieba_fixture=";
   assert.equal((await panel("auth-save", { cookie: fixtureCookie })).auth.hasCookie, true);
   const secretsDir = path.join(dataDir, "plugin-data", "tieba-garden", "secrets");
@@ -288,7 +290,7 @@ try {
   await invoke("plugins:set-enabled", "tieba-garden", true);
   assert.equal((await panel("state", { compact: true })).auth.hasCookie, true);
   const state = await panel("read", {
-    url: "https://tieba.baidu.com/p/12345",
+    url: importedThreadUrl,
     title: "断线后的比喻",
     excerpt: "这次断线就叫气泡锚点吧",
   });
@@ -297,7 +299,8 @@ try {
   assert.equal((await panel("auth-clear")).auth.hasCookie, false);
   assert.deepEqual(await readdir(secretsDir), []);
   console.log("PASS Web imports, persists and clears Tieba Cookie using encrypted host storage");
-  assert.equal(state.samples[0].quote, quote);
+  const newSample = state.samples.find((sample) => sample.quote === quote);
+  assert.equal(newSample?.style, "acknowledge");
   const graph = () => invoke("memory-panel:get-graph");
   assert.ok((await graph()).nodes.some((n) => n.label === quote));
   if (process.argv.includes("--ui")) {
@@ -474,33 +477,57 @@ try {
       await browser.close();
     }
   }
-  await ask("chat", "网络断线修复", true);
-  await ask("chat", "你最近在贴吧看了什么？", false);
-  assert.match(JSON.stringify(captured.at(-1)), /plugin:tieba-garden:readings/);
-  assert.match(JSON.stringify(captured.at(-1)), /断线后的比喻/);
-  assert.match(JSON.stringify(captured.at(-1)), /用户导入摘录/);
-  await ask("chat", "种花怎么选花盆", false);
-  assert.doesNotMatch(JSON.stringify(captured.at(-1)), /plugin:tieba-garden:readings/);
-  await ask("chat", "我的考试通过了", true);
-  assert.match(JSON.stringify(captured.at(-1)), /先接住对方的好消息/);
+  const everyday = await ask("chat", "周末准备做点什么？", { reply: styleReply });
+  assert.notEqual(everyday.session.id, beforeLearning.session.id);
+  assert.match(everyday.modelInput, /plugin:tieba-garden:expressions/);
+  assert.ok(everyday.modelInput.includes(styleHeader));
+  assert.ok(everyday.modelInput.includes(styleTechnique));
+  assert.ok(everyday.modelInput.includes(readingHeader));
+  assert.ok(everyday.modelInput.includes(liveThreadSummary));
+  for (const privateDetail of [quote, liveThreadQuote, liveThreadUrl, importedThreadUrl, "断线后的比喻"]) {
+    assert.ok(!everyday.modelInput.includes(privateDetail), "ordinary prompt included " + privateDetail);
+  }
+
+  const requested = await ask("chat", "你最近在贴吧看了什么？");
+  assert.match(requested.modelInput, /plugin:tieba-garden:readings/);
+  assert.ok(requested.modelInput.includes(importedThreadUrl));
+  assert.ok(requested.modelInput.includes(liveThreadUrl));
+  assert.match(requested.modelInput, /断线后的比喻/);
+  assert.match(requested.modelInput, /用户导入摘录/);
+  const optedOut = await ask("chat", "认真点，不要玩梗。");
+  assert.ok(!optedOut.modelInput.includes(styleHeader));
+  assert.ok(!optedOut.modelInput.includes(readingHeader));
+
+  await panel("save", { learn: false });
+  const notLearning = await ask("chat", "周末准备做点什么？");
+  assert.doesNotMatch(notLearning.modelInput, /plugin:tieba-garden:(?:expressions|readings)/);
+  const requestedWhileOff = await ask("chat", "再说说你最近在贴吧看了什么？");
+  assert.ok(requestedWhileOff.modelInput.includes(importedThreadUrl));
+  await panel("save", { learn: true });
   await invoke("plugins:set-enabled", "bili-garden", true);
-  await ask("chat", "阳台浇水", false);
-  assert.match(JSON.stringify(captured.at(-1)), /花盆加班/);
+  assert.match((await ask("chat", "阳台浇水")).modelInput, /花盆加班/);
   await invoke("plugins:set-enabled", "bili-garden", false);
-  await ask("chat", "阳台浇水", false);
-  assert.doesNotMatch(JSON.stringify(captured.at(-1)), /花盆加班/);
+  assert.doesNotMatch((await ask("chat", "阳台浇水")).modelInput, /花盆加班/);
   console.log(
     "PASS Bilibili SQLite expression reaches the model only while enabled",
   );
-  await ask("learn", "网络断线修复", false);
-  await ask("work", "网络断线修复", false);
-  await ask("code", "网络断线修复", false);
+  for (const mode of ["learn", "work", "code"]) {
+    const isolated = await ask(mode, "你最近在贴吧看了什么？");
+    assert.doesNotMatch(isolated.modelInput, /plugin:tieba-garden:(?:expressions|readings)/);
+    assert.ok(!isolated.modelInput.includes(liveThreadSummary));
+  }
   await invoke("plugins:set-enabled", "tieba-garden", false);
-  await ask("chat", "网络断线修复", false);
+  const disabled = await ask("chat", "周末准备做点什么？");
+  assert.doesNotMatch(disabled.modelInput, /plugin:tieba-garden:(?:expressions|readings)/);
   assert.ok(!(await graph()).nodes.some((n) => n.label === quote));
   await invoke("plugins:set-enabled", "tieba-garden", true);
-  await panel("forget", { id: state.samples[0].id });
-  await ask("chat", "网络断线修复", false);
+  const resumed = await ask("chat", "今天有什么想聊的？", { reply: styleReply });
+  assert.ok(resumed.modelInput.includes(styleHeader));
+  assert.ok(!resumed.modelInput.includes(quote));
+  await panel("forget", { id: newSample.id });
+  const forgot = await ask("chat", "今天有什么想聊的？");
+  assert.ok(!forgot.modelInput.includes(styleHeader));
+  console.log("PASS persisted Tieba style, recent reading, explicit sources and private chat isolation");
   const settings = await invoke("companion:get");
   await invoke("companion:update", {
     type: "preferences",
@@ -512,7 +539,7 @@ try {
       desireEnabled: true,
     },
   });
-  const mine = await ask("chat", "以后把夜宵叫作“月亮补给”。我想亲你。", false);
+  const { session: mine } = await ask("chat", "以后把夜宵叫作“月亮补给”。我想亲你。");
   const after = await invoke("companion:get");
   assert.ok(
     after.desireHistory.some(
@@ -520,19 +547,17 @@ try {
     ),
   );
   assert.ok((await graph()).nodes.some((n) => n.label === "月亮补给"));
-  await ask("chat", "夜宵吃什么", false, mine);
-  assert.match(JSON.stringify(captured.at(-1)), /你们在私聊中形成的说话习惯/);
-  await ask("chat", "夜宵吃什么", false);
-  assert.match(JSON.stringify(captured.at(-1)), /月亮补给/);
-  await ask("chat", "好家伙，快递提前到了", false);
-  await ask("chat", "好家伙，小猫居然学会开门", false);
-  await ask("chat", "周末聊点啥", false, undefined, "好家伙");
-  const learned = JSON.stringify(captured.at(-1));
+  const rememberedHere = await ask("chat", "夜宵吃什么", { existing: mine });
+  assert.match(rememberedHere.modelInput, /你们在私聊中形成的说话习惯/);
+  const rememberedAcrossChats = await ask("chat", "夜宵吃什么");
+  assert.match(rememberedAcrossChats.modelInput, /月亮补给/);
+  await ask("chat", "好家伙，快递提前到了");
+  await ask("chat", "好家伙，小猫居然学会开门");
+  const { modelInput: learned } = await ask("chat", "周末聊点啥", { reply: "好家伙" });
   assert.match(learned, /好家伙/);
   assert.doesNotMatch(learned, /快递提前到了|小猫居然学会开门/);
-  await ask("chat", "以后别用“好家伙”", false);
-  await ask("chat", "周末聊点啥", false);
-  assert.doesNotMatch(JSON.stringify(captured.at(-1)), /好家伙/);
+  await ask("chat", "以后别用“好家伙”");
+  assert.doesNotMatch((await ask("chat", "周末聊点啥")).modelInput, /好家伙/);
   console.log(
     "PASS learned vocabulary and speaking style in fresh chats, cross-chat correction, desire and graph",
   );

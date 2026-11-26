@@ -40,14 +40,17 @@ function fullProviderId(ownerId: string, providerId: string): string {
 }
 
 /** 单个 Provider 失败或超时时返回空内容，避免第三方插件阻塞整轮对话。 */
-async function resolveProvider(entry: PromptEntry, input: PluginPromptBuildInput): Promise<string> {
+async function resolveProvider(entry: PromptEntry, input: PluginPromptBuildInput, isExpressionBlocked: (text: string) => boolean): Promise<string> {
   const fullId = fullProviderId(entry.ownerId, entry.provider.id);
+  const privateCompanion = entry.provider.privateCompanionOnly && input.privateCompanion;
+  const filterTiebaSamples = privateCompanion && fullId === "plugin:tieba-garden:expressions";
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   try {
     const content = await Promise.race([
       Promise.resolve(entry.provider.provide({
         ...input,
-        ...(entry.provider.privateCompanionOnly && input.privateCompanion && { conversationCue: conversationCue(input.userText) }),
+        ...(privateCompanion && { conversationCue: conversationCue(input.userText) }),
+        ...(filterTiebaSamples && { isExpressionBlocked }),
         signal: entry.signal,
       })),
       new Promise<never>((_, reject) => {
@@ -128,13 +131,14 @@ export function createPluginPromptRegistry(): PluginPromptRegistry {
         // 会话场景（conversation/scheduler）按 modes 匹配；判别联合保证此时 mode 必填。
         return !entry.provider.modes || entry.provider.modes.includes(input.mode);
       });
-      const contents = await Promise.all(snapshot.map((entry) => resolveProvider(entry, input)));
+      const isExpressionBlocked = (text: string) => blockedExpressions.some(word => word && text.includes(word));
+      const contents = await Promise.all(snapshot.map((entry) => resolveProvider(entry, input, isExpressionBlocked)));
       const blocks: string[] = [];
       let totalChars = 0;
       for (let index = 0; index < snapshot.length; index += 1) {
         const content = contents[index];
         if (!content) continue;
-        if (snapshot[index].provider.privateCompanionOnly && blockedExpressions.some(word => content.includes(word))) continue;
+        if (snapshot[index].provider.privateCompanionOnly && isExpressionBlocked(content)) continue;
         const fullId = fullProviderId(snapshot[index].ownerId, snapshot[index].provider.id);
         const separator = blocks.length > 0 ? "\n\n---\n\n" : "";
         const header = `[插件上下文：${fullId}]\n`;

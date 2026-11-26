@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createForum } from "../lib/forum.mjs";
 import { publicPage, TiebaPageError } from "../lib/public-pages.mjs";
+import { speakingStyle } from "../lib/speaking-style.mjs";
 
 function fixture({ state = {}, fetch, generate, clock = { at: 1000 } } = {}) {
   const requests = [];
@@ -27,6 +28,34 @@ const note = '<h1 class="core_title_txt">读书和茶</h1><div id="post_content_
 const listing = ids => ids.map(id => '<a class="j_th_tit" href="/p/' + id + '">帖子 ' + id + '</a>').join("");
 const requestedBar = path => new URL(path, "https://tieba.baidu.com").searchParams.get("kw");
 const modelNote = JSON.stringify({ summary: "读完这本书再看看。", evidence: ["慢慢来"], expressions: [] });
+
+test("evidence-backed speaking style persists across reload and follows learning and forget settings", async () => {
+  const plugin = fixture({
+    generate: async messages => {
+      const quote = JSON.parse(messages[1].content).floors[0].body;
+      return JSON.stringify({ summary: "先根据眼前的进展接话。", evidence: [quote], expressions: [
+        { quote, scene: "庆祝阶段性进展", style: "acknowledge" },
+        { quote: "原文没有这句", scene: "庆祝阶段性进展", style: "detail" },
+      ] });
+    },
+  });
+  await plugin.invoke("save", { learn: true });
+  await plugin.invoke("read", { url: "/p/61", excerpt: "第一句原话" });
+  await plugin.invoke("read", { url: "/p/62", excerpt: "第二句原话" });
+  const restarted = plugin.restart();
+  const input = { userText: "周末想着去看展。" };
+  const samples = restarted.learnedExpressions();
+  assert.deepEqual(samples.map(row => row.style), ["acknowledge", "acknowledge"]);
+  assert.match(speakingStyle(samples, input), /先顺着对方刚提到的事回应/);
+  await restarted.invoke("save", { learn: false });
+  assert.equal(restarted.learningEnabled(), false);
+  assert.equal(speakingStyle(restarted.learnedExpressions(), input), "");
+  assert.equal((await restarted.invoke("state")).samples.length, 2);
+  await restarted.invoke("save", { learn: true });
+  assert.match(speakingStyle(restarted.learnedExpressions(), input), /先顺着对方刚提到的事回应/);
+  await restarted.invoke("forget", { id: samples[0].id });
+  assert.equal(speakingStyle(plugin.restart().learnedExpressions(), input), "");
+});
 
 test("manual visit stores one completed post, skips previously seen posts and rotates after restart", async () => {
   const clock = { at: 1000 };
