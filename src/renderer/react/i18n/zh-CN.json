@@ -46,7 +46,10 @@
       "loading": "正在加载会话…",
       "loadFailed": "会话加载失败，请关闭后重试。",
       "empty": "暂无可引用的聊天会话。",
-      "unavailable": "此会话无法引用，请选择另一个普通聊天会话。"
+      "unavailable": "这段会话没有可引用的已保存正文，或已不可用。",
+      "more": "显示更多会话",
+      "view": "查看会话",
+      "openFailed": "无法打开这段会话，请确认会话仍存在。"
     },
     "placeholderChat": "昔涟期待和你一起聊天♪",
     "greetingMorningEarly": "早上好呀，{{name}}，新的一天开始啦♪",
@@ -2259,6 +2262,25 @@
       "project": "当前项目",
       "l2Title": "事件片段",
       "l2Description": "从聊天中提炼的重要事件，可搜索查看。",
+      "vectorIndex": {
+        "title": "记忆向量索引",
+        "checking": "正在检查本地向量模型和索引。",
+        "ready": "向量索引可用。下方逐条显示记忆的同步状态。",
+        "needsRepair": "已找到本地模型，可以修复未同步的事件记忆。",
+        "modelMissing": "缺少本地 BGE-M3。已保存的记忆仍可按文字召回。",
+        "repair": "修复向量索引",
+        "install": "下载模型并修复（约 560 MiB）",
+        "downloading": "正在下载并校验 BGE-M3，可以离开此页面。",
+        "repairing": "正在检查索引并补建未同步的记忆。",
+        "complete": "向量索引检查和同步完成。",
+        "downloadFailed": "下载或校验模型失败。可以重试，已保存的记忆仍可用。",
+        "repairFailed": "向量索引同步未完成。可以重试，已保存的记忆仍可用。",
+        "modeChanged": "记忆模式已改变。切回向量模式后可再次修复。",
+        "requestFailed": "暂时无法读取向量索引状态。",
+        "pending_sync": "索引待同步",
+        "synced": "索引已同步",
+        "sync_failed": "索引同步失败"
+      },
       "searchPlaceholder": "搜索片段…",
       "noTrigger": "无触发片段",
       "noMatch": "没有匹配的事件片段",
@@ -2267,7 +2289,9 @@
       "status": {
         "active": "活跃",
         "aging": "淡化中",
-        "archived": "已归档"
+        "archived": "已归档",
+        "superseded": "已替代",
+        "merged": "已合并"
       },
       "reflectionsTitle": "回顾",
       "reflectionsDescription": "昔涟自动生成的阶段性回顾。",

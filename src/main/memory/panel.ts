@@ -1,5 +1,5 @@
 import { memoryStore } from "./memory-store";
-import type { L0Profile, L1Profile, ReflectionLog } from "./memory-types";
+import type { L0Profile, L1Profile, L2Memory, ReflectionLog } from "./memory-types";
 
 export interface MemoryPanelItem {
   id: string;
@@ -28,7 +28,7 @@ function formatReflectionItem(log: ReflectionLog): MemoryPanelItem {
 export async function loadMemoryPanelData(): Promise<{
   l0: L0Profile;
   l1: L1Profile;
-  l2: unknown[];
+  l2: L2Memory[];
   reflections: MemoryPanelItem[];
 }> {
   const [l0, l1, l2, reflectionLogs] = await Promise.all([

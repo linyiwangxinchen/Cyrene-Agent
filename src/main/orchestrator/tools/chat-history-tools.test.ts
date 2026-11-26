@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { getChannelConversationBindingStore } from "../../channels/conversation-binding-store";
 import { createSession, deleteSession, renameSession, syncSessionStats } from "../../chats/chats-store";
+import { loadConversationReference } from "../../chats/conversation-reference";
 import { filterCurrentHistorySourcePointers } from "../../chats/history-source-references";
 import { getMemoryModeVersion, setMemoryMode } from "../../memory/memory-mode";
 import { memoryStore } from "../../memory/memory-store";
@@ -101,7 +102,8 @@ it("withholds revised, forgotten, unfinished and non-chat content from both tool
     payload: { role: "assistant", content: "工具中间输出不可见", visibility: "internal" } });
   await transcript.append(source.id, { id: "final-assistant", kind: "assistant", turnId: "new-answer", at: 5,
     payload: { role: "assistant", content: "采用浅绿色票" } });
-  await transcript.append(source.id, { id: "user:v1:unfinished:r1", kind: "user", turnId: "unfinished", revision: 1, at: 6,
+  await getConversationDatabase(fixture.root).call("runs.create", { conversationId: source.id, runId: "unfinished-history-run" });
+  await transcript.append(source.id, { id: "user:v1:unfinished:r1", kind: "user", turnId: "unfinished", revision: 1, at: 6, runId: "unfinished-history-run",
     payload: { text: "排队消息尚未回答" } });
   const work = await createHistory("私有项目隔离", "work");
   await addTurn(work.id, "work", "不要把工作区机密读出", "项目秘密");
@@ -383,8 +385,9 @@ it("continues numeric keyword pages through already-ranked matches", async () =>
 it("advances the raw numeric recent position past hidden records", async () => {
   const hidden = await createHistory("不完整的最近会话");
   const transcript = getConversationTranscriptStore(fixture.root);
+  await getConversationDatabase(fixture.root).call("runs.create", { conversationId: hidden.id, runId: "numeric-recent-active-run" });
   await transcript.append(hidden.id, { id: "user:v1:numeric-recent-hidden:r1", kind: "user", turnId: "numeric-recent-hidden", revision: 1,
-    at: 1, payload: { text: "尚未回答的旧问题" } });
+    at: 1, runId: "numeric-recent-active-run", payload: { text: "尚未回答的旧问题" } });
   const ids: string[] = [];
   for (let i = 0; i < 3; i++) {
     const source = await createHistory(`最近分页历史 ${i}`);
@@ -424,4 +427,75 @@ it("gives each unopened legacy source its own rebuild batch", async () => {
   const second = JSON.parse(await search.execute({ searchCursor: first.nextCursor }, running));
   expect(second.items).toMatchObject([{ conversationId: ids[1] }]);
   expect(isImported()).toEqual([1, 1]);
+});
+
+it("rebuilds a version-eleven index to find standalone user text and preserves its provenance", async () => {
+  const source = await createSession({ mode: "chat", title: "只有旧笔记的会话", initialMessages: [
+    { id: "legacy-index-only-user", role: "user", at: 7, content: "霜鹭独行的孤立笔记" },
+  ] });
+  const client = getConversationDatabase(fixture.root);
+  await client.close();
+  withConversationDatabase(fixture.root, db => {
+    db.exec("DELETE FROM schema_migrations WHERE version=12; DROP TRIGGER history_index_pending_dispatch");
+    db.prepare("INSERT OR REPLACE INTO history_index_state(conversation_id,dirty) VALUES(?,0)").run(source.id);
+  });
+  const observed = vi.fn();
+  const running = context({ runId: "single-user-index-upgrade", onHistorySourcesRead: observed });
+  const found = JSON.parse(await search.execute({ query: "孤立笔记" }, running));
+  expect(found.items[0]).toMatchObject({ conversationId: source.id });
+  expect(JSON.parse(await read.execute({ sourceRef: found.items[0].sourceRef }, running))).toMatchObject({
+    messages: [{ role: "user", text: "霜鹭独行的孤立笔记" }],
+  });
+  const pointers = observed.mock.calls.find(call => call[1] === "read")?.[0];
+  expect(pointers).toEqual([{ conversationId: source.id, userTurnId: "legacy-index-only-user",
+    userEntryId: "migration:v2:legacy-index-only-user:canonical", revision: expect.stringMatching(/^[a-f0-9]{64}$/u) }]);
+  expect(await filterCurrentHistorySourcePointers(pointers)).toEqual(pointers);
+  // Old UI locators used the visible ID instead of the canonical entry ID.
+  await memoryStore.retractFact({ conversationId: source.id, messageId: "legacy-index-only-user" }, "霜鹭独行的孤立笔记");
+  expect(await filterCurrentHistorySourcePointers(pointers)).toEqual([]);
+  expect(await loadConversationReference(destination, source.id)).toBeUndefined();
+  expect(JSON.parse(await search.execute({ query: "孤立笔记" }, running)).items).toEqual([]);
+});
+
+it("can quote and search a settled user's original message after a failed run without replaying the partial reply", async () => {
+  const source = await createHistory("失败运行留下的输入");
+  const transcript = getConversationTranscriptStore(fixture.root);
+  const database = getConversationDatabase(fixture.root);
+  const runId = "settled-user-with-failed-answer";
+  await database.call("runs.create", { conversationId: source.id, runId });
+  await transcript.append(source.id, { id: "user:v1:failed-user:r1", kind: "user", runId, turnId: "failed-user", revision: 1, at: 1,
+    payload: { text: "松鼠水钟项目原笔记" } });
+  await transcript.append(source.id, { id: "failed-partial-reply", kind: "assistant", runId, turnId: "failed-reply", at: 2,
+    payload: { role: "assistant", content: "尚未处理完整的回执" } });
+  await transcript.append(source.id, { id: "lagging-failed-reply-view", kind: "presentation_patch", at: 2,
+    payload: { messageId: "failed-partial-reply", patchRevision: 1, patch: { runSnapshot: { status: "running", updatedAt: 2 } } } });
+  expect(await loadConversationReference(destination, source.id)).toBeUndefined();
+  expect(JSON.parse(await read.execute({ conversationId: source.id }, context()))).toHaveProperty("errorCode", "history_unavailable");
+  await database.call("runs.terminal", runId, "failed");
+  const manualText = (await loadConversationReference(destination, source.id))?.context;
+  expect(manualText).toContain("松鼠水钟项目原笔记");
+  expect(manualText).not.toContain("尚未处理完整的回执");
+  expect(JSON.parse(await search.execute({ query: "水钟项目" }, context())).items[0]).toMatchObject({ conversationId: source.id });
+  expect(JSON.parse(await read.execute({ conversationId: source.id }, context())).messages).toMatchObject([{ role: "user", text: "松鼠水钟项目原笔记" }]);
+});
+
+it("validates explicit quotes with memory off and blocks revoked or previously mirrored data", async () => {
+  const explicit = await createSession({ mode: "chat", title: "可手工引用", initialMessages: [
+    { id: "manual-assistant-only-anchor", role: "model", at: 1, content: "原先保留的开场短笺" },
+  ] });
+  const mirrored = await createHistory("已回退的渠道会话");
+  const transcript = getConversationTranscriptStore(fixture.root);
+  await transcript.append(mirrored.id, { id: "channel:old-proof", kind: "user", turnId: "external-previous", revision: 1,
+    at: 1, payload: { text: "已撤下的渠道记录" } });
+  await transcript.append(mirrored.id, { id: "remove-mirrored-active-branch", kind: "turn_tombstone", at: 2,
+    payload: { targetUserTurnId: "external-previous", reason: "pending_withdrawn" } });
+  await addTurn(mirrored.id, "post-channel-edit", "替换后的本地外观", "看起来和普通会话相同");
+  setMemoryMode("off");
+  try {
+    expect(await loadConversationReference("", explicit.id)).toMatchObject({ context: expect.stringContaining("原先保留的开场短笺") });
+    expect(JSON.parse(await read.execute({ conversationId: explicit.id }, context()))).toHaveProperty("errorCode", "history_unavailable");
+    expect(await loadConversationReference(destination, mirrored.id)).toBeUndefined();
+    await memoryStore.retractFact({ conversationId: explicit.id, messageId: "manual-assistant-only-anchor" }, "原先保留的开场短笺");
+    expect(await loadConversationReference(destination, explicit.id)).toBeUndefined();
+  } finally { setMemoryMode("vector"); }
 });

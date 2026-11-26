@@ -331,6 +331,17 @@ async function verifyVectorMemory() {
   assert.equal(vectorRequests.length, 1);
   assert.ok(!logs.some(line => String(line).includes('Fixture error:')), 'fixture assertions must all pass');
   console.log(`Vector store: L2 ${entry.syncStatus}; isolated memory: ${memoryPath}`);
+  const vectorStatus = () => invoke('memory-panel:get-vector-index');
+  await check('Vector repair reports missing prerequisites without losing source-backed memory', async () => {
+    const before = await vectorStatus();
+    if (before.modelInstalled) return;
+    assert.equal(before.indexReady, false);
+    assert.equal((await invoke('memory-panel:start-vector-repair', false)).phase, 'repairing');
+    await waitFor(async () => (await vectorStatus()).phase === 'repairFailed', 'missing model is reported');
+    const card = (await invoke('memory-panel:get-data')).l2.find(item => item.id === entry.id);
+    assert.equal(card.content, entry.content);
+    assert.equal(card.syncStatus, 'sync_failed');
+  });
   const fact = vectorCandidates[2].content;
   function withVectorDatabase(run) {
     const database = new DatabaseSync(path.join(vectorDataDir, 'cyrene.sqlite'));
@@ -381,6 +392,7 @@ async function verifyVectorMemory() {
   await check('Explicit off suppresses personal memory in the model request while retaining stored data', async () => {
     seedPendingSocialJob('before-off-fixture');
     assert.equal((await invoke('settings:save-config', { memoryMode: 'off' })).memoryMode, 'off');
+    assert.equal((await invoke('memory-panel:start-vector-repair', true)).phase, 'modeChanged');
     assert.deepEqual(socialJobStatus('before-off-fixture'), { status: 'obsolete', payload_json: null });
     const prompt = await ask(recallQuestions[1]);
     assert.ok(!prompt.includes(fact));

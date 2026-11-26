@@ -2782,6 +2782,38 @@ describe("agui-bridge transcript dispatch", () => {
     return { bridge, runHandler, seenInputs, onFinished };
   }
 
+  it("reattaches the same authorized quotation after journal compaction only within the active request", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-compacted-reference-"));
+    roots.push(root);
+    mocks.userDataRoot = root;
+    const database = getConversationDatabase(root);
+    const create = (options: unknown) => database.call<import("../shared/chat-types").ChatSession>("chats.createSession", options);
+    const draft = { role: "user" as const, content: "请参考我选中的旧会话" };
+    const note = "这段旧内容不属于新会话原文";
+    const destination = await create({ mode: "chat" });
+    const source = await create({ mode: "chat", title: "旧参考", initialMessages: [{ id: "quote-origin", role: "user", at: 1, content: note }] });
+    const summary = { role: "system" as const, content: "已压缩的本会话历史" };
+    const rebuild = vi.fn(async () => [summary, draft]);
+    const { runHandler } = await setupBridge(async () => ({
+      options: { messages: [draft], compactTranscript: rebuild }, latestUserText: draft.content,
+    }));
+    mocks.getSession.mockReturnValue({ ...destination, pendingDispatch: { messageId: "quoted-u", claimedAt: 1, conversationReferenceId: source.id } });
+    await expect(runHandler({ sender: makeSender() }, {
+      sessionId: destination.id, assistantTurnId: "quoted-a", currentUser: { turnId: "quoted-u", text: draft.content, visibleContent: draft.content },
+    })).resolves.toMatchObject({ success: true });
+    const options = mocks.runCyreneAgent.mock.calls.at(-1)?.[0] as import("./orchestrator/cyrene-agent").CyreneRunOptions;
+    expect(JSON.stringify(options.messages)).toContain(note);
+    const request = { retainTokens: 100, transientMessages: [] };
+    const restored = await options.compactTranscript!(request);
+    expect(restored[1].content).toContain(note);
+    expect(draft.content).toBe("请参考我选中的旧会话");
+    rebuild.mockResolvedValueOnce([summary]);
+    expect(await options.compactTranscript!(request)).toMatchObject([summary, { role: "user", content: expect.stringContaining(note) }]);
+    await database.call("chats.deleteSession", source.id);
+    expect(await options.compactTranscript!(request)).toEqual([summary, draft]);
+    expect(JSON.stringify(await database.call("transcript.audit", destination.id))).not.toContain(note);
+  });
+
   it.each(["private", "cancelled", "rebound", "shared"] as const)("按真实前台轮次保存做事经验：%s", async scope => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-bridge-task-"));
     roots.push(root);

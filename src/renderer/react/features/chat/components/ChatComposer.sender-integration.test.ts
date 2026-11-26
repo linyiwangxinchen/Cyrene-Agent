@@ -374,11 +374,11 @@ describe("ChatComposer 旧会话引用", () => {
     expect(list).not.toHaveBeenCalled();
     const opener = host!.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
     await act(async () => opener.click());
-    expect(list).toHaveBeenCalledWith({ mode: "chat" });
+    expect(list).toHaveBeenCalledWith({ mode: "chat", forReference: true });
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dialog.textContent).toContain(t("composer.conversationReference.hint"));
     expect([...dialog.querySelectorAll<HTMLButtonElement>(".cy-sidebar-search-dialog__result")]
-      .map((item) => item.querySelector("[title]")?.getAttribute("title"))).toEqual(["读过的书", "旧的旅行计划"]);
+      .map((item) => item.querySelector("[title]")?.getAttribute("title"))).toEqual(["读过的书", "旧的旅行计划", "空白会话"]);
 
     const search = dialog.querySelector<HTMLInputElement>(`input[aria-label="${t("composer.conversationReference.search")}"]`)!;
     const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
@@ -401,5 +401,37 @@ describe("ChatComposer 旧会话引用", () => {
   it("在任务模式中隐藏引用，即使上层传入回调", async () => {
     await mountComposer({ mode: "work", allowConversationReference: true });
     expect(host!.textContent).not.toContain(t("composer.conversationReference.label"));
+  });
+
+  it("可查看并引用第 30 条以后的重名来源，以实际可读性处理旧统计", async () => {
+    const records = Array.from({ length: 32 }, (_, index) => ({
+      id: `legacy-${index}`, title: "旧备忘", mode: "chat", createdAt: 1, updatedAt: 100 - index,
+      messageCount: index < 30 ? 3 : 0, identityId: null,
+    }));
+    const list = vi.fn(async () => records);
+    const openInReactChatWindow = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const checkConversationReference = vi.fn(async (id: string) => id === "legacy-31");
+    vi.stubGlobal("chatStore", { list, openInReactChatWindow, checkConversationReference });
+    await mountComposer({ conversationId: "current", allowConversationReference: true });
+    input("留着这段草稿");
+    const opener = host!.querySelector<HTMLButtonElement>('button[aria-haspopup="dialog"]')!;
+    await act(async () => opener.click());
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    const rows = () => dialog.querySelectorAll<HTMLButtonElement>(".cy-sidebar-search-dialog__result");
+    expect(rows()).toHaveLength(30);
+    const button = (text: string) => Array.from(dialog.querySelectorAll("button")).find(item => item.textContent === text)!;
+    act(() => button(t("composer.conversationReference.more")).click());
+    expect(rows()).toHaveLength(32);
+    await act(async () => rows()[30].click());
+    expect(dialog.querySelector('[role="alert"]')?.textContent).toBe(t("composer.conversationReference.unavailable"));
+    expect(textarea().value).toBe("留着这段草稿");
+    const view = rows()[31].parentElement!.querySelector<HTMLButtonElement>(".cy-sidebar-search-dialog__reference-action")!;
+    await act(async () => view.click());
+    expect(openInReactChatWindow).toHaveBeenLastCalledWith("legacy-31");
+    expect(dialog.querySelector('[role="alert"]')?.textContent).toBe(t("composer.conversationReference.openFailed"));
+    await act(async () => rows()[31].click());
+    expect(checkConversationReference).toHaveBeenLastCalledWith("legacy-31", "current");
+    expect(host!.querySelector(".cy-composer__attachment")?.textContent).toContain("旧备忘");
+    expect(textarea().value).toBe("留着这段草稿");
   });
 });

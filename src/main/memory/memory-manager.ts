@@ -132,6 +132,7 @@ export class MemoryManager {
     if (candidate.sourceQuote) l2Input.sourceQuote = candidate.sourceQuote
 
     const l2 = await memoryStore.addL2Memory(l2Input, assertSourceCurrent)
+    const expected = { ...l2 }
 
     let ragId: string | undefined
     try {
@@ -139,9 +140,11 @@ export class MemoryManager {
         triggerText: candidate.triggerText,
         confidence: candidate.confidence,
       })
-      await memoryStore.markL2SyncStatus(l2.id, "synced", ragId)
+      if (assertSourceCurrent) await assertSourceCurrent()
+      if (!await memoryStore.markL2SyncStatus(l2.id, "synced", ragId, undefined, expected)) return false
     } catch (err) {
-      await memoryStore.markL2SyncStatus(l2.id, "sync_failed", undefined, err)
+      if (assertSourceCurrent) await assertSourceCurrent()
+      await memoryStore.markL2SyncStatus(l2.id, "sync_failed", undefined, err, expected)
       console.warn("[PMRS/Manager] L2 已写入，但 RAG 同步失败:", err)
       return false
     }

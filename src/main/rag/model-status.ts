@@ -68,7 +68,12 @@ function probeCandidates(
   const subPaths = subPathsLookup[modelId] ?? [];
   const candidates: CandidateCheck[] = subPaths.map((subPath) => {
     const modelDir = path.join(baseDir, subPath);
-    const missingFiles = REQUIRED_FILES.filter((file) => !fs.existsSync(path.join(modelDir, file)));
+    const missingFiles = REQUIRED_FILES.filter((file) => {
+      try {
+        const stat = fs.statSync(path.join(modelDir, file), { throwIfNoEntry: false });
+        return !stat?.isFile() || stat.size === 0;
+      } catch { return true; }
+    });
     return { modelDir, missingFiles };
   });
   const installed = candidates.some((c) => c.missingFiles.length === 0);
@@ -80,10 +85,11 @@ function probeCandidates(
  *
  * Priority:
  *   1. CYRENE_MODELS_DIR env var (highest — explicit override)
- *   2. process.cwd() + "models"  (when launched from project root, e.g. `electron .`)
- *   3. directory beside the executable + "models" (release users drop models here)
- *   4. app.getAppPath() + "models"  (development fallback)
- *   5. process.resourcesPath + "models"  (packaged extraResources fallback)
+ *   2. app.getPath("userData") + "models" (writable for installed applications)
+ *   3. process.cwd() + "models" (development)
+ *   4. directory beside the executable + "models" (manual installations)
+ *   5. app.getAppPath() + "models"
+ *   6. process.resourcesPath + "models"
  *
  * Why this matters: the previous implementation used
  * `path.join(__dirname, "..", "..", "..", "models")` — but the compiled
@@ -95,6 +101,10 @@ function probeCandidates(
 export function getProjectModelsDirCandidates(): string[] {
   const out: string[] = [];
   if (process.env.CYRENE_MODELS_DIR) out.push(process.env.CYRENE_MODELS_DIR);
+  try {
+    const userModels = path.join(app.getPath("userData"), "models");
+    if (!out.includes(userModels)) out.push(userModels);
+  } catch { /* App is not initialized yet. */ }
   const cwdModels = path.join(process.cwd(), "models");
   if (!out.includes(cwdModels)) out.push(cwdModels);
   const executableModels = path.join(path.dirname(process.execPath), "models");
@@ -110,6 +120,18 @@ export function getProjectModelsDirCandidates(): string[] {
     if (!out.includes(resModels)) out.push(resModels);
   }
   return out;
+}
+
+/** Modern huggingface_hub keeps the current revision below hub/.../snapshots. */
+function getHfEmbeddingSnapshot(): string | undefined {
+  const hub = process.env.HF_HUB_CACHE || path.join(process.env.HF_HOME || path.join(os.homedir(), ".cache", "huggingface"), "hub");
+  const repo = path.join(hub, "models--Xenova--bge-m3");
+  let revision: string;
+  try { revision = fs.readFileSync(path.join(repo, "refs", "main"), "utf8").trim(); }
+  catch { return; }
+  if (!/^[a-f\d]{40}$/iu.test(revision)) return;
+  return probeCandidates("embedding-bgem3", path.join(repo, "snapshots"), { "embedding-bgem3": [revision] })
+    .candidates.find(({ missingFiles }) => missingFiles.length === 0)?.modelDir;
 }
 
 /** Primary project-models directory (highest-priority candidate). */
@@ -232,13 +254,14 @@ export function getModelInstallStatusDetail(
 
   // No project model dir at all → try HF cache as last resort.
   const hfProbe = probeCandidates(modelId, HF_CACHE_DIR, HF_CACHE_SUB_PATHS);
-  const hfHit = hfProbe.candidates.find((c) => c.missingFiles.length === 0);
+  const hfHit = hfProbe.candidates.find((c) => c.missingFiles.length === 0)?.modelDir
+    ?? (kind === "embedding" ? getHfEmbeddingSnapshot() : undefined);
   if (hfHit) {
     return {
       modelId,
       installed: true,
       source: "hf-cache",
-      matchedAt: hfHit.modelDir,
+      matchedAt: hfHit,
       existingProjectDir: null,
       modelDirCandidates: projectBaseDirs,
       subPathCandidates: subPaths,

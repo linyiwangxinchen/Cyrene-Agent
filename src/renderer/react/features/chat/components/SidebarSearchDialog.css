@@ -103,3 +103,32 @@
   font-size: 12px;
   text-align: center;
 }
+
+.cy-sidebar-search-dialog__reference-row {
+  display: flex;
+  align-items: center;
+}
+
+.cy-sidebar-search-dialog__reference-row > .cy-sidebar-search-dialog__result {
+  flex: 1;
+}
+
+.cy-sidebar-search-dialog__reference-action {
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--rb-text-secondary, #85858b);
+  cursor: pointer;
+  font: 500 11px/1.4 var(--rb-font-sans, sans-serif);
+}
+
+.cy-sidebar-search-dialog__reference-action:hover {
+  background: var(--rb-surface-hover, #f6f3f5);
+}
+
+.cy-sidebar-search-dialog__reference-error {
+  padding: 0 8px;
+  color: var(--ant-color-error, #cf1322);
+  font-size: 12px;
+}

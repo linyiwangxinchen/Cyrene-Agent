@@ -1,6 +1,6 @@
 import { app, BrowserWindow, type WebContents } from "electron";
 import { IPC } from "../../shared/ipc-channels";
-import type { ChatSession, ConversationMode } from "../../shared/chat-types";
+import type { ChatSession, ChatSessionListOptions, ConversationMode } from "../../shared/chat-types";
 import type { IpcScope } from "../application/ipc-scope";
 import { ConversationJournalService } from "../orchestrator/conversation-journal-service";
 import { ConversationSessionMigration } from "../orchestrator/conversation-session-migration";
@@ -8,8 +8,8 @@ import { getConversationTranscriptStore } from "../orchestrator/conversation-tra
 import { getDefaultModelProfile, loadModelSettings, resolveSessionModelSettings } from "../settings/model-settings";
 import * as chatsStore from "./chats-store";
 import * as sidebarOrganizationStore from "./sidebar-organization-store";
-import { isGroupBoundConversation } from "../channels/conversation-binding-store";
-import { includesExternalConversation } from "./conversation-reference";
+import { getChannelConversationBindingStore, isGroupBoundConversation } from "../channels/conversation-binding-store";
+import { includesExternalConversation, loadConversationReference } from "./conversation-reference";
 
 /** 读出口覆盖：把会话的上下文容量刷新为「按当前模型配置解析」的值。
  *  快照里的 contextWindowTokens 是生成那一刻的口径（run 前 / 压缩时），
@@ -58,8 +58,21 @@ export function registerChatSurfaceIpc(scope: IpcScope) {
   };
   ipc.handle(
     IPC.CHATS_LIST,
-    async (_event, options?: { mode?: ConversationMode }) => (await chatsStore.listSessions(options)),
+    async (_event, options?: ChatSessionListOptions) => {
+      if (options?.forReference !== true) return chatsStore.listSessions(options);
+      const sessions = await chatsStore.listSessions({ mode: "chat" });
+      const { externalChats, bindings } = getChannelConversationBindingStore().list();
+      const external = new Set([...externalChats.map(item => item.sessionId), ...bindings.map(item => item.conversationId)]);
+      return sessions.filter(session => !session.purpose && !session.id.startsWith("channel:") && !external.has(session.id));
+    },
   );
+  ipc.handle(IPC.CHATS_CHECK_REFERENCE, async (_event, payload: { destinationId?: unknown; sourceId?: unknown }) => {
+    const validId = (id: unknown): id is string =>
+      typeof id === "string" && id.length > 0 && id.length <= 256 && !/[\u0000-\u001f\u007f]/u.test(id);
+    if (!validId(payload?.sourceId) || (payload.destinationId !== undefined && !validId(payload.destinationId))) return false;
+    try { return Boolean(await loadConversationReference(payload.destinationId ?? "", payload.sourceId)); }
+    catch { return false; }
+  });
 
   ipc.handle(IPC.CHATS_SIDEBAR_ORGANIZATION_GET, () => sidebarOrganizationStore.getSnapshot());
   ipc.handle(IPC.CHATS_SIDEBAR_ORGANIZATION_APPLY, async (event, payload: { expectedRevision: number; draft: Parameters<typeof sidebarOrganizationStore.applyDraft>[1] }) => {

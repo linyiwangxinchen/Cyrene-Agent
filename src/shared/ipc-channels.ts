@@ -189,6 +189,7 @@ export const IPC = {
 
   // chat sessions (multi-conversation history, persisted to userData/cyrene-chats/)
   CHATS_LIST: "chats:list",
+  CHATS_CHECK_REFERENCE: "chats:check-reference",
   CHATS_GET: "chats:get",
   TASK_SESSION_GET: "task-session:get",
   CHATS_GET_PAGE: "chats:get-page",
@@ -329,6 +330,8 @@ export const IPC = {
 
   // memory panel
   MEMORY_PANEL_GET_DATA: "memory-panel:get-data",
+  MEMORY_PANEL_GET_VECTOR_INDEX: "memory-panel:get-vector-index",
+  MEMORY_PANEL_START_VECTOR_REPAIR: "memory-panel:start-vector-repair",
   MEMORY_PANEL_GET_GRAPH: "memory-panel:get-graph",
   MEMORY_PANEL_GET_SUMMARY: "memory-panel:get-summary",
   MEMORY_PANEL_SAVE_L0: "memory-panel:save-l0",

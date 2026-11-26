@@ -356,10 +356,15 @@ class MemoryStoreManager {
     await this.updateL2RecallStats(id, delta)
   }
 
-  async markL2SyncStatus(id: string, syncStatus: L2SyncStatus, ragId?: string, error?: unknown): Promise<L2Memory | null> {
+  async markL2SyncStatus(
+    id: string, syncStatus: L2SyncStatus, ragId?: string, error?: unknown,
+    expected?: Pick<L2Memory, "content" | "ragId" | "status" | "syncStatus">,
+  ): Promise<L2Memory | null> {
     const store = await this.load()
     const mem = store.l2.find((m) => m.id === id)
-    if (!mem) return null
+    if (!mem || (expected && (mem.content !== expected.content || mem.ragId !== expected.ragId
+      || mem.status !== expected.status || mem.syncStatus !== expected.syncStatus))) return null
+    if (candidateSources(mem).some(source => isForgottenSource(store, source) || isForgottenFact(store, source, mem.content))) return null
     mem.syncStatus = syncStatus
     if (ragId) mem.ragId = ragId
     await this.save(store)
@@ -694,7 +699,7 @@ class MemoryStoreManager {
     let changed = 0
 
     for (const mem of store.l2) {
-      if (mem.isPinned || mem.status === "archived" || mem.weight <= 0) continue
+      if (mem.isPinned || (mem.status !== "active" && mem.status !== "aging") || mem.weight <= 0) continue
 
       mem.weight = Math.max(0, mem.weight - delta)
       if (mem.weight >= 30) {

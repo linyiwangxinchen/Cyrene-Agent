@@ -427,6 +427,11 @@ export type ChatsSetSessionModelResult =
   | { ok: false; error: "invalid-payload" | "session-not-found" | "no-profile" | "invalid-model" };
 
 // index.json 里的轻量元数据（列表渲染用）。
+export interface ChatSessionListOptions {
+  mode?: ConversationMode;
+  forReference?: boolean;
+}
+
 export interface ChatSessionMeta {
   id: string;
   title: string;

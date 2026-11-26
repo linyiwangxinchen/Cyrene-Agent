@@ -60,6 +60,11 @@ export type HistoryReadPage = { error: "stale" } | {
   nextBefore: number | null;
 };
 
+export interface HistoryQuote {
+  title: string;
+  messages: Pick<HistoryMessage, "role" | "text">[];
+}
+
 export interface HistorySearchPage {
   hits: HistoryMatch[];
   horizon: number;
@@ -434,22 +439,40 @@ export async function searchConversationHistory(database: ConversationDatabase, 
   return { hits: remaining, horizon, nextOffset, legacyNextOffset, coverage, scannedIds: ids };
 }
 
+function excerptText(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit).replace(/[\uD800-\uDBFF]$/u, "")}…` : text;
+}
+
 function messageForWire(message: HistoryMessage) {
-  const text = message.text.length > 720 ? `${message.text.slice(0, 720).replace(/[\uD800-\uDBFF]$/u, "")}…` : message.text;
+  const text = excerptText(message.text, 720);
   const value = { role: message.role, text, at: message.at };
   return { value, size: Buffer.byteLength(JSON.stringify(value), "utf8") + 1 };
+}
+
+async function visibleConversationHistory(database: ConversationDatabase, id: string, policy: HistoryLookupPolicy, importTranscript: ImportTranscript) {
+  if (id === policy.destinationId || !eligibleDestination(database, policy)) return;
+  if (!isLocalChat(database, id, new Set(policy.blockedIds))) return;
+  await importTranscript(id);
+  const { load, visibility } = createLookup(database, policy);
+  const source = load(id);
+  return source && visibility.visible(source);
+}
+
+export async function quoteConversationHistory(database: ConversationDatabase, id: string, policy: HistoryLookupPolicy,
+  importTranscript: ImportTranscript): Promise<HistoryQuote | undefined> {
+  const history = await visibleConversationHistory(database, id, policy, importTranscript);
+  if (!history) return;
+  const selected = [...historyMessages(history), ...history.quoteOnlyUsers, ...history.standaloneReplies.map(reply => reply.message)]
+    .sort((a, b) => a.seq - b.seq).slice(-16);
+  if (!selected.length) return;
+  return { title: history.title, messages: selected.map(({ role, text }) => ({ role, text: excerptText(text, 1_600) })) };
 }
 
 export async function readConversationHistory(database: ConversationDatabase, input: HistoryReadInput,
   importTranscript: ImportTranscript): Promise<HistoryReadPage | undefined> {
   const id = input.conversationId;
-  if (id === input.destinationId || !eligibleDestination(database, input)) return;
-  if (!isLocalChat(database, id, new Set(input.blockedIds))) return;
-  await importTranscript(id);
-  const { load, visibility } = createLookup(database, input);
-  const source = load(id);
-  if (!source) return;
-  const history = visibility.visible(source);
+  const history = await visibleConversationHistory(database, id, input, importTranscript);
+  if (!history) return;
   const throughSeq = input.anchor?.throughSeq;
   const messages = throughSeq === undefined ? historyMessages(history) : historyMessages(history).filter(message => message.seq <= throughSeq);
   if (!messages.length) return;

@@ -137,7 +137,7 @@ export interface BuildOptionsDeps {
   buildVectorMemoryContext?: (query: string, plan?: RecallQueryPlan, timeZone?: string) => Promise<string>;
   buildMemoryCompatibilityContext?: typeof import("../memory/memory-compatibility-context").buildMemoryCompatibilityContext;
   /** 只读的昔涟虚拟生活上下文；失败时由调用方降级为空。 */
-  buildXilianLifeContext?: (userText: string) => string;
+  buildXilianLifeContext?: (userText: string) => string | Promise<string>;
   /** 昔涟外貌参考图的本地路径（自拍/合影时随请求发送）；没有时返回空数组。 */
   listXilianReferenceImages?: () => string[];
   /** 这一轮是否适合主动发自拍；返回提示词表示“可以发”。 */
@@ -1268,7 +1268,7 @@ export async function buildAgentRunOptions(
       mode: memoryMode, conversationId, query: latestUserText, workspaceRoot: resolvedWorkspaceRoot, recallPlan, timeZone: memoryTimeZone,
     })).catch(() => "")
     : "";
-  const lifeContext = privateContext ? deps.buildXilianLifeContext?.(latestUserText) : "";
+  const lifeContext = privateContext ? await deps.buildXilianLifeContext?.(latestUserText) : "";
   const memoryStillAvailable = () => getMemoryModeVersion() === memoryModeVersion && isPersonalMemoryEnabled();
   function assemblePrompts(memoryIsCurrent: boolean) {
     const finalTools = memoryIsCurrent ? capabilities.tools : capabilities.tools.filter(tool =>

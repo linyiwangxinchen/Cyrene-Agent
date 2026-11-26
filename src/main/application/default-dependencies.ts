@@ -49,15 +49,11 @@ import { createLlmClient } from "../services/llm/llm-client";
 import { createTtsSynthesisService } from "../services/tts/tts-synthesis-service";
 import { momentsService } from "../moments/moments-service";
 import {
-  addL2MemoryVector,
-  deleteUserMemoryVectors,
   flushRAGStore,
   flushRAGStoreSync,
-  getEntriesBySource,
   initWorldbook,
   initVectorMemory,
   disposeVectorMemory,
-  isUserMemoryVectorStoreReady,
 } from "../rag";
 import { isMemoryEnabled, isPersonalMemoryEnabled, isSummaryMemoryEnabled, setMemoryMode, type MemoryMode } from "../memory/memory-mode";
 import { initializeSummaryMemoryScheduler, enableSummaryMemoryScheduler, flushAllSummaryMemory, scheduleSummaryTurn } from "../memory/summary-memory-scheduler";
@@ -89,7 +85,7 @@ import { registerAppUpdateIpc } from "../updater/app-update-ipc";
 import { createGitHubAppUpdateService, scheduleStartupUpdateCheck } from "../updater/github-app-updater";
 import { enqueueLLMTask } from "../llm-queue";
 import { memoryStore } from "../memory/memory-store";
-import { backupMemoryRagFiles, reconcileMemoryRag } from "../memory/memory-rag-reconciliation";
+import { reconcileUserMemoryIndex as reconcileVectorIndex } from "../memory/memory-vector-runtime";
 import { initReranker, resetReranker } from "../rag/reranker";
 import { broadcastCompactionPhase, registerChatsIpc } from "../chats/chats-ipc";
 import { registerWorkspaceFilesIpc } from "../chats/workspace-files-ipc";
@@ -171,23 +167,10 @@ function configureProxyForNodeRequests(): Promise<void> {
   });
 }
 
-async function reconcileUserMemoryIndex(signal?: AbortSignal): Promise<void> {
-  if (!isMemoryEnabled()) return;
-  if (!isUserMemoryVectorStoreReady()) {
-    console.warn("[Memory/RAG] reconciliation skipped: vector store is not writable");
-    return;
-  }
-  const report = await reconcileMemoryRag({
-    getMemories: () => memoryStore.getAllL2(),
-    getVectors: () => getEntriesBySource("user_memory"),
-    backup: async () => backupMemoryRagFiles(app.getPath("userData")),
-    addVector: (text, id, metadata) => addL2MemoryVector(text, id, metadata, signal),
-    markSynced: (l2Id, ragId) => memoryStore.markL2SyncStatus(l2Id, "synced", ragId),
-    markSyncFailed: (l2Id, error) => memoryStore.markL2SyncStatus(l2Id, "sync_failed", undefined, error),
-    deleteVectors: (ids) => deleteUserMemoryVectors(ids),
-    warn: (message, error) => console.warn(`[Memory/RAG] ${message}:`, error),
-  }, signal);
-  logger.info(LogTag.RAG, "reconciliation:", report);
+async function reconcileUserMemoryIndex(signal?: AbortSignal) {
+  const report = await reconcileVectorIndex(app.getPath("userData"), signal);
+  if (report) logger.info(LogTag.RAG, "reconciliation:", report);
+  return report;
 }
 
 async function switchMemoryMode(mode: MemoryMode, discardPending: () => Promise<void>): Promise<void> {

@@ -92,7 +92,7 @@ describe("memory/RAG reconciliation", () => {
     expect(deps.addVector).toHaveBeenCalledTimes(2);
     expect(deps.addVector).toHaveBeenCalledWith("missing", "l2_missing", expect.any(Object));
     expect(deps.addVector).toHaveBeenCalledWith("mismatch", "l2_mismatch", expect.any(Object));
-    expect(deps.markSynced).toHaveBeenCalledWith("l2_pending", "rag_pending");
+    expect(deps.markSynced).toHaveBeenCalledWith("l2_pending", "rag_pending", expect.objectContaining({ syncStatus: "pending_sync" }));
     expect(deps.deleteVectors).toHaveBeenCalledWith(expect.arrayContaining([
       "rag_archived",
       "rag_mismatch",
@@ -124,7 +124,7 @@ describe("memory/RAG reconciliation", () => {
 
     // 按新正文重建向量并切换 ragId，旧向量作为 stale 被清理
     expect(deps.addVector).toHaveBeenCalledWith("用户改成了每周游泳三次", "l2_stale", expect.any(Object));
-    expect(deps.markSynced).toHaveBeenCalledWith("l2_stale", "rag_rebuilt_l2_stale");
+    expect(deps.markSynced).toHaveBeenCalledWith("l2_stale", "rag_rebuilt_l2_stale", expect.objectContaining({ ragId: "rag_stale" }));
     expect(deps.deleteVectors).toHaveBeenCalledWith(["rag_stale"]);
     expect(report).toMatchObject({ rebuilt: 1, relinked: 0, deleted: 1, failed: 0, changed: true });
   });
@@ -141,9 +141,40 @@ describe("memory/RAG reconciliation", () => {
 
     const report = await reconcileMemoryRag(deps);
 
-    expect(deps.markSyncFailed).toHaveBeenCalledWith("l2_fail", expect.any(Error));
-    expect(deps.markSynced).toHaveBeenCalledWith("l2_ok", "rag_rebuilt_ok");
+    expect(deps.markSyncFailed).toHaveBeenCalledWith("l2_fail", expect.any(Error), expect.objectContaining({ ragId: "rag_gone" }));
+    expect(deps.markSynced).toHaveBeenCalledWith("l2_ok", "rag_rebuilt_ok", expect.objectContaining({ ragId: "rag_gone_too" }));
     expect(report).toMatchObject({ rebuilt: 1, failed: 1, changed: true });
+  });
+
+  it("relinks a durable vector left behind before the text and vector stores were linked", async () => {
+    const memories = [memory({ id: "retry", content: "kept", syncStatus: "sync_failed" })];
+    const deps = createDeps(memories, [{ id: "prior", text: "kept", metadata: { l2Id: "retry" } }]);
+    expect(await reconcileMemoryRag(deps)).toMatchObject({ relinked: 1, rebuilt: 0, failed: 0 });
+    expect(deps.addVector).not.toHaveBeenCalled();
+    expect(memories[0]).toMatchObject({ ragId: "prior", syncStatus: "synced" });
+  });
+
+  it("does not link rebuilt or previously prepared vectors if persistence fails", async () => {
+    const deps = createDeps([
+      memory({ id: "retry", content: "kept", syncStatus: "sync_failed" }),
+      memory({ id: "relink", content: "same", syncStatus: "pending_sync" }),
+    ], [{ id: "prepared", text: "same", metadata: { l2Id: "relink" } }]);
+    deps.persistVectors = async () => { throw new Error("disk unavailable"); };
+    expect(await reconcileMemoryRag(deps)).toMatchObject({ rebuilt: 0, relinked: 0, failed: 2 });
+    expect(deps.markSynced).not.toHaveBeenCalled();
+    expect(deps.deleteVectors).not.toHaveBeenCalled();
+  });
+
+  it("preserves a deduplicated vector another writer already linked", async () => {
+    const record = memory({ id: "retry", content: "kept", syncStatus: "pending_sync" });
+    const deps = createDeps([record], []);
+    vi.mocked(deps.markSynced).mockImplementationOnce(async (_id, ragId) => {
+      Object.assign(record, { ragId, syncStatus: "synced" });
+      return null;
+    });
+    expect(await reconcileMemoryRag(deps)).toMatchObject({ rebuilt: 0, failed: 0 });
+    expect(record.ragId).toBe("rag_rebuilt_retry");
+    expect(deps.deleteVectors).not.toHaveBeenCalled();
   });
 });
 

@@ -355,6 +355,12 @@ try {
       const unrelated = await invoke('chats:create', { title: 'Unrelated reference fixture', mode: 'chat' });
       const unrelatedText = 'case:reference-unrelated UNRELATED_CONVERSATION_MARKER';
       await run(unrelated, unrelatedText);
+      const choices = await invoke('chats:list', { mode: 'chat', forReference: true });
+      assert.ok(choices.some(item => item.id === legacyConversation.id));
+      assert.equal(await invoke('chats:check-reference', { sourceId: legacyConversation.id }), true);
+      assert.equal(await invoke('chats:check-reference', { sourceId: legacyConversation.id, destinationId: destination.id }), true);
+      assert.equal(await invoke('chats:check-reference', { sourceId: destination.id, destinationId: destination.id }), false);
+      assert.equal(await invoke('chats:check-reference', { sourceId: 'missing-reference' }), false);
 
       async function claimReference(conversationReferenceId, text) {
         const entry = { id: `queued-${randomUUID()}`, rawContent: text, visibleContent: text, conversationReferenceId };

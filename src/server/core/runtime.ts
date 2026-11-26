@@ -59,10 +59,10 @@ import { createWikiChatSourceReader } from "../../main/memory/wiki-source";
 import { createConversationSessionMigration } from "../../main/orchestrator/conversation-session-migration";
 import { loadSummaryMemoryContext } from "../../main/memory/summary-memory-context";
 import { setMemoryMode, isMemoryEnabled, isPersonalMemoryEnabled, isSummaryMemoryEnabled } from "../../main/memory/memory-mode";
-import { initWorldbook, initVectorMemory, disposeVectorMemory, flushRAGStore, isUserMemoryVectorStoreReady, getEntriesBySource, addL2MemoryVector, deleteUserMemoryVectors } from "../../main/rag";
+import { initWorldbook, initVectorMemory, disposeVectorMemory, flushRAGStore } from "../../main/rag";
 import { initReranker, resetReranker } from "../../main/rag/reranker";
 import { memoryStore } from "../../main/memory/memory-store";
-import { backupMemoryRagFiles, reconcileMemoryRag } from "../../main/memory/memory-rag-reconciliation";
+import { reconcileUserMemoryIndex as reconcileVectorIndex } from "../../main/memory/memory-vector-runtime";
 import { bootstrapMusicService } from "../../main/music/bootstrap";
 import { resolveMusicPaths } from "../../main/music/paths";
 import { getEffectiveUiTheme } from "../../main/system-ui-theme";
@@ -182,16 +182,7 @@ export async function startHeadlessCore() {
       await reconcileUserMemoryIndex();
     } else { resetReranker(); await disposeVectorMemory(); }
   }
-  async function reconcileUserMemoryIndex() {
-    if (!isMemoryEnabled() || !isUserMemoryVectorStoreReady()) return;
-    await reconcileMemoryRag({
-      getMemories: () => memoryStore.getAllL2(), getVectors: () => getEntriesBySource("user_memory"),
-      backup: async () => backupMemoryRagFiles(root), addVector: addL2MemoryVector,
-      markSynced: (id, ragId) => memoryStore.markL2SyncStatus(id, "synced", ragId),
-      markSyncFailed: (id, error) => memoryStore.markL2SyncStatus(id, "sync_failed", undefined, error),
-      deleteVectors: ids => deleteUserMemoryVectors(ids), warn: (message, error) => console.warn(message, error),
-    });
-  }
+  const reconcileUserMemoryIndex = () => reconcileVectorIndex(root);
   if (isMemoryEnabled()) await switchMemoryMode("vector");
   // The upstream compactor now receives the active model settings per request.
   // Web keeps resolving the session model in the shared runtime before invoking

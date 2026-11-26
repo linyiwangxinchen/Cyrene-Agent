@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   restoredBounds: { x: 0, y: 0, width: 1200, height: 800 },
   maximized: false,
   readyToShow: null as (() => void) | null,
+  onStartNavigation: null as ((details: { isMainFrame: boolean; isSameDocument: boolean }) => void) | null,
+  markChatLoading: vi.fn(),
   setBounds: vi.fn(),
   themeChoice: "pearl-white" as "pearl-white" | "system",
   systemDark: false,
@@ -16,7 +18,11 @@ vi.mock("electron", () => ({
   app: { getAppPath: () => "/app" },
   nativeTheme: { get shouldUseDarkColors() { return mocks.systemDark; } },
   BrowserWindow: class {
-    webContents = { on: vi.fn() };
+    webContents = {
+      on: vi.fn((event: string, listener: NonNullable<typeof mocks.onStartNavigation>) => {
+        if (event === "did-start-navigation") mocks.onStartNavigation = listener;
+      }),
+    };
     on = vi.fn();
     once = vi.fn((event: string, listener: () => void) => {
       if (event === "ready-to-show") mocks.readyToShow = listener;
@@ -47,7 +53,7 @@ vi.mock("../call/call-manager", () => ({ stopCall: vi.fn(), setCallWindow: vi.fn
 vi.mock("./window-state", () => ({
   callWindow: null,
   getCurrentAppIconPath: () => "",
-  reactChatSession: { reset: vi.fn(), markLoading: vi.fn(), queueOrTake: vi.fn() },
+  reactChatSession: { reset: vi.fn(), markLoading: mocks.markChatLoading, queueOrTake: vi.fn() },
   reactChatWindow: null,
   setCallWindowLocal: vi.fn(),
   setReactChatWindow: vi.fn(),
@@ -103,6 +109,8 @@ describe("workspace window defaults and persistence", () => {
     mocks.restoredBounds = { x: 0, y: 0, width: 1200, height: 800 };
     mocks.maximized = false;
     mocks.readyToShow = null;
+    mocks.onStartNavigation = null;
+    mocks.markChatLoading.mockClear();
     mocks.setBounds.mockClear();
     mocks.themeChoice = "pearl-white";
     mocks.systemDark = false;
@@ -128,6 +136,16 @@ describe("workspace window defaults and persistence", () => {
     mocks.systemDark = true;
     createReactChatWindowShell();
     expect(lastBrowserWindowOptions().backgroundColor).toBe("#141414");
+  });
+
+  it("keeps session switching ready during subframe loads and same-document navigation", () => {
+    createReactChatWindowShell();
+    expect(mocks.onStartNavigation).toBeTypeOf("function");
+    mocks.onStartNavigation?.({ isMainFrame: false, isSameDocument: false });
+    mocks.onStartNavigation?.({ isMainFrame: true, isSameDocument: true });
+    expect(mocks.markChatLoading).not.toHaveBeenCalled();
+    mocks.onStartNavigation?.({ isMainFrame: true, isSameDocument: false });
+    expect(mocks.markChatLoading).toHaveBeenCalledOnce();
   });
 
   it("upgrades only the old default window size after saved bounds are restored", () => {

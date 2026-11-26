@@ -61,6 +61,9 @@ import { relatedConversationOpportunity } from "./world-initiative";
 import { normalizePluginObservation } from "./plugin-observation";
 import { buildCapabilityTextParts } from "../channels/capability-text";
 import { pluginPromptRegistry } from "../../plugins/prompts";
+import { getConversationDatabase } from "../storage/conversation-database-client";
+import type { SocialAtom } from "../social-context/types";
+import { memoryFollowupOpportunities } from "./memory-initiative";
 
 const NOW = Date.UTC(2026, 10, 17, 2);
 const minute = 60_000;
@@ -88,10 +91,10 @@ afterEach(() => {
   lifecycle?.stopProactiveTrigger(); vi.clearAllTimers(); vi.useRealTimers(); random.mockRestore();
   fs.rmSync(mocks.root, { recursive: true, force: true });
 });
-function setup(patch: Partial<GeneralSettings> = {}) {
+function setup(patch: Partial<GeneralSettings> = {}, listPersonMemory?: () => SocialAtom[]) {
   const settings = { proactiveChatMode: "on", proactiveDeliveryTarget: "local", proactiveDailyLimit: 20,
     proactiveDensity: "active", proactiveTargetScore: 60, ...patch } as GeneralSettings;
-  lifecycle = createProactiveLifecycle({ loadGeneralSettings: () => settings,
+  lifecycle = createProactiveLifecycle({ loadGeneralSettings: () => settings, listPersonMemory,
     conversationJournal: {
       readProjection: async (id: string) => ({ messages: id === "bound" ? mocks.history : [] }),
       createRunSink: () => ({ appendAssistant }),
@@ -222,6 +225,41 @@ describe("world initiative in the shared lifecycle", () => {
   const recipientScope = `peer:${"a".repeat(64)}`;
   const channelSource = { channel: "wechat", chatType: "private", recipientScope } as const;
   const boundChannel = () => ({ available: true, recipient: { conversationId: "bound", sessionId: "channel:wechat:fixture", targetId: "fixture", updatedAt: NOW, recipientScope, bindingUpdatedAt: NOW } });
+
+  it("does not journal or deliver a memory follow-up withdrawn during composition", async () => {
+    mocks.route = boundChannel();
+    const atom: SocialAtom = {
+      id: "pending-care", type: "open_loop", status: "active", conversationId: "bound", memoryScope: recipientScope,
+      content: "今天要去看一场展览", evidenceQuote: "今天要去看一场展览", evidenceTurnId: "care-turn",
+      sourceEntryId: "channel:care-turn", createdAt: NOW - (12 * 60 + 1) * minute,
+    };
+    setup({ proactiveDeliveryTarget: "wechat" }, () => [atom]);
+    const database = getConversationDatabase(mocks.root);
+    try {
+      await database.call("transcript.append", atom.conversationId, { id: atom.sourceEntryId, kind: "user", turnId: atom.evidenceTurnId,
+        revision: 1, at: atom.createdAt, payload: { text: atom.evidenceQuote } });
+      const opportunities = memoryFollowupOpportunities([atom], NOW, atom.conversationId);
+      const store = new InitiativeOpportunityStore(path.join(mocks.root, "initiative-opportunities.json"), () => 0.99);
+      store.select({ now: NOW, opportunities, eligible: true });
+      const selected = store.select({ now: NOW + minute, opportunities, eligible: true })!;
+      vi.setSystemTime(NOW + minute);
+      mocks.runModel.mockResolvedValueOnce({ kind: "send", text: "问问展览怎么样" })
+        .mockImplementationOnce(async () => {
+          await database.call("transcript.append", atom.conversationId, { id: "withdraw-care-turn", kind: "turn_tombstone", at: Date.now(),
+            payload: { targetUserTurnId: atom.evidenceTurnId, reason: "pending_withdrawn" } });
+          return { kind: "send", text: "今天的展览看得怎么样？" };
+        });
+
+      await lifecycle.getProactiveChatService()!.evaluateCandidate({ sceneId: selected.sceneId!, score: selected.score!, sceneCooldownMs: 0,
+        opportunityId: selected.key, sourceEventId: selected.sourceEventId, evidenceVersion: String(selected.evidenceVersion),
+        replyBurden: selected.replyBurden, momentSummary: selected.summary });
+      expect(mocks.runModel).toHaveBeenCalledTimes(2);
+      expect(appendAssistant).not.toHaveBeenCalled();
+      expect(lifecycle.getProactiveStatus().lastOutcome).toMatchObject({ state: "blocked", reason: "memory_resolved" });
+    } finally {
+      await database.close();
+    }
+  });
 
   it("takes care from the private conversation and chooses it before equally ready world news", async () => {
     mocks.route = boundChannel();

@@ -60,7 +60,10 @@ export class JsonVectorStore {
     try {
       if (fs.existsSync(this.filePath)) {
         const raw = fs.readFileSync(this.filePath, "utf8");
-        this.entries = JSON.parse(raw) as MemoryEntry[];
+        const parsed = JSON.parse(raw) as unknown;
+        if (!Array.isArray(parsed)) throw new Error("Invalid vector index format");
+        this.entries = parsed.filter((entry): entry is MemoryEntry => entry && typeof entry.id === "string" && typeof entry.text === "string"
+          && typeof entry.source === "string" && Array.isArray(entry.embedding));
       }
     } catch (err) {
       console.warn("[RAG] failed to load vector store:", err);
@@ -148,7 +151,7 @@ export class JsonVectorStore {
    * 立即落盘：取消防抖定时器，把未写数据刷到磁盘。
    * 供受控退出和导入完成等需要持久性保证的节点调用。
    */
-  async flush(): Promise<void> {
+  async flush(throwOnError = false): Promise<void> {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
       this.saveTimer = null;
@@ -156,7 +159,8 @@ export class JsonVectorStore {
     while (this.dirty || this.savePromise !== null) {
       try {
         await this.writeToDisk();
-      } catch {
+      } catch (error) {
+        if (throwOnError) throw error;
         break; // 失败已记录并保留脏标记，避免无限重试
       }
     }
@@ -185,7 +189,7 @@ export class JsonVectorStore {
    * 维度切换清库：取消待写定时器、作废进行中的异步落盘、清空内存与磁盘。
    * 不做这一步，旧维度的向量可能被防抖中的落盘写回刚清空的文件。
    */
-  clearForRebuild(): void {
+  clearForRebuild(throwOnError = false): void {
     this.writeGeneration++;
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);
@@ -198,8 +202,10 @@ export class JsonVectorStore {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(this.filePath, "[]", "utf8");
+      fs.rmSync(this.metaFilePath, { force: true });
     } catch (err) {
       console.warn("[RAG] failed to clear vector store file:", err);
+      if (throwOnError) throw err;
     }
   }
 
@@ -274,6 +280,20 @@ export class JsonVectorStore {
     return this.indexMeta;
   }
 
+  /** Inspect incompatible cache data before reporting existing vectors as linked. */
+  getIncompatibleIndex(provider: EmbeddingProvider): { reset: boolean; invalidIds: string[] } {
+    const dims = provider.resolvedDimensions ?? provider.declaredDimensions;
+    if (dims === undefined) return { reset: false, invalidIds: [] };
+    const identity = provider.cacheIdentity;
+    const reset = this.indexMeta !== null && (this.indexMeta.dimensions !== dims || Boolean(identity
+      && (this.indexMeta.provider !== identity.provider || this.indexMeta.model !== identity.model)));
+    return {
+      reset,
+      invalidIds: this.entries.filter(entry => entry.embedding.length !== dims
+        || entry.embedding.some(value => typeof value !== "number" || !Number.isFinite(value))).map(entry => entry.id),
+    };
+  }
+
   // ── CRUD ──
 
   // 添加记忆（自动去重）
@@ -324,6 +344,7 @@ export class JsonVectorStore {
     this.validateDimensionsForProvider(provider);
     const embedding = await provider.embed(text);
     signal?.throwIfAborted();
+    this.validateDimensionsForProvider(provider);
     this.ensureIndexMeta(provider, embedding.length);
     return this.addPreparedBatch([{ text, source, embedding, metadata }])[0];
   }

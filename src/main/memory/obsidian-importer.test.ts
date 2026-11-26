@@ -295,6 +295,26 @@ describe("importL2File / importL2Markdown (round-trip)", () => {
     expect(after.ragId).toBe(`rag_new_${l2.id}`)
   })
 
+  it("does not replace a newer vault edit with a late embedding", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const { importL2Markdown } = await import("./obsidian-importer")
+    const memory = await memoryStore.addL2Memory({
+      content: "原始正文", triggerText: "t", sourceConversationId: "c", ragId: "rag_original", isPinned: false,
+    })
+    const markdown = (content: string) => ["---", `id: ${memory.id}`, "---", "", "# t", "", content].join("\n")
+    let finishOld!: (id: string) => void
+    ragMock.addL2MemoryVector.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+      .mockResolvedValueOnce("rag_latest")
+    const older = importL2Markdown(markdown("第一次修改"))
+    await vi.waitFor(() => expect(finishOld).toBeTypeOf("function"))
+    await importL2Markdown(markdown("第二次修改"))
+    finishOld("rag_outdated")
+    await older
+    expect((await memoryStore.getAllL2()).find(item => item.id === memory.id)).toMatchObject({
+      content: "第二次修改", ragId: "rag_latest", syncStatus: "synced",
+    })
+  })
+
   it("does not call rag during importing flag window (vector rebuild outside flag)", async () => {
     const { memoryStore } = await import("./memory-store")
     const { importL2Markdown } = await import("./obsidian-importer")

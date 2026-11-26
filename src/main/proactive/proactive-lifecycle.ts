@@ -508,6 +508,21 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     );
   }
 
+  async function hasCurrentMemoryInitiativeSource(candidate: ProactiveCandidate, target: ProactiveDeliveryTarget): Promise<boolean> {
+    if (!candidate.opportunityId) return true;
+    const opportunity = initiativeStore.find(candidate.opportunityId);
+    if (opportunity?.source !== MEMORY_FOLLOWUP_SOURCE) return true;
+    if (!opportunity.conversationId || normalizeMemoryMode(loadModelSettings().memoryMode) === "off") return false;
+    const route = target === "local" ? null : getProactiveChannelAvailability(target, channelManager);
+    const scope = target === "local" ? "owner" : route?.available ? route.recipient.recipientScope : undefined;
+    if (!scope) return false;
+    const now = Date.now();
+    const atom = options.listPersonMemory?.(opportunity.conversationId, now, scope).find(item => item.id === opportunity.sourceEventId);
+    if (!isMemoryFollowupAtomOpen(atom, now)) return false;
+    const [active] = await filterActiveSocialAtoms([atom]).catch(() => []);
+    return isMemoryFollowupAtomOpen(active, Date.now());
+  }
+
   function recordProactiveDeliveryMetadata(input: ProactiveCommitInput, result: ProactiveCommitResult): void {
     // Opener 的 todayFired/recentItems 字段已整体废弃（依赖的 SCENE_CONFIGS 与 ShowBubblePayload 来自旧 opener 子系统）。
     // 完整送达才消费心事；部分/未知送达写入明确的复核终态，避免重试造成重复消息。
@@ -566,6 +581,7 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     return withConversationRun(session.id, async (): Promise<ProactiveCommitResult> => {
     if (options.loadGeneralSettings().proactiveDeliveryTarget !== "local") return { kind: "cancelled", reason: "delivery_target_changed" };
     if (!await frozenExpressionIsCurrent(input.deliveryContext, "local")) return { kind: "cancelled", reason: "expression_source_changed" };
+    if (!await hasCurrentMemoryInitiativeSource(input.candidate, "local")) return { kind: "cancelled", reason: "memory_resolved" };
     const changed = deliveryContextChanged(input.deliveryContext, "local");
     if (changed || memorySettingsChanged()) return { kind: "cancelled", reason: changed ?? "memory_mode_changed" };
     if (input.deliveryContext && !isDraftTimeCurrent(input.deliveryContext, getProactiveRuntimeSnapshot())) return { kind: "cancelled", reason: "draft_time_changed" };
@@ -625,10 +641,11 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
           if (frozen && !isDraftTimeCurrent(frozen, getProactiveRuntimeSnapshot()) && !getChannelRecoveryStore()?.get(operationId)) {
             return { kind: "cancelled" as const, reason: "draft_time_changed" };
           }
-          if (!getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed) return { kind: "cancelled" as const, reason: "stale_epoch" };
           if (!await frozenExpressionIsCurrent(frozen, channel)) return { kind: "cancelled" as const, reason: "expression_source_changed" };
+          if (!await hasCurrentMemoryInitiativeSource(input.candidate, channel)) return { kind: "cancelled" as const, reason: "memory_resolved" };
           const changed = deliveryContextChanged(frozen, channel);
           if (changed || memorySettingsChanged()) return { kind: "cancelled" as const, reason: changed ?? "memory_mode_changed" };
+          if (!getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed) return { kind: "cancelled" as const, reason: "stale_epoch" };
           const current = getProactiveChannelAvailability(channel, channelManager);
           if (!current.available || current.recipient.targetId !== recipient.targetId || current.recipient.conversationId !== recipient.conversationId) return { kind: "cancelled" as const, reason: "binding_changed" };
           // CTA 是外发的前置事实：失败重试使用同一 intent、同一 assistant、同一 outbox。

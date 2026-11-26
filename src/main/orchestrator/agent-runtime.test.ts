@@ -1,4 +1,4 @@
-import { closeConversationDatabases } from "../storage/conversation-database-client";
+import { closeConversationDatabases, getConversationDatabase } from "../storage/conversation-database-client";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -11,6 +11,8 @@ import type { PluginRuntime } from "../../plugins/context";
 import type { ScheduledTask } from "../scheduler/types";
 import { createAgentRuntime, type AgentRuntimeDeps } from "./agent-runtime";
 import { InitiativeOpportunityStore } from "../proactive/initiative-opportunities";
+import { memoryFollowupOpportunities } from "../proactive/memory-initiative";
+import type { SocialAtom } from "../social-context/types";
 import { resolveChannelMemoryScope } from "../channels/memory-scope";
 import { getRelationshipStore } from "../relationship/relationship-log";
 import { CyreneAgent } from "./cyrene-agent";
@@ -614,7 +616,7 @@ describe("AgentRuntime 暂存念头的会话边界", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  async function lifeContext(input: Record<string, unknown>, pluginSharing = false, text = "有没有什么想跟我说的？") {
+  async function lifeContext(input: Record<string, unknown>, pluginSharing = false, text = "有没有什么想跟我说的？", atoms: SocialAtom[] = []) {
     const buildOptionsModule = await import("./build-options");
     let captured: import("./build-options").BuildOptionsDeps | undefined;
     vi.spyOn(buildOptionsModule, "buildAgentRunOptions").mockImplementation(async (_input, deps) => {
@@ -624,6 +626,7 @@ describe("AgentRuntime 暂存念头的会话边界", () => {
     const runtime = createAgentRuntime(createFullDeps({
       loadGeneralSettings: () => ({ companionPluginSharingEnabled: pluginSharing }) as never,
       loadUserProfile: () => ({ timezone: "Asia/Shanghai" }) as never,
+      socialAtomStore: { listActive: () => atoms },
     }));
     await runtime.buildOptions(input as never);
     return captured!.buildXilianLifeContext!(text);
@@ -648,6 +651,31 @@ describe("AgentRuntime 暂存念头的会话边界", () => {
   it("启用插件分享后可以在私聊自然提起其保留的发现", async () => {
     expect(await lifeContext({ sessionId: "private-uuid-a" }, true)).toContain(pluginThought);
     expect(await lifeContext({ sessionId: "private-uuid-a" }, true, "我到家了")).not.toContain(pluginThought);
+  });
+
+  it("暂存的记忆跟进只在 CTA 来源仍有效时进入本会话提示", async () => {
+    const now = Date.now();
+    const conversationId = "private-uuid-a";
+    const atom: SocialAtom = {
+      id: "pending-retraction", conversationId, memoryScope: "owner", type: "open_loop", status: "active",
+      content: "周六要去看一场特别的展览", evidenceQuote: "周六要去看一场特别的展览", evidenceTurnId: "held-turn",
+      sourceEntryId: "user:v1:held-turn:r1", createdAt: now - (12 * 60 + 1) * 60_000,
+    };
+    const database = getConversationDatabase(root);
+    await database.call("transcript.append", conversationId, { id: atom.sourceEntryId, kind: "user", turnId: atom.evidenceTurnId,
+      revision: 1, at: atom.createdAt, payload: { text: atom.evidenceQuote } });
+    const store = new InitiativeOpportunityStore(path.join(root, "initiative-opportunities.json"));
+    const opportunities = memoryFollowupOpportunities([atom], now, conversationId);
+    store.select({ now, opportunities, eligible: true });
+    expect(store.resolve(opportunities[0].id, "hold", { now, resumeOn: "user_message" })).toBe(true);
+
+    const read = () => lifeContext({ sessionId: conversationId }, false, "有没有什么想跟我说的？", [atom]);
+    expect(await read()).toContain(atom.content);
+    await database.call("transcript.append", conversationId, { id: "withdraw-held-turn", kind: "turn_tombstone", at: now,
+      payload: { targetUserTurnId: atom.evidenceTurnId, reason: "pending_withdrawn" } });
+
+    expect(store.readThoughts(now).some(thought => thought.sourceEventId === atom.id)).toBe(true);
+    expect(await read()).not.toContain(atom.content);
   });
 });
 

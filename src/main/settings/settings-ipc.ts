@@ -11,7 +11,7 @@ import {
 } from "../windows/window-state";
 import type { RuntimeStateService } from "../orchestrator/runtime-state-service";
 import { initReranker, getRerankerInstallStatus, resetReranker } from "../rag/reranker";
-import { switchEmbeddingModel } from "../rag";
+import { isUserMemoryVectorIndexVerified, switchEmbeddingModel } from "../rag";
 import { testVendorConnection } from "../orchestrator/vendors/test-connection";
 import { getAdapterForConfig } from "../orchestrator/vendors";
 import type { VendorConfig } from "../orchestrator/vendors";
@@ -23,9 +23,12 @@ import type { syncPlaywrightMcp, syncFilesystemMcp } from "../sync-mcp-builtin";
 import { broadcastChatsChanged } from "../chats/chats-ipc";
 import { registerDataDirIpc } from "./data-dir-ipc";
 import { getBrowserPanelController } from "../browser/browser-panel-runtime";
-import { normalizeMemoryMode, type MemoryMode } from "../memory/memory-mode";
+import { getMemoryModeVersion, isVectorMemoryEnabled, normalizeMemoryMode, type MemoryMode } from "../memory/memory-mode";
 import { watchSystemUiTheme } from "../system-ui-theme";
 import { getModelInstallStatus } from "../rag/model-status";
+import { installLocalEmbeddingModel } from "../rag/install-embedding-model";
+import type { MemoryRagReconciliationReport } from "../memory/memory-rag-reconciliation";
+import type { MemoryVectorIndexStatus } from "../../shared/memory-vector-status";
 
 export interface SettingsIpcDependencies {
   get windowManager(): WindowManager | null;
@@ -39,7 +42,7 @@ export interface SettingsIpcDependencies {
     getProactiveChatService: () => { invalidate: () => void } | null;
     getProactiveStatus?: () => unknown;
   };
-  reconcileUserMemoryIndex: () => Promise<void>;
+  reconcileUserMemoryIndex: () => Promise<MemoryRagReconciliationReport | undefined>;
   switchMemoryMode?: (mode: MemoryMode) => Promise<void>;
   syncVolcanoSearchMcp: typeof syncVolcanoSearchMcp;
   syncPlaywrightMcp: typeof syncPlaywrightMcp;
@@ -256,12 +259,16 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     },
   );
 
-  ipc.handle(IPC.EMBEDDING_SET_MODEL, async (_event, modelKey: string) => {
+  async function activateEmbeddingModel(modelKey: string) {
     console.log("[Cyrene] embedding model switch requested:", modelKey);
     try {
+      const version = getMemoryModeVersion();
       const result = await switchEmbeddingModel(modelKey);
       if (result.ok) {
-        await reconcileUserMemoryIndex();
+        const report = await reconcileUserMemoryIndex();
+        if (!report || report.failed || version !== getMemoryModeVersion()) {
+          return { ...result, ok: false, error: "未能完成记忆索引同步" };
+        }
         saveModelSettings({ embeddingModel: "bgem3" });
         broadcastModelConfigChanged();
       }
@@ -271,6 +278,51 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
       console.error("[Cyrene] embedding model switch failed:", message);
       return { ok: false, clearedEntries: 0, error: message };
     }
+  }
+
+  let vectorRepairPhase: MemoryVectorIndexStatus["phase"] = "idle";
+  ipc.handle(IPC.EMBEDDING_SET_MODEL, async (_event, modelKey: string) => {
+    if (vectorRepairPhase === "downloading" || vectorRepairPhase === "repairing") {
+      return { ok: false, clearedEntries: 0, error: "向量索引正在修复" };
+    }
+    return activateEmbeddingModel(modelKey);
+  });
+
+  function vectorIndexStatus(): MemoryVectorIndexStatus {
+    return {
+      modelInstalled: getModelInstallStatus().embedding.bgem3,
+      indexReady: isUserMemoryVectorIndexVerified(),
+      phase: vectorRepairPhase,
+    };
+  }
+
+  ipc.handle(IPC.MEMORY_PANEL_GET_VECTOR_INDEX, () => vectorIndexStatus());
+  ipc.handle(IPC.MEMORY_PANEL_START_VECTOR_REPAIR, (_event, allowDownload: unknown) => {
+    if (vectorRepairPhase === "downloading" || vectorRepairPhase === "repairing") return vectorIndexStatus();
+    if (!isVectorMemoryEnabled()) {
+      vectorRepairPhase = "modeChanged";
+      return vectorIndexStatus();
+    }
+    const download = allowDownload === true && !getModelInstallStatus().embedding.bgem3;
+    const version = getMemoryModeVersion();
+    vectorRepairPhase = download ? "downloading" : "repairing";
+    // Download and backfill can outlive an HTTP request or a settings page.
+    void (async () => {
+      try {
+        if (download) await installLocalEmbeddingModel(app.getPath("userData"));
+        if (version !== getMemoryModeVersion()) {
+          vectorRepairPhase = "modeChanged";
+          return;
+        }
+        vectorRepairPhase = "repairing";
+        const result = await activateEmbeddingModel("bgem3");
+        vectorRepairPhase = version !== getMemoryModeVersion() ? "modeChanged" : result.ok ? "complete" : "repairFailed";
+      } catch (error) {
+        console.error("[Memory/RAG] model download failed:", error);
+        vectorRepairPhase = "downloadFailed";
+      }
+    })();
+    return vectorIndexStatus();
   });
 
   ipc.handle(IPC.RERANKER_SET_MODE, async (_event, mode: "standard" | "none") => {

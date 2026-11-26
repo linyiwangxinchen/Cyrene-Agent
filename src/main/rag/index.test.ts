@@ -7,6 +7,7 @@ import type { EmbeddingProvider } from "./embedding";
 const provider: EmbeddingProvider = {
   name: "deterministic",
   dims: 2,
+  declaredDimensions: 2,
   async embed(text: string): Promise<number[]> {
     return text.includes("paragraph") ? [0, 1] : [1, 0];
   },
@@ -33,8 +34,11 @@ import {
   addL2MemoryVector,
   addMemory,
   deleteUserMemoryVectors,
+  disposeVectorMemory,
   getEntriesBySource,
   initRAG,
+  initVectorMemory,
+  isUserMemoryVectorIndexVerified,
   isUserMemoryVectorStoreReady,
   resetRAG,
   searchMemoryEntries,
@@ -57,6 +61,38 @@ afterEach(() => {
 describe("user memory vector store", () => {
   it("reports that user memory vectors are writable after RAG initialization", () => {
     expect(isUserMemoryVectorStoreReady()).toBe(true);
+  });
+
+  it("keeps a successful L2 vector across a fresh index instance and rejects a locked destination", async () => {
+    expect(isUserMemoryVectorIndexVerified()).toBe(false);
+    const vectorId = await addL2MemoryVector("durable", "l2_durable");
+    expect(isUserMemoryVectorIndexVerified()).toBe(true);
+    resetRAG();
+    await initVectorMemory();
+    expect(getEntriesBySource("user_memory").map(entry => entry.id)).toEqual([vectorId]);
+    const file = path.join(tmpDir, "rag-data", "memory-store.json");
+    fs.unlinkSync(file);
+    fs.mkdirSync(file);
+    await expect(addL2MemoryVector("disk blocked", "l2_unsynced")).rejects.toThrow();
+    expect(isUserMemoryVectorIndexVerified()).toBe(false);
+    expect(getEntriesBySource("user_memory").map(entry => entry.id)).toEqual([vectorId]);
+    fs.rmdirSync(file);
+    await disposeVectorMemory();
+  });
+
+  it("keeps compatible vectors and backs up legacy mixed-dimension entries for repair", async () => {
+    const durable = await addL2MemoryVector("current", "l2_current");
+    const index = path.join(tmpDir, "rag-data", "memory-store.json");
+    const original = JSON.parse(fs.readFileSync(index, "utf8"));
+    const old = { ...original[0], id: "legacy-wrong-dimension", embedding: [1], metadata: { l2Id: "l2_legacy" } };
+    fs.writeFileSync(index, JSON.stringify([...original, old]), "utf8");
+    resetRAG();
+    await initVectorMemory();
+    expect(getEntriesBySource("user_memory").map(entry => entry.id)).toEqual([durable]);
+    const backups = path.join(tmpDir, "memory-reconcile-backups");
+    const vectorBackup = fs.readdirSync(backups).find(name => name.startsWith("memory-store.") && name.endsWith(".json"))!;
+    expect(JSON.parse(fs.readFileSync(path.join(backups, vectorBackup), "utf8"))).toHaveLength(2);
+    await disposeVectorMemory();
   });
 });
 

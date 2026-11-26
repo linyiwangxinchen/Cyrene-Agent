@@ -1,8 +1,7 @@
 ﻿// Reranker module — cross-encoder reranking for RAG
 // 只支持 bge-reranker-base，不再提供 light 版本
-import * as path from "path";
-import * as os from "os";
-import { getProjectModelBaseDir } from "./model-status";
+import { getModelInstallStatusDetail } from "./model-status";
+import { loadLocalTransformerPipeline } from "./local-transformer-pipeline";
 
 // ── Types ──
 export interface RerankerProvider {
@@ -10,33 +9,15 @@ export interface RerankerProvider {
   readonly name: string;
 }
 
-// ── ESM import helper (same pattern as embedding.ts) ──
-const importEsm = new Function("moduleName", "return import(moduleName)") as (moduleName: string) => Promise<any>;
-
 // ── Pipeline cache ──
 let standardPipeline: any = null;
 
 async function loadRerankerPipeline(modelDir: string): Promise<any> {
-  const { pipeline, env } = await importEsm("@xenova/transformers");
-
-  const originalPath = env.localModelPath;
-  const modelsDir = getProjectModelBaseDir("reranker", "standard");
+  const modelsDir = getModelInstallStatusDetail("reranker", "standard").matchedAt;
   if (!modelsDir) throw new Error("Local reranker model is not installed");
-  env.localModelPath = modelsDir;
-  env.allowLocalModels = true;
-  env.allowRemoteModels = false;
-  env.useBrowserCache = false;
-
-  try {
-    const pipe = await pipeline("text-classification", modelDir, {
-      quantized: true,
-      cache_dir: path.join(os.homedir(), ".cache", "huggingface"),
-    });
-    console.log(`[Reranker] pipeline "${modelDir}" loaded OK`);
-    return pipe;
-  } finally {
-    env.localModelPath = originalPath;
-  }
+  const pipe = await loadLocalTransformerPipeline("text-classification", modelsDir);
+  console.log(`[Reranker] pipeline "${modelDir}" loaded OK`);
+  return pipe;
 }
 
 // ── Standard reranker (bge-reranker-base, ~279MB) ──
@@ -75,7 +56,7 @@ let currentReranker: RerankerProvider | null = null;
 let currentRerankerMode: "standard" | "none" = "none";
 
 function checkRerankerModelInstalled(): boolean {
-  return getProjectModelBaseDir("reranker", "standard") !== null;
+  return getModelInstallStatusDetail("reranker", "standard").installed;
 }
 
 export function getRerankerInstallStatus(): { standard: boolean } {

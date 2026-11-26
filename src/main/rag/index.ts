@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as fs from "fs";
 import { app } from "electron";
-import { getEmbeddingProvider, resetEmbeddingProvider, EmbeddingProvider, switchEmbeddingModel as switchModel, getCurrentModelDims, EmbeddingDimensionMismatchError } from "./embedding";
+import { getEmbeddingProvider, resetEmbeddingProvider, type EmbeddingProvider, switchEmbeddingModel as switchModel } from "./embedding";
 import type { EmbeddingIndexMetadata } from "./vectorstore";
 import { JsonVectorStore } from "./vectorstore";
 import type { MemoryEntry } from "./vectorstore";
@@ -12,14 +12,18 @@ export { INJECTION_HEADER, INJECTION_PREAMBLE } from "./worldbook-constants";
 import { feedEntityNamesToJieba } from "../memory/entity-graph";
 import { isL2LocallyRecallable } from "../memory/memory-types";
 import { findPromptPath } from "../external-content-paths";
-import { isMemoryEnabled } from "../memory/memory-mode";
+import { getMemoryModeVersion, isMemoryEnabled } from "../memory/memory-mode";
+import { backupMemoryRagFiles } from "../memory/memory-rag-reconciliation";
+import { getModelInstallStatusDetail } from "./model-status";
 
 // ── Global RAG instances ──
 let store: JsonVectorStore | null = null;
 let retriever: HybridRetriever | null = null;
 let worldbook: WorldbookManager | null = null;
 let provider: EmbeddingProvider | null = null;
+let verifiedIndex: JsonVectorStore | null = null;
 let activeVectorOperations = 0;
+let preparingVectorIndex = false;
 const vectorOperationsDrained = new Set<() => void>();
 // 每轮对话递增，用于 DMAE repeatWindow 统计（worldbook 状态不持久化，重启回 0 可接受）
 let worldbookTurnCounter = 0;
@@ -104,6 +108,7 @@ export async function initRAG(
 }
 
 async function trackVectorOperation<T>(operation: () => Promise<T>): Promise<T> {
+  if (preparingVectorIndex) throw new Error("向量索引正在修复，请稍后重试");
   activeVectorOperations++;
   try {
     return await operation();
@@ -129,24 +134,37 @@ export async function initVectorMemory(
   cloudDimensions?: number,
 ): Promise<void> {
   const dataDir = getDataDir();
-  provider = getEmbeddingProvider(ragMode, cloudBaseUrl, cloudApiKey, embeddingModel, cloudDimensions);
+  const buildVersion = getMemoryModeVersion();
+  const nextProvider = getEmbeddingProvider(ragMode, cloudBaseUrl, cloudApiKey, embeddingModel, cloudDimensions);
   const removedImportedDocumentVectors = await removeImportedDocumentData(dataDir);
-  store = new JsonVectorStore(dataDir);
+  if (getMemoryModeVersion() !== buildVersion || !isMemoryEnabled()) return;
+  const nextStore = new JsonVectorStore(dataDir);
+  if (nextProvider) repairIncompatibleIndex(nextStore, nextProvider);
+  store = nextStore;
+  verifiedIndex = null;
+  provider = nextProvider;
+  retriever = provider ? new HybridRetriever(store, provider) : null;
   if (removedImportedDocumentVectors > 0) {
     logger.info(LogTag.RAG, `removed ${removedImportedDocumentVectors} imported document vectors`);
-  }
-  // 只有 provider 存在时才创建 retriever（向量检索依赖 embedding）
-  if (provider) {
-    retriever = new HybridRetriever(store, provider);
   }
   logger.info(
     LogTag.RAG,
     "vector memory initialized. Mode:", ragMode,
     "Provider:", provider?.name ?? "none",
-    "Dims:", provider?.dims ?? "N/A",
+    "Dims:", provider?.resolvedDimensions ?? provider?.declaredDimensions ?? "N/A",
     "Memories:", store.stats.total,
     provider ? "" : " [Vector retrieval disabled]"
   );
+}
+
+function repairIncompatibleIndex(index: JsonVectorStore, embedding: EmbeddingProvider): number {
+  const { reset, invalidIds } = index.getIncompatibleIndex(embedding);
+  if (!reset && !invalidIds.length) return 0;
+  backupMemoryRagFiles(app.getPath("userData"));
+  if (!reset) return index.deleteEntriesByIds(invalidIds);
+  const removed = index.stats.total;
+  index.clearForRebuild(true);
+  return removed;
 }
 
 export async function initWorldbook(): Promise<void> {
@@ -167,14 +185,20 @@ export async function disposeVectorMemory(): Promise<void> {
   await waitForVectorOperations();
   await store?.flush();
   store = null;
+  verifiedIndex = null;
   retriever = null;
   provider = null;
   resetEmbeddingProvider();
 }
 
 /** 受控退出（before-quit 链路）时调用：把防抖中的记忆数据刷盘。 */
-export async function flushRAGStore(): Promise<void> {
-  await store?.flush();
+export async function flushRAGStore(throwOnError = false): Promise<void> {
+  const index = store;
+  try { await index?.flush(throwOnError); }
+  catch (error) {
+    if (verifiedIndex === index) verifiedIndex = null;
+    throw error;
+  }
 }
 
 /** 会话紧急结束（Windows session-end）时调用：同步落盘，不等待异步 I/O。 */
@@ -185,75 +209,54 @@ export function flushRAGStoreSync(): void {
 // ── Switch embedding model (hot-swap) ──
 export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: boolean; clearedEntries: number; error?: string }> {
   if (!isMemoryEnabled()) return { ok: false, clearedEntries: 0, error: "记忆模式已关闭" };
+  if (modelKey !== "bgem3") return { ok: false, clearedEntries: 0, error: "仅支持本地 BGE-M3 嵌入模型" };
+  if (preparingVectorIndex) return { ok: false, clearedEntries: 0, error: "向量索引正在修复，请稍后重试" };
+  const version = getMemoryModeVersion();
+  preparingVectorIndex = true;
   try {
-    // Switch the embedding pipeline first
+    const model = getModelInstallStatusDetail("embedding", modelKey);
+    if (!model.installed) {
+      if (model.existingProjectDir) {
+        throw new Error(`BGE-M3 模型缺少文件（${model.missingFiles.join("、")}）。模型目录：${model.existingProjectDir}`);
+      }
+      throw new Error(`尚未安装本地 BGE-M3 模型。模型目录：${path.join(app.getPath("userData"), "models", "Xenova", "bge-m3")}`);
+    }
+    // Finish operations against the old provider before changing the index.
+    await waitForVectorOperations();
     switchModel(modelKey);
-    const newProvider = getEmbeddingProvider("auto", undefined, undefined, modelKey);
-
-    // 模型不存在时无法切换 — 输出详细诊断帮助排查"放到 models/ 却检测不到"
-    if (!newProvider) {
-      try {
-        // require to avoid circular import at module load
-        const { getModelInstallStatusDetail } = require("./model-status") as typeof import("./model-status");
-        const detail = getModelInstallStatusDetail("embedding", modelKey);
-        if (detail.existingProjectDir) {
-          console.error(
-            `[Cyrene] embedding model "${modelKey}" project directory exists but is incomplete.\n` +
-            `  existingProjectDir: ${detail.existingProjectDir}\n` +
-            `  requiredFiles:      ${JSON.stringify(detail.requiredFiles)}\n` +
-            `  missingFiles:       ${JSON.stringify(detail.missingFiles)}\n` +
-            `  HF cache fallback suppressed. Fix the files above, then retry.`,
-          );
-        } else {
-          console.error(
-            `[Cyrene] embedding model "${modelKey}" not detected anywhere.\n` +
-            `  modelDirCandidates: ${JSON.stringify(detail.modelDirCandidates)}\n` +
-            `  subPathCandidates:  ${JSON.stringify(detail.subPathCandidates)}\n` +
-            `  requiredFiles:      ${JSON.stringify(detail.requiredFiles)}\n` +
-            `  Drop the model files into one of the candidates above.`,
-          );
-        }
-      } catch (diagErr) {
-        console.error("[Cyrene] model diagnostic log failed:", diagErr);
-      }
-      return { ok: false, clearedEntries: 0, error: "Local embedding model not found. Cannot switch." };
+    const newProvider = getEmbeddingProvider("local", undefined, undefined, modelKey);
+    if (!newProvider) throw new Error("无法读取本地 BGE-M3 模型");
+    const probe = await newProvider.embed("向量索引就绪检查");
+    if (probe.length !== newProvider.dims || probe.some(value => !Number.isFinite(value))) {
+      throw new Error(`BGE-M3 模型输出异常，期望 ${newProvider.dims} 维有限数值，实际 ${probe.length} 维`);
     }
-
-    const newDims = newProvider.dims;
-
-    // Check existing entries for dimension mismatch
-    let clearedEntries = 0;
-    if (store) {
-      const entries = (store as any).entries as Array<{ embedding: number[] }> | undefined;
-      if (entries && entries.length > 0) {
-        const oldDims = entries[0].embedding.length;
-        if (oldDims !== newDims) {
-          clearedEntries = entries.length;
-          // 清空内存与磁盘（含取消防抖中的待写落盘），防止旧维度向量被写回刚清空的文件
-          store.clearForRebuild();
-          console.log("[RAG] dimension mismatch (" + oldDims + " → " + newDims + "), cleared " + clearedEntries + " entries");
-          // 清除旧的索引元数据，下次写入时会自动创建新的
-          const metaPath = path.join(getDataDir(), "memory-store-meta.json");
-          if (fs.existsSync(metaPath)) {
-            fs.unlinkSync(metaPath);
-          }
-        }
-      }
-    }
-
-    // Update provider reference and retriever
+    if (getMemoryModeVersion() !== version) throw new Error("记忆模式已改变");
+    const currentStore = store ?? new JsonVectorStore(getDataDir());
+    await currentStore.flush(true);
+    if (getMemoryModeVersion() !== version) throw new Error("记忆模式已改变");
+    const clearedEntries = repairIncompatibleIndex(currentStore, newProvider);
+    await currentStore.flush(true);
+    if (getMemoryModeVersion() !== version) throw new Error("记忆模式已改变");
+    store = currentStore;
     provider = newProvider;
-    if (store) {
-      retriever = new HybridRetriever(store, provider);
-    }
-
-    console.log("[RAG] switched embedding model to", modelKey, "dims:", newDims, "cleared:", clearedEntries);
+    verifiedIndex = currentStore;
+    retriever = new HybridRetriever(store, provider);
+    console.log("[RAG] ready:", modelKey, "dims:", probe.length, "cleared:", clearedEntries);
     return { ok: true, clearedEntries };
   } catch (err) {
+    if (getMemoryModeVersion() === version) verifiedIndex = null;
     const message = err instanceof Error ? err.message : String(err);
     console.error("[RAG] switch embedding model failed:", message);
     return { ok: false, clearedEntries: 0, error: message };
+  } finally {
+    preparingVectorIndex = false;
   }
+}
+
+function requireVectorStore(): { store: JsonVectorStore; provider: EmbeddingProvider } {
+  if (!store) throw new Error("向量索引尚未初始化");
+  if (!provider) throw new Error("未找到本地 BGE-M3 模型。记忆正文可用，安装嵌入模型后可补建向量索引。");
+  return { store, provider };
 }
 
 /**
@@ -271,9 +274,7 @@ export async function addMemory(
   metadata?: Record<string, unknown>
 ): Promise<string> {
   if (!isMemoryEnabled()) throw new Error("记忆模式已关闭");
-  if (!store || !provider) throw new Error("RAG not initialized");
-  const currentStore = store;
-  const currentProvider = provider;
+  const { store: currentStore, provider: currentProvider } = requireVectorStore();
   return trackVectorOperation(async () => {
     const entry = await currentStore.add(text, source, currentProvider, metadata);
     return entry.id;
@@ -285,15 +286,27 @@ export async function addL2MemoryVector(
   l2Id: string,
   metadata?: Record<string, unknown>,
   signal?: AbortSignal,
+  deferPersistence = false,
 ): Promise<string> {
   if (!isMemoryEnabled()) throw new Error("记忆模式已关闭");
-  if (!store || !provider) throw new Error("RAG not initialized");
+  const { store: currentStore, provider: currentProvider } = requireVectorStore();
   if (!l2Id.trim()) throw new Error("l2Id is required");
-  const currentStore = store;
-  const currentProvider = provider;
   return trackVectorOperation(async () => {
-    const entry = await currentStore.addUnique(text, "user_memory", currentProvider, { ...metadata, l2Id }, signal);
-    return entry.id;
+    try {
+      const entry = await currentStore.addUnique(text, "user_memory", currentProvider, { ...metadata, l2Id }, signal);
+      if (!deferPersistence) {
+        try { await currentStore.flush(true); }
+        catch (error) {
+          currentStore.deleteEntriesByIds([entry.id], "user_memory");
+          throw error;
+        }
+      }
+      if (store === currentStore && provider === currentProvider) verifiedIndex = currentStore;
+      return entry.id;
+    } catch (error) {
+      if (!signal?.aborted && verifiedIndex === currentStore) verifiedIndex = null;
+      throw error;
+    }
   });
 }
 
@@ -338,7 +351,8 @@ async function searchMemoryEntriesEnabled(
         .filter((entry) => {
           const l2Id = entry.metadata?.l2Id;
           if (typeof l2Id !== "string") return false;
-          return recallableById.get(l2Id)?.ragId === entry.id;
+          const memory = recallableById.get(l2Id);
+          return memory?.ragId === entry.id && memory.content === entry.text;
         })
         .map((entry) => entry.id);
     } catch (err) {
@@ -467,6 +481,7 @@ export async function buildMemoryContext(userInput: string): Promise<string> {
 // ── Reset ──
 export function resetRAG(): void {
   store = null;
+  verifiedIndex = null;
   retriever = null;
   worldbook = null;
   provider = null;
@@ -479,6 +494,11 @@ export function getRAGStats() {
 
 export function isUserMemoryVectorStoreReady(): boolean {
   return store !== null && provider !== null;
+}
+
+/** Positive only after this process has successfully run embedding inference. */
+export function isUserMemoryVectorIndexVerified(): boolean {
+  return isMemoryEnabled() && store !== null && store === verifiedIndex && provider !== null;
 }
 
 /**

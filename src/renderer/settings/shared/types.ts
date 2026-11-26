@@ -180,7 +180,8 @@ export interface MemoryPanelPayload {
     id: string;
     content: string;
     triggerText: string;
-    status: "active" | "aging" | "archived";
+    status: "active" | "aging" | "archived" | "superseded" | "merged";
+    syncStatus?: "pending_sync" | "synced" | "sync_failed";
     weight: number;
     createdAt: number;
   }>;
@@ -200,6 +201,8 @@ export interface ObsidianVaultConfig {
 
 export interface MemoryPanelApi {
   getData: () => Promise<MemoryPanelPayload>;
+  getVectorIndexStatus?: () => Promise<import("../../../shared/memory-vector-status").MemoryVectorIndexStatus>;
+  startVectorIndexRepair?: (allowDownload: boolean) => Promise<import("../../../shared/memory-vector-status").MemoryVectorIndexStatus>;
   getGraph: () => Promise<import("../../../shared/memory-graph").MemoryGraph>;
   getSummaryMemory: () => Promise<MemorySummaryPayload | null>;
   listWikiPages: (request?: import("../../../shared/wiki-memory-types").WikiPageListRequest) => Promise<import("../../../shared/wiki-memory-types").WikiPageListResult>;

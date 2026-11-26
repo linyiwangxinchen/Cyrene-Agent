@@ -1,7 +1,8 @@
 import type { ChatSession } from "../../shared/chat-types";
 import type { ChatMessage } from "../orchestrator/vendors/types";
 import { getChannelConversationBindingStore } from "../channels/conversation-binding-store";
-import { getSession } from "./chats-store";
+import type { HistoryQuote } from "../storage/conversation-history-repository";
+import { loadExplicitConversationHistory } from "./automatic-conversation-history";
 
 const MAX_MESSAGES = 16;
 const MAX_MESSAGE_CHARS = 1_600;
@@ -23,16 +24,22 @@ export function selectConversationExcerpt(session: ChatSession) {
     && (!message.runSnapshot || (message.runSnapshot.status === "terminal"
       && (!message.runSnapshot.terminalStatus || message.runSnapshot.terminalStatus === "success")))
     && message.content.trim());
-  const title = session.title.trim().slice(0, 180) || "旧会话";
+  return formatConversationExcerpt({ title: session.title, messages: recent.map(message => ({
+    role: message.role === "model" ? "assistant" : "user", text: message.content.trim(),
+  })) });
+}
+
+function formatConversationExcerpt(quote: HistoryQuote) {
+  const title = quote.title.trim().slice(0, 180) || "旧会话";
   // Encode the transcript as data in the current user message. Escaping '<'
   // prevents the quoted text itself from ending the enclosing reference block.
   const excerpt = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
   const messages: string[] = [];
   let remaining = MAX_REFERENCE_CHARS;
-  for (const message of recent.slice(-MAX_MESSAGES).reverse()) {
-    const content = message.content.trim();
+  for (const message of quote.messages.slice(-MAX_MESSAGES).reverse()) {
+    const content = message.text;
     const text = content.length <= MAX_MESSAGE_CHARS ? content : `${content.slice(0, MAX_MESSAGE_CHARS)}…`;
-    const line = excerpt({ role: message.role === "model" ? "assistant" : "user", text });
+    const line = excerpt({ role: message.role, text });
     if (line.length + 1 > remaining) break;
     messages.unshift(line);
     remaining -= line.length + 1;
@@ -51,15 +58,20 @@ export function selectConversationExcerpt(session: ChatSession) {
 }
 
 export async function loadConversationReference(destination: string, source: string) {
-  if (source === destination || includesExternalConversation(destination, source)) return;
-  const session = await getSession(source);
-  if (!session || includesExternalConversation(destination, source)) return;
-  return selectConversationExcerpt(session);
+  if (!source || source.length > 256 || /[\u0000-\u001f\u007f]/u.test(source)
+    || source === destination || includesExternalConversation(destination, source)) return;
+  const quote = await loadExplicitConversationHistory(destination || undefined, source);
+  if (!quote || includesExternalConversation(destination, source)) return;
+  return formatConversationExcerpt(quote);
 }
 
-export function attachConversationReference(messages: ChatMessage[], context: string): ChatMessage[] {
+export function attachConversationReference(messages: ChatMessage[], context: string, options?: { afterCompaction?: true }): ChatMessage[] {
   let index = messages.length - 1;
   while (index >= 0 && (messages[index].role !== "user" || messages[index].visibility === "internal")) index -= 1;
+  // A safe compaction boundary can retain the latest tool group while its
+  // initiating user message has moved into the checkpoint. Keep the excerpt
+  // as a request-local evidence message in that case.
+  if (index === -1 && options?.afterCompaction) return [...messages, { role: "user", content: context }];
   if (index === -1) throw new Error("找不到本轮用户消息，未发送旧会话引用。");
   const message = messages[index];
   const content = typeof message.content === "string"

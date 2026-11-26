@@ -12,6 +12,7 @@ const { ISOLATED_ROOT, ISOLATED_HOME } = vi.hoisted(() => {
   );
   return { ISOLATED_ROOT: root, ISOLATED_HOME: pathMod.join(root, "home") };
 });
+const runtimePaths = vi.hoisted(() => ({ userData: "" }));
 
 vi.mock("os", async () => {
   const realOs = await vi.importActual<typeof import("os")>("os");
@@ -24,6 +25,10 @@ vi.mock("os", async () => {
 vi.mock("electron", () => ({
   app: {
     getAppPath: () => ISOLATED_ROOT,
+    getPath: () => {
+      if (!runtimePaths.userData) throw new Error("No user data location");
+      return runtimePaths.userData;
+    },
   },
 }));
 
@@ -88,6 +93,7 @@ beforeEach(() => {
   // not the real project tree (which has real model dirs).
   process.chdir(ISOLATED_ROOT);
   delete process.env.CYRENE_MODELS_DIR;
+  runtimePaths.userData = "";
 });
 
 afterEach(() => {
@@ -127,6 +133,14 @@ describe("model-status: getProjectModelsDirCandidates priority", () => {
     expect(getProjectModelsDirCandidates()).toContain(path.join(path.dirname(process.execPath), "models"));
   });
 
+  it("uses complete models under the writable installation directory", () => {
+    runtimePaths.userData = path.join(ISOLATED_ROOT, "user-data");
+    const model = ensureFakeDir("user-data", "models", "Xenova", "bge-m3");
+    expect(getModelInstallStatusDetail("embedding", "bgem3").matchedAt).toBe(model);
+    fs.writeFileSync(path.join(model, "onnx", "model_quantized.onnx"), "");
+    expect(getModelInstallStatusDetail("embedding", "bgem3").missingFiles).toContain("onnx/model_quantized.onnx");
+  });
+
   it("uses the directory containing the complete model instead of an earlier empty candidate", () => {
     process.env.CYRENE_MODELS_DIR = path.join(ISOLATED_ROOT, "empty-override");
     ensureFakeDir("models", "Xenova", "bge-m3");
@@ -163,6 +177,14 @@ describe("model-status: project-side detection", () => {
 });
 
 describe("model-status: HF cache fallback semantics", () => {
+  it("resolves a complete immutable huggingface_hub snapshot through refs/main", () => {
+    const repo = ["home", ".cache", "huggingface", "hub", "models--Xenova--bge-m3"];
+    const revision = "bb".repeat(20);
+    const snapshot = ensureFakeDir(...repo, "snapshots", revision);
+    fs.mkdirSync(path.join(ISOLATED_ROOT, ...repo, "refs"));
+    fs.writeFileSync(path.join(ISOLATED_ROOT, ...repo, "refs", "main"), revision);
+    expect(getModelInstallStatusDetail("embedding", "bgem3")).toMatchObject({ source: "hf-cache", matchedAt: snapshot });
+  });
   it("falls back to HF cache only when no project model directory exists", () => {
     // Project side empty
     fs.mkdirSync(path.join(ISOLATED_ROOT, "models"), { recursive: true });

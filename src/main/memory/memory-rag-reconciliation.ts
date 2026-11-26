@@ -13,10 +13,12 @@ export interface MemoryRagReconciliationDeps {
   getVectors(): ReconciliationVector[];
   backup(): Promise<void>;
   addVector(text: string, l2Id: string, metadata: Record<string, unknown>): Promise<string>;
-  markSynced(l2Id: string, ragId: string): Promise<unknown>;
-  markSyncFailed(l2Id: string, error: unknown): Promise<unknown>;
+  markSynced(l2Id: string, ragId: string, expected: L2Memory): Promise<unknown>;
+  markSyncFailed(l2Id: string, error: unknown, expected: L2Memory): Promise<unknown>;
   deleteVectors(ids: string[]): Promise<unknown> | unknown;
   warn(message: string, error: unknown): void;
+  isCurrent?(): boolean;
+  persistVectors?(): Promise<void>;
 }
 
 export interface MemoryRagReconciliationReport {
@@ -31,6 +33,7 @@ export function backupMemoryRagFiles(userDataDir: string, timestamp = Date.now()
   const sources = [
     { path: path.join(userDataDir, "memory.json"), prefix: "memory" },
     { path: path.join(userDataDir, "rag-data", "memory-store.json"), prefix: "memory-store" },
+    { path: path.join(userDataDir, "rag-data", "memory-store-meta.json"), prefix: "memory-store-meta" },
   ].filter((source) => fs.existsSync(source.path));
   if (sources.length === 0) return;
 
@@ -55,23 +58,34 @@ export async function reconcileMemoryRag(
   deps: MemoryRagReconciliationDeps,
   signal?: AbortSignal,
 ): Promise<MemoryRagReconciliationReport> {
-  const memories = await deps.getMemories();
-  signal?.throwIfAborted();
+  function checkCurrent() {
+    signal?.throwIfAborted();
+    if (deps.isCurrent?.() === false) throw new Error("记忆模式已改变");
+  }
+  const memories = (await deps.getMemories()).map(memory => ({ ...memory }));
+  checkCurrent();
   const vectors = deps.getVectors();
   const vectorsById = new Map(vectors.map((vector) => [vector.id, vector]));
+  const vectorsByMemory = new Map<string, ReconciliationVector[]>();
+  for (const vector of vectors) {
+    const id = vector.metadata?.l2Id;
+    if (typeof id !== "string") continue;
+    const group = vectorsByMemory.get(id);
+    if (group) group.push(vector);
+    else vectorsByMemory.set(id, [vector]);
+  }
   const validVectorIds = new Set<string>();
-  const relink: Array<{ l2Id: string; ragId: string }> = [];
+  const relink: Array<{ memory: L2Memory; ragId: string }> = [];
   const rebuild: L2Memory[] = [];
 
   for (const memory of memories) {
     if (!isSemanticallyRecallable(memory)) continue;
-    const vector = memory.ragId ? vectorsById.get(memory.ragId) : undefined;
-    const mappingMatches = vector?.metadata?.l2Id === memory.id;
-    // 映射正确但正文与向量文本不一致（如历史 Obsidian 回流未重建向量），同样需要重建
-    const contentMatches = vector?.text === memory.content;
-    if (vector && mappingMatches && contentMatches) {
+    const linked = memory.ragId ? vectorsById.get(memory.ragId) : undefined;
+    const vector = linked?.metadata?.l2Id === memory.id && linked.text === memory.content ? linked
+      : vectorsByMemory.get(memory.id)?.find(candidate => candidate.text === memory.content);
+    if (vector) {
       validVectorIds.add(vector.id);
-      if (memory.syncStatus !== "synced") relink.push({ l2Id: memory.id, ragId: vector.id });
+      if (memory.syncStatus !== "synced" || memory.ragId !== vector.id) relink.push({ memory, ragId: vector.id });
     } else {
       rebuild.push(memory);
     }
@@ -92,41 +106,58 @@ export async function reconcileMemoryRag(
 
   await deps.backup();
 
-  for (const item of relink) {
-    signal?.throwIfAborted();
-    try {
-      await deps.markSynced(item.l2Id, item.ragId);
-      report.relinked += 1;
-    } catch (error) {
-      report.failed += 1;
-      deps.warn(`Failed to relink memory ${item.l2Id}`, error);
-    }
+  const prepared: Array<{ memory: L2Memory; ragId: string }> = [];
+  async function fail(memory: L2Memory, error: unknown) {
+    checkCurrent();
+    report.failed += 1;
+    await deps.markSyncFailed(memory.id, error, memory);
+    deps.warn(`Failed to rebuild memory vector ${memory.id}`, error);
   }
-
   for (const memory of rebuild) {
-    signal?.throwIfAborted();
+    checkCurrent();
     try {
       const ragId = await deps.addVector(memory.content, memory.id, {
         source: "memory_reconciliation",
         isSummary: memory.isSummary === true,
         subEntryIds: memory.subEntryIds ?? [],
       });
-      signal?.throwIfAborted();
-      await deps.markSynced(memory.id, ragId);
-      report.rebuilt += 1;
+      checkCurrent();
+      prepared.push({ memory, ragId });
     } catch (error) {
-      report.failed += 1;
-      signal?.throwIfAborted();
-      await deps.markSyncFailed(memory.id, error);
-      deps.warn(`Failed to rebuild memory vector ${memory.id}`, error);
+      await fail(memory, error);
+    }
+  }
+  const links = [...relink, ...prepared];
+  if (links.length && deps.persistVectors) {
+    try { await deps.persistVectors(); }
+    catch (error) {
+      for (const { memory } of links) await fail(memory, error);
+      return report;
+    }
+  }
+  for (const [kind, items] of [["relinked", relink], ["rebuilt", prepared]] as const) {
+    for (const { memory, ragId } of items) {
+      checkCurrent();
+      try {
+        // Another writer may have linked this same deduplicated vector.
+        if (await deps.markSynced(memory.id, ragId, memory) !== null) report[kind] += 1;
+      } catch (error) {
+        await fail(memory, error);
+      }
     }
   }
 
-  signal?.throwIfAborted();
+  checkCurrent();
   if (staleVectorIds.length > 0) {
     try {
-      await deps.deleteVectors(staleVectorIds);
-      report.deleted = staleVectorIds.length;
+      const current = await deps.getMemories();
+      checkCurrent();
+      const live = new Set(current.filter(memory => isSemanticallyRecallable(memory) && memory.syncStatus === "synced"
+        && vectorsById.get(memory.ragId ?? "")?.text === memory.content
+        && vectorsById.get(memory.ragId ?? "")?.metadata?.l2Id === memory.id).map(memory => memory.ragId));
+      const obsolete = staleVectorIds.filter(id => !live.has(id));
+      if (obsolete.length) await deps.deleteVectors(obsolete);
+      report.deleted = obsolete.length;
     } catch (error) {
       report.failed += 1;
       deps.warn("Failed to delete stale user memory vectors", error);

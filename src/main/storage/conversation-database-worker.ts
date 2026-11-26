@@ -15,7 +15,7 @@ import { reduceTranscriptProjection, isUserTurnRewindableInModelView } from "../
 import { buildLegacyBackfillDrafts } from "../orchestrator/conversation-transcript-coordinator";
 import { diagnosticHash } from "./conversation-store-error";
 import { runMemoryCommand } from "./conversation-memory-repository";
-import { currentHistorySourcePointers, purgeConversationHistoryIndex, readConversationHistory, searchConversationHistory } from "./conversation-history-repository";
+import { currentHistorySourcePointers, purgeConversationHistoryIndex, quoteConversationHistory, readConversationHistory, searchConversationHistory } from "./conversation-history-repository";
 const database = initializeConversationDatabase(workerData.root);
 chats.initialize();
 importRuns(database);
@@ -165,6 +165,7 @@ async function execute(method: string, args: any[]): Promise<unknown> {
     return;
   if (method === 'history.search') return searchConversationHistory(database, args[0], importTranscript);
   if (method === 'history.read') return readConversationHistory(database, args[0], importTranscript);
+  if (method === 'history.quote') return quoteConversationHistory(database, args[0], args[1], importTranscript);
   if (method === 'history.sources') return currentHistorySourcePointers(database, args[0], args[1]);
   if (method.startsWith('memory.')) {
     if (method === 'memory.record') await importTranscript(args[0].conversationId);

@@ -6,7 +6,8 @@ export interface HistorySourcePointer {
   conversationId: string;
   userTurnId: string;
   userEntryId: string;
-  assistantEntryId: string;
+  /** Omitted when the evidence is a settled user message without a reply. */
+  assistantEntryId?: string;
   /** Fingerprint of the authorized visible turn as it was provided to the model. */
   revision?: string;
 }
@@ -32,7 +33,8 @@ function isReferenceId(value: unknown): value is string {
 const historyPointerFields = ["conversationId", "userTurnId", "userEntryId", "assistantEntryId"] as const;
 
 function hasHistoryPointerIds(row: Record<string, unknown>): boolean {
-  return historyPointerFields.every(key => isReferenceId(row[key]))
+  return isReferenceId(row.conversationId) && isReferenceId(row.userTurnId) && isReferenceId(row.userEntryId)
+    && (row.assistantEntryId === undefined || isReferenceId(row.assistantEntryId))
     && (row.revision === undefined || typeof row.revision === "string" && /^[a-f0-9]{64}$/u.test(row.revision));
 }
 

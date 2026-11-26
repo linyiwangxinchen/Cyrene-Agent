@@ -3,7 +3,7 @@ import { getChannelConversationBindingStore } from "../channels/conversation-bin
 import { getMemoryModeVersion, isPersonalMemoryEnabled } from "../memory/memory-mode";
 import { memoryStore } from "../memory/memory-store";
 import { getConversationDatabase } from "../storage/conversation-database-client";
-import type { HistoryLookupPolicy, HistoryReadInput, HistoryReadPage, HistorySearchInput, HistorySearchPage } from "../storage/conversation-history-repository";
+import type { HistoryLookupPolicy, HistoryQuote, HistoryReadInput, HistoryReadPage, HistorySearchInput, HistorySearchPage } from "../storage/conversation-history-repository";
 import { historyWithdrawal, type HistorySourcePointer } from "./history-projection";
 
 function externalIds(): string[] {
@@ -17,14 +17,15 @@ async function snapshot(destinationId?: string): Promise<HistoryLookupPolicy> {
 }
 
 /** SQLite owns the authoritative branch. External bindings and withdrawal are independently mutable. */
-async function lookup<T>(destinationId: string | undefined, operation: (policy: HistoryLookupPolicy) => Promise<T>): Promise<T | undefined> {
+async function lookup<T>(destinationId: string | undefined, operation: (policy: HistoryLookupPolicy) => Promise<T>, explicit = false): Promise<T | undefined> {
   const version = getMemoryModeVersion();
-  for (let attempt = 0; attempt < 2 && isPersonalMemoryEnabled() && getMemoryModeVersion() === version; attempt++) {
+  const permitted = () => explicit || (isPersonalMemoryEnabled() && getMemoryModeVersion() === version);
+  for (let attempt = 0; attempt < 2 && permitted(); attempt++) {
     const policy = await snapshot(destinationId);
-    if (getMemoryModeVersion() !== version || !isPersonalMemoryEnabled()) return;
+    if (!permitted()) return;
     const result = await operation(policy);
-    if (getMemoryModeVersion() !== version || !isPersonalMemoryEnabled()) return;
-    if (JSON.stringify(policy) === JSON.stringify(await snapshot(destinationId)) && getMemoryModeVersion() === version) return result;
+    if (!permitted()) return;
+    if (JSON.stringify(policy) === JSON.stringify(await snapshot(destinationId)) && permitted()) return result;
   }
 }
 
@@ -37,6 +38,12 @@ export function loadAutomaticConversationHistory(destinationId: string, input: O
   if (input.conversationId === destinationId) return;
   return lookup(destinationId, policy => getConversationDatabase(app.getPath("userData"))
     .call<HistoryReadPage | undefined>("history.read", { ...input, ...policy }));
+}
+
+export function loadExplicitConversationHistory(destinationId: string | undefined, sourceId: string) {
+  if (sourceId === destinationId) return;
+  return lookup(destinationId, policy => getConversationDatabase(app.getPath("userData"))
+    .call<HistoryQuote | undefined>("history.quote", sourceId, policy), true);
 }
 
 export async function filterCurrentHistorySourcePointers(pointers: readonly HistorySourcePointer[], destinationId?: string) {

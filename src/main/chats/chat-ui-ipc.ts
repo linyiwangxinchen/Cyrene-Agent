@@ -277,10 +277,16 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   // 注意：必须用 deps.windowManager 实时读取 getter，不能在注册时解构。
   // registerChatUiIpc 在模块加载阶段调用，那时 windowManager 仍为 null，
   // 解构会捕获 null 并导致后续 ?. 永远短路，按钮点了打不开窗口。
-  ipc.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
+  ipc.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, async (_event, sessionId: string) => {
     if (typeof sessionId !== "string" || sessionId.trim().length === 0) return false;
-    void deps.windowManager?.openReactChatWindow(sessionId);
-    return true;
+    try {
+      const manager = deps.windowManager;
+      if (!manager || !(await getSessionRecord(sessionId))) return false;
+      await manager.openReactChatWindow(sessionId);
+      return true;
+    } catch {
+      return false;
+    }
   });
 
   // reactChatWindow → main：声明 ChatPage 已挂好 IPC 监听

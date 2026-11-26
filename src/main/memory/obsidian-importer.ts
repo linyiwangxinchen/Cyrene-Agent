@@ -145,11 +145,11 @@ export async function importL2Markdown(md: string): Promise<ImportResult> {
   if (!id) return { id: null, ok: false, reason: "no-frontmatter-id", changed: false };
   if (content === null) return { id, ok: false, reason: "no-content", changed: false };
 
-  let existing: L2Memory | undefined;
+  let expected: L2Memory | undefined;
   setImportingMemory(true);
   try {
     const before = await memoryStore.getAllL2();
-    existing = before.find((m: L2Memory) => m.id === id);
+    const existing = before.find((m: L2Memory) => m.id === id);
     if (!existing) {
       return { id, ok: false, reason: "not-found", changed: false };
     }
@@ -157,18 +157,23 @@ export async function importL2Markdown(md: string): Promise<ImportResult> {
       return { id, ok: true, changed: false }; // 内容未变，不写
     }
     // 正文落库并置 pending_sync：向量重建完成前旧向量不可被语义召回
-    await memoryStore.updateL2Content(id, content);
+    const updated = await memoryStore.updateL2Content(id, content);
+    if (!updated) return { id, ok: false, reason: "not-found", changed: false };
+    if (updated.content !== content || updated.syncStatus !== "pending_sync") return { id, ok: true, changed: true };
+    expected = { ...updated };
   } finally {
     setImportingMemory(false);
   }
 
   // 向量重建（标志外）：成功后切换 ragId 并标记 synced
-  const oldRagId = existing.ragId;
+  const oldRagId = expected.ragId;
   try {
     const newRagId = await addL2MemoryVector(content, id, {
-      triggerText: existing.triggerText,
+      triggerText: expected.triggerText,
     });
-    await memoryStore.markL2SyncStatus(id, "synced", newRagId);
+    if (!await memoryStore.markL2SyncStatus(id, "synced", newRagId, undefined, expected)) {
+      return { id, ok: true, changed: true };
+    }
     // 尽力清理旧向量：失败不影响回流结果，残留旧向量已被 ragId 过滤屏蔽，
     // 启动一致性检查还会兜底清理
     if (oldRagId && oldRagId !== newRagId) {
@@ -182,9 +187,9 @@ export async function importL2Markdown(md: string): Promise<ImportResult> {
       }
     }
   } catch (err) {
-    // 向量重建失败：标记 sync_failed 让该记忆暂时不可召回（与 writeL2 失败路径一致），
+    // 向量重建失败：标记 sync_failed，只保留文字召回，
     // 启动一致性检查会发现"映射正确但正文不同"并重试重建
-    await memoryStore.markL2SyncStatus(id, "sync_failed", undefined, err);
+    await memoryStore.markL2SyncStatus(id, "sync_failed", undefined, err, expected);
     logger.warn(
       LogTag.Cyrene,
       `[obsidian-import] vector rebuild failed for ${id}: ${err instanceof Error ? err.message : String(err)}`,

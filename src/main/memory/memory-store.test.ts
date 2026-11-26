@@ -80,7 +80,7 @@ describe("memoryStore", () => {
     expect(marked?.status).toBe("active")
   })
 
-  it("decays only unpinned active L2 memories with positive weight", async () => {
+  it("decays active or aging L2 memories without reviving archived, superseded or merged records", async () => {
     const { memoryStore } = await import("./memory-store")
     const active = await memoryStore.addL2Memory({
       content: "用户正在练琴",
@@ -102,6 +102,9 @@ describe("memoryStore", () => {
     const pinnedEntry = store.l2.find((m) => m.id === pinned.id)!
     activeEntry.weight = 10
     pinnedEntry.weight = 10
+    for (const status of ["aging", "archived", "superseded", "merged"] as const) {
+      store.l2.push({ ...activeEntry, id: `memory-${status}`, status, weight: status === "aging" ? 20 : 40 })
+    }
     await memoryStore.save(store)
 
     const changed = await memoryStore.decayL2Weights()
@@ -109,11 +112,15 @@ describe("memoryStore", () => {
       fs.readFileSync(path.join(electronMock.userDataDir, "memory.json"), "utf8"),
     )
 
-    expect(changed).toBe(1)
+    expect(changed).toBe(2)
     expect(persisted.l2.find((m: { id: string }) => m.id === active.id).weight).toBe(9)
     expect(persisted.l2.find((m: { id: string }) => m.id === active.id).status).toBe("archived")
     expect(persisted.l2.find((m: { id: string }) => m.id === pinned.id).weight).toBe(10)
     expect(persisted.l2.find((m: { id: string }) => m.id === pinned.id).status).toBe("active")
+    expect(persisted.l2.slice(-4)).toMatchObject([
+      { status: "aging", weight: 19 }, { status: "archived", weight: 40 },
+      { status: "superseded", weight: 40 }, { status: "merged", weight: 40 },
+    ])
   })
 
   it("updates L0 and L2 through atomic write APIs", async () => {

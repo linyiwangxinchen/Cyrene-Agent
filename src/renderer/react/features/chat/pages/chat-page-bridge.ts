@@ -3,6 +3,7 @@ import type {
   ChatPresentationCheckpointPatch,
   ChatSession,
   ChatSessionMeta,
+  ChatSessionListOptions,
   ConversationMode,
   PendingChatAttachment,
   PendingChatMessage,
@@ -56,7 +57,9 @@ export interface LearnExamApi {
 }
 
 export interface ChatStoreApi {
-  list: (options?: { mode?: ConversationMode }) => Promise<ChatSessionMeta[]>;
+  list: (options?: ChatSessionListOptions) => Promise<ChatSessionMeta[]>;
+  checkConversationReference?: (sourceId: string, destinationId?: string) => Promise<boolean>;
+  openInReactChatWindow?: (id: string) => Promise<unknown>;
   getSidebarOrganization: () => Promise<SidebarOrganizationSnapshot>;
   applySidebarOrganization: (expectedRevision: number, draft: SidebarOrganizationDraft) => Promise<SidebarOrganizationResult>;
   onSidebarOrganizationChanged: (callback: () => void) => () => void;

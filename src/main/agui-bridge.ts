@@ -990,6 +990,15 @@ export function registerAgUiIpc(
       if (captionFallback) {
         options.imageCaptionFallback = async () => attachConversationReference(await captionFallback(), reference.context);
       }
+      const compactTranscript = options.compactTranscript;
+      if (compactTranscript) options.compactTranscript = async request => {
+        const rebuilt = await compactTranscript(request);
+        request.signal?.throwIfAborted();
+        const current = await loadConversationReference(sessionId, sourceId).catch(() => undefined);
+        request.signal?.throwIfAborted();
+        return current?.context === reference.context
+          ? attachConversationReference(rebuilt, reference.context, { afterCompaction: true }) : rebuilt;
+      };
       const source: CompanionReference = { kind: "conversation", title: reference.title, conversationId: sourceId };
       companionReferences = [source, ...(companionReferences ?? [])].slice(0, 6);
       // A user-selected excerpt has no canonical message-pair provenance.

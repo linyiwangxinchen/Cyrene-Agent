@@ -22,7 +22,7 @@ import type { NewsApi, NewsPayload } from "../shared/news-types";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 import { exposeMusicApi } from "./music";
 import type { AppUpdateApi, AppUpdateState } from "../shared/app-update";
-import type { ConversationMode } from "../shared/chat-types";
+import type { ChatSessionListOptions, ConversationMode } from "../shared/chat-types";
 import type { SkillSuggestionItem, SkillSuggestionMode } from "../shared/skill-suggestions";
 import type { GmailAccountStatus, GmailClientConfigStatus } from "../shared/gmail-types";
 import type { MailAttachmentRef, MailDraftCardData } from "../shared/mail-draft-card";
@@ -648,6 +648,8 @@ const userApi = {
 
 const memoryPanelApi = {
   getData: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_DATA),
+  getVectorIndexStatus: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_VECTOR_INDEX),
+  startVectorIndexRepair: (allowDownload: boolean) => ipcRenderer.invoke(IPC.MEMORY_PANEL_START_VECTOR_REPAIR, allowDownload),
   getGraph: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_GRAPH),
   getSummaryMemory: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_SUMMARY),
   saveL0: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_PANEL_SAVE_L0, patch),
@@ -731,7 +733,9 @@ contextBridge.exposeInMainWorld("live2dDiagnostics", live2dDiagnosticsApi);
 
 // 聊天会话存储（多对话历史）
 const chatStoreApi = {
-  list: (options?: { mode?: "chat" | "work" | "code" | "learn" }) => ipcRenderer.invoke(IPC.CHATS_LIST, options),
+  list: (options?: ChatSessionListOptions) => ipcRenderer.invoke(IPC.CHATS_LIST, options),
+  checkConversationReference: (sourceId: string, destinationId?: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.CHATS_CHECK_REFERENCE, { sourceId, destinationId }),
   getSidebarOrganization: () => ipcRenderer.invoke(IPC.CHATS_SIDEBAR_ORGANIZATION_GET) as Promise<SidebarOrganizationSnapshot>,
   applySidebarOrganization: (expectedRevision: number, draft: SidebarOrganizationDraft) =>
     ipcRenderer.invoke(IPC.CHATS_SIDEBAR_ORGANIZATION_APPLY, { expectedRevision, draft }) as Promise<SidebarOrganizationResult>,

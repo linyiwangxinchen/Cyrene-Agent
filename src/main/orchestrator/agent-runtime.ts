@@ -2,6 +2,7 @@ import { affectPresentation } from "../character-packs/xilian-pack";
 import { app } from "electron";
 import path from "node:path";
 import { InitiativeOpportunityStore } from "../proactive/initiative-opportunities";
+import { isMemoryFollowupAtomOpen, MEMORY_FOLLOWUP_SOURCE } from "../proactive/memory-initiative";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import type { ScheduledTask } from "../scheduler/types";
 import type { ChannelId } from "../channels/types";
@@ -19,13 +20,14 @@ import { buildToneInjection } from "./tone-injector";
 import { buildAlwaysOnContext, buildVectorMemoryContext, scheduleMemoryWrite } from "./index";
 import { buildMemoryCompatibilityContext } from "../memory/memory-compatibility-context";
 import { filterActiveSocialAtoms } from "../memory/memory-owner-recall";
+import { getMemoryModeVersion, isPersonalMemoryEnabled, normalizeMemoryMode } from "../memory/memory-mode";
 import { isOwnerMemoryScope, resolvePersonalMemoryScope } from "../memory/memory-scope";
 import { scheduleSummaryTurn } from "../memory/summary-memory-scheduler";
 import { scheduleWikiTurn } from "../memory/wiki-memory-scheduler";
 import { matchSticker } from "../sticker-text-matcher";
 import type { StickerTextEntry } from "../sticker-text-matcher";
 import { buildRelationshipContext, recordRelationshipTurn, getRelationshipStore, type CompanionFeedbackInput } from "../relationship/relationship-log";
-import { buildPersonMemoryContext } from "../social-context/context";
+import { buildPersonMemoryContext, socialAtomDisplayText } from "../social-context/context";
 import { listXilianReferenceImages } from "../persona/xilian-reference-images";
 import { buildSelfieOfferHint, getSharedSelfieLog, normalizeSelfieFrequency, relationshipAllowsSelfie } from "../persona/xilian-selfie-moments";
 import * as momentsStore from "../moments/moments-store";
@@ -290,7 +292,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         buildAlwaysOnContext(userText, messages as any, includeProfile, true)) as BuildOptionsDeps["buildAlwaysOnContext"],
       buildVectorMemoryContext,
       buildMemoryCompatibilityContext,
-      buildXilianLifeContext: (userText) => {
+      buildXilianLifeContext: async (userText) => {
         if (!scope) return "";
         try {
           const now = Date.now();
@@ -303,11 +305,24 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           if (!ownerContext) return life;
           if (!/(?:什么|有没有|有没|有什么|还有|之前|刚才).{0,12}(?:想.{0,4}(?:说|分享)|没说)|想.{0,4}(?:说|分享).{0,10}什么/u.test(userText)
             || getRelationshipStore().getControls().paused) return life;
-          const thoughts = initiativeStore.readThoughts({ now, limit: 20 })
+          const held = initiativeStore.readThoughts({ now, limit: 20 })
             .filter(thought => thought.source !== "user_care")
             .filter(thought => thought.source !== "moment:plugin" || rawDeps.loadGeneralSettings().companionPluginSharingEnabled)
-            .filter(thought => thought.conversationId ? thought.conversationId === sessionId : !sessionId?.startsWith("channel:"))
-            .slice(0, 3).map(thought => thought.summary);
+            .filter(thought => thought.conversationId ? thought.conversationId === sessionId : !sessionId?.startsWith("channel:"));
+          const memoryVersion = getMemoryModeVersion();
+          const memoryIds = new Set(held.filter(thought => thought.source === MEMORY_FOLLOWUP_SOURCE
+            && thought.conversationId === sessionId).map(thought => thought.sourceEventId));
+          const active = sessionId && memoryIds.size && isPersonalMemoryEnabled() && normalizeMemoryMode(rawDeps.loadModelSettings().memoryMode) !== "off"
+            ? await filterActiveSocialAtoms(rawDeps.socialAtomStore.listActive(sessionId, now, "owner")
+              .filter(atom => memoryIds.has(atom.id) && isMemoryFollowupAtomOpen(atom, now))).catch(() => [])
+            : [];
+          const checkedAt = Date.now();
+          const memoryThoughts = getMemoryModeVersion() === memoryVersion
+            ? new Map(active.filter(atom => isMemoryFollowupAtomOpen(atom, checkedAt)).map(atom => [atom.id, socialAtomDisplayText(atom)]))
+            : new Map<string, string>();
+          const thoughts = held.map(thought => thought.source === MEMORY_FOLLOWUP_SOURCE
+            ? memoryThoughts.get(thought.sourceEventId) : thought.summary)
+            .filter((text): text is string => text !== undefined).slice(0, 3);
           return thoughts.length ? `${life}\n\n【此前留着没有主动说的念头】\n挑一件和对方问的事有关的说。\n${thoughts.join("\n")}` : life;
         } catch (error) {
           console.warn("[XilianWorld] 构建桌面生活上下文失败，已降级为空", error);

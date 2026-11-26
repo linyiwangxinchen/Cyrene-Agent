@@ -1,7 +1,5 @@
-// @xenova/transformers is ESM-only, use dynamic import in CJS context
-import { checkEmbeddingModelInstalled, getProjectModelBaseDir } from "./model-status";
-import * as path from "path";
-import * as os from "os";
+import { checkEmbeddingModelInstalled, getModelInstallStatusDetail } from "./model-status";
+import { loadLocalTransformerPipeline } from "./local-transformer-pipeline";
 
 // ── 错误类型 ──
 export class EmbeddingDimensionMismatchError extends Error {
@@ -81,8 +79,6 @@ const localPipelineLoads: Map<string, Promise<any>> = new Map();
 let currentModelKey: string = DEFAULT_MODEL_KEY;
 let localPipelineInitCount = 0;
 
-const importEsm = new Function("moduleName", "return import(moduleName)") as (moduleName: string) => Promise<any>;
-
 async function getLocalPipeline(modelKey?: string): Promise<any> {
   const key = modelKey || currentModelKey;
   const config = LOCAL_MODELS[key];
@@ -95,19 +91,9 @@ async function getLocalPipeline(modelKey?: string): Promise<any> {
 
   const load = (async () => {
     localPipelineInitCount += 1;
-    const { pipeline, env } = await importEsm("@xenova/transformers");
-    env.allowLocalModels = true;
-    env.allowRemoteModels = false;
-    env.useBrowserCache = false;
-    // 主路径：项目根 models/（用户实际放模型的地方）。
-    // 兜底：HF cache，通过 cache_dir 选项传给 pipeline。
-    // transformers 内部会按 (localModelPath, cache_dir) 顺序查找文件。
-    const modelBaseDir = getProjectModelBaseDir("embedding", key);
-    if (!modelBaseDir) throw new Error(`Local embedding model "${key}" is not installed`);
-    env.localModelPath = modelBaseDir;
-    const pipe = await pipeline("feature-extraction", config.hfName, {
-      cache_dir: path.join(os.homedir(), ".cache", "huggingface"),
-    });
+    const modelDir = getModelInstallStatusDetail("embedding", key).matchedAt;
+    if (!modelDir) throw new Error(`Local embedding model "${key}" is not installed`);
+    const pipe = await loadLocalTransformerPipeline("feature-extraction", modelDir);
     localPipelines.set(key, pipe);
     return pipe;
   })();
@@ -128,6 +114,11 @@ export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvid
   if (!checkEmbeddingModelInstalled(key)) {
     return null;
   }
+  const validate = (data: Float32Array) => {
+    if (data.length !== config.dims) throw new EmbeddingDimensionMismatchError(config.dims, data.length, config.hfName);
+    if (data.some(value => !Number.isFinite(value))) throw new Error(`Invalid local embedding values: ${config.hfName}`);
+    return Array.from(data);
+  };
 
   return {
     name: "local-" + config.hfName.split("/").pop(),
@@ -144,7 +135,7 @@ export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvid
     async embed(text: string): Promise<number[]> {
       const pipe = await getLocalPipeline(key);
       const result: any = await pipe(text, { pooling: "mean", normalize: true });
-      return Array.from(result.data as Float32Array);
+      return validate(result.data as Float32Array);
     },
 
     async embedBatch(texts: string[]): Promise<number[][]> {
@@ -163,7 +154,7 @@ export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvid
       const dim = shape[1];
       const results: number[][] = [];
       for (let i = 0; i < texts.length; i++) {
-        results.push(Array.from(data.subarray(i * dim, (i + 1) * dim)));
+        results.push(validate(data.subarray(i * dim, (i + 1) * dim)));
       }
       return results;
     },

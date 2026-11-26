@@ -94,8 +94,8 @@ export function createReactChatWindowShell(): BrowserWindow {
     });
   }
 
-  window.webContents.on("did-start-loading", () => {
-    reactChatSession.markLoading();
+  window.webContents.on("did-start-navigation", (details) => {
+    if (details.isMainFrame && !details.isSameDocument) reactChatSession.markLoading();
   });
 
   window.on("closed", () => {

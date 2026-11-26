@@ -174,6 +174,22 @@ export async function verifyDesktop(profile, captured, { seedTiebaLearning, live
     console.log("PASS Windows Electron model independently searches and reads an earlier Chat through Responses tools");
     await page.getByRole("button", { name: "引用会话", exact: true }).click();
     await page.getByRole("textbox", { name: "搜索聊天会话标题" }).fill("桌面引用来源");
+    await page.getByRole("button", { name: "查看会话", exact: true }).click();
+    const original = page.getByText(/DESKTOP_OLD_REFERENCE_TEXT/).first();
+    try { await original.waitFor({ timeout: 10_000 }); }
+    catch (error) {
+      const dispatcher = await application.evaluate(({ app }) => {
+        const appRequire = process.getBuiltinModule("module").createRequire(app.getAppPath() + "/package.json");
+        const { reactChatSession } = appRequire("./dist/main/main/windows/window-state.js");
+        return { ready: reactChatSession.isReady(), pending: reactChatSession.getPending() };
+      });
+      throw new Error(`Earlier Chat did not open. Dispatcher ${JSON.stringify(dispatcher)}. Rendered fixture: ${(await page.locator("body").innerText()).slice(-2500)}`, { cause: error });
+    }
+    assert.equal(await page.evaluate(id => window.chatStore.openInReactChatWindow(id), targetId), true);
+    await original.waitFor({ state: "hidden" });
+    console.log("PASS Windows Electron reference picker opens the earlier Chat and displays its original text");
+    await page.getByRole("button", { name: "引用会话", exact: true }).click();
+    await page.getByRole("textbox", { name: "搜索聊天会话标题" }).fill("桌面引用来源");
     await page.getByRole("button", { name: /桌面引用来源/ }).click();
     const input = page.locator(".cy-composer textarea");
     await input.fill("请接着聊 DESKTOP_MANUAL_REFERENCE_CHECK");

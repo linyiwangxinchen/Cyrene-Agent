@@ -2,11 +2,7 @@ import type { ConversationDatabase } from "./conversation-database";
 
 /** Only rebuildable derivative metadata uses this schema. FTS availability is checked on demand. */
 export function migrateConversationHistoryIndex(database: ConversationDatabase): void {
-  if (database.db.prepare("SELECT version FROM schema_migrations WHERE version=11").get()) {
-    database.db.exec("UPDATE history_index_state SET dirty=1 WHERE dirty=2");
-    return;
-  }
-  database.transaction(() => database.db.exec(`
+  if (!database.db.prepare("SELECT version FROM schema_migrations WHERE version=11").get()) database.transaction(() => database.db.exec(`
     CREATE TABLE history_index_state(
       conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
       -- 0 is current, 1 needs rebuilding, 2 was unreadable in the current worker.
@@ -49,4 +45,15 @@ export function migrateConversationHistoryIndex(database: ConversationDatabase):
     BEGIN UPDATE history_index_state SET dirty=1 WHERE conversation_id=new.conversation_id; END;
     INSERT INTO schema_migrations VALUES(11);
   `));
+  if (!database.db.prepare("SELECT version FROM schema_migrations WHERE version=12").get()) {
+    // The previous projection omitted settled user-only messages. Rebuild
+    // derivative docs lazily while retaining the original transcript.
+    database.transaction(() => database.db.exec(`
+      CREATE TRIGGER history_index_pending_dispatch AFTER UPDATE OF record_json ON conversations
+        WHEN json_extract(new.record_json,'$.pendingDispatch.messageId') IS NOT json_extract(old.record_json,'$.pendingDispatch.messageId')
+      BEGIN UPDATE history_index_state SET dirty=1 WHERE conversation_id=new.id; END;
+      UPDATE history_index_state SET dirty=1;
+      INSERT INTO schema_migrations VALUES(12);
+    `));
+  } else database.db.exec("UPDATE history_index_state SET dirty=1 WHERE dirty=2");
 }
