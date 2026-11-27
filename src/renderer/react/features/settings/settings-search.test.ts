@@ -24,6 +24,7 @@ describe("设置搜索", () => {
       expect(searchSettings(t(key), t).some((item) => item.id === key)).toBe(true);
     }
     expect(searchSettings("FONT SIZE", translate(en)).some((item) => item.id === key)).toBe(true);
+    expect(searchSettings("BGE-M3", translate(zh))[0]?.id).toBe("settingsPage.memory.vectorIndex.title");
     const voice = searchSettings("", translate(zh), "voice");
     expect(voice.length).toBeGreaterThan(2);
     expect(voice.some((item) => item.id === "section:asr")).toBe(true);

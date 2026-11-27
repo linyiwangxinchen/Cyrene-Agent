@@ -312,6 +312,8 @@ export const IPC = {
   EMBEDDING_SET_MODEL: "embedding:set-model",
   RERANKER_SET_MODE: "reranker:set-mode",
   RERANKER_GET_STATUS: "reranker:get-status",
+  RERANKER_GET_LOCAL_STATUS: "reranker:get-local-status",
+  RERANKER_START_LOCAL_SETUP: "reranker:start-local-setup",
   // unified model install status
   MODEL_GET_INSTALL_STATUS: "model:get-install-status",
   // shell external URL

@@ -5,22 +5,47 @@ import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 
-const MODEL_REVISION = "4de13258303883538bd53b696b452bf8099f0858";
-const MODEL_URL = `https://huggingface.co/Xenova/bge-m3/resolve/${MODEL_REVISION}/`;
-
 interface ModelFile {
   relativePath: string;
   bytes: number;
   sha256: string;
 }
 
-// Matches the filenames loaded by Transformers.js v2's quantized feature-extraction pipeline.
-const MODEL_FILES: readonly ModelFile[] = [
-  { relativePath: "config.json", bytes: 770, sha256: "734a79bf12d388c1467a4e3ab625f45de7f6906cffcfb93a1eca1787504bed95" },
-  { relativePath: "tokenizer_config.json", bytes: 1173, sha256: "7e4c1cc848840aeccdd763458c18dd525eb0f795c992e00ebe9c28554e7db2d4" },
-  { relativePath: "tokenizer.json", bytes: 17082821, sha256: "6710678b12670bc442b99edc952c4d996ae309a7020c1fa0096dd245c2faf790" },
-  { relativePath: "onnx/model_quantized.onnx", bytes: 569694530, sha256: "0826f8c1ab9edf1801db86c61919d4d108e8bfc0b809ec823ad366882ff0b77d" },
-];
+interface LocalModel {
+  name: string;
+  directory: readonly string[];
+  repository: string;
+  revision: string;
+  files: readonly ModelFile[];
+}
+
+// The pinned ModelScope trees contain the byte-identical Xenova files used by
+// Transformers.js v2. Keeping the same BGE-M3 weights preserves existing vectors.
+export const BGE_M3: LocalModel = {
+  name: "BGE-M3",
+  directory: ["Xenova", "bge-m3"],
+  repository: "Xenova/bge-m3",
+  revision: "0bccab823e9e294c2940cbed845be6b3292d61ae",
+  files: [
+    { relativePath: "config.json", bytes: 770, sha256: "734a79bf12d388c1467a4e3ab625f45de7f6906cffcfb93a1eca1787504bed95" },
+    { relativePath: "tokenizer_config.json", bytes: 1173, sha256: "7e4c1cc848840aeccdd763458c18dd525eb0f795c992e00ebe9c28554e7db2d4" },
+    { relativePath: "tokenizer.json", bytes: 17082821, sha256: "6710678b12670bc442b99edc952c4d996ae309a7020c1fa0096dd245c2faf790" },
+    { relativePath: "onnx/model_quantized.onnx", bytes: 569694530, sha256: "0826f8c1ab9edf1801db86c61919d4d108e8bfc0b809ec823ad366882ff0b77d" },
+  ],
+};
+
+export const BGE_RERANKER: LocalModel = {
+  name: "bge-reranker-base",
+  directory: ["bge-reranker-base"],
+  repository: "Xenova/bge-reranker-base",
+  revision: "74ab3f01e5063880e3e840c243239fe7c67ff668",
+  files: [
+    { relativePath: "config.json", bytes: 782, sha256: "b6575b9d5be20d6747417c8e20c5a0db1636356e0b6d422d7244c628423c4d4c" },
+    { relativePath: "tokenizer_config.json", bytes: 443, sha256: "a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b" },
+    { relativePath: "tokenizer.json", bytes: 17098079, sha256: "48564c5c7d3fa64d85d95e65414a542385f88b0f128fd8d4163fd7a57f2be05c" },
+    { relativePath: "onnx/model_quantized.onnx", bytes: 279301077, sha256: "dd98f3e67837d23210a6b7550c08cced4f61845b940ac45be3565840a10f3244" },
+  ],
+};
 
 interface InstallerOptions {
   request?: typeof fetch;
@@ -38,14 +63,14 @@ async function fileStat(filePath: string, followLinks = true) {
   }
 }
 
-export function createLocalEmbeddingModelInstaller(
-  files: readonly ModelFile[],
+export function createLocalModelInstaller(
+  model: LocalModel,
   { request = fetch, totalTimeoutMs = 30 * 60_000, idleTimeoutMs = 45_000 }: InstallerOptions = {},
 ) {
   const inFlight = new Map<string, Promise<void>>();
 
   async function isComplete(destination: string): Promise<boolean> {
-    const stats = await Promise.all(files.map(({ relativePath }) => fileStat(path.join(destination, relativePath))));
+    const stats = await Promise.all(model.files.map(({ relativePath }) => fileStat(path.join(destination, relativePath))));
     // Existing models can be user-provided, including a different compatible revision.
     return stats.every((stat) => stat?.isFile() && stat.size > 0);
   }
@@ -60,7 +85,10 @@ export function createLocalEmbeddingModelInstaller(
     const timeout = setTimeout(() => controller.abort(new Error("连接或下载在等待数据时超时")), idleTimeoutMs);
     const signal = AbortSignal.any([totalSignal, controller.signal]);
     try {
-      const response = await request(`${MODEL_URL}${file.relativePath}`, {
+      const url = new URL(`https://www.modelscope.cn/api/v1/models/${model.repository}/repo`);
+      url.searchParams.set("Revision", model.revision);
+      url.searchParams.set("FilePath", file.relativePath);
+      const response = await request(url, {
         signal,
         headers: { "Accept-Encoding": "identity" },
       });
@@ -96,7 +124,7 @@ export function createLocalEmbeddingModelInstaller(
     } catch (error) {
       const cause = signal.aborted ? signal.reason : error;
       const message = cause instanceof Error ? cause.message : String(cause);
-      throw new Error(`BGE-M3 文件 ${file.relativePath} 下载失败：${message}`, { cause });
+      throw new Error(`${model.name} 文件 ${file.relativePath} 下载失败：${message}`, { cause });
     } finally {
       clearTimeout(timeout);
       controller.abort();
@@ -106,16 +134,16 @@ export function createLocalEmbeddingModelInstaller(
   async function install(destination: string): Promise<void> {
     if (await isComplete(destination)) return;
     if (await fileStat(destination, false)) {
-      throw new Error(`BGE-M3 模型目录不完整。请将现有目录移到其他位置后重试：${destination}`);
+      throw new Error(`${model.name} 模型目录不完整。请将现有目录移到其他位置后重试：${destination}`);
     }
 
     const parent = path.dirname(destination);
     await fs.mkdir(parent, { recursive: true });
     const resolvedParent = await fs.realpath(parent);
-    const stagingDir = await fs.mkdtemp(path.join(resolvedParent, ".bge-m3-"));
+    const stagingDir = await fs.mkdtemp(path.join(resolvedParent, `.${path.basename(destination)}-`));
     const totalSignal = AbortSignal.timeout(totalTimeoutMs);
     try {
-      for (const file of files) await download(file, stagingDir, totalSignal);
+      for (const file of model.files) await download(file, stagingDir, totalSignal);
       totalSignal.throwIfAborted();
 
       // Publishing the directory in one rename keeps the runtime from seeing partial files.
@@ -133,7 +161,7 @@ export function createLocalEmbeddingModelInstaller(
   }
 
   return function installForUserData(userDataDir: string): Promise<void> {
-    const destination = path.resolve(userDataDir, "models", "Xenova", "bge-m3");
+    const destination = path.resolve(userDataDir, "models", ...model.directory);
     const key = process.platform === "win32" ? destination.toLowerCase() : destination;
     let pending = inFlight.get(key);
     if (!pending) {
@@ -144,4 +172,5 @@ export function createLocalEmbeddingModelInstaller(
   };
 }
 
-export const installLocalEmbeddingModel = createLocalEmbeddingModelInstaller(MODEL_FILES);
+export const installLocalEmbeddingModel = createLocalModelInstaller(BGE_M3);
+export const installLocalRerankerModel = createLocalModelInstaller(BGE_RERANKER);

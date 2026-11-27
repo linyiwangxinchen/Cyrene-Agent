@@ -7,17 +7,18 @@ import { useTranslation } from "../../i18n";
 import { SettingsInput, SettingsSlider, SettingsSwitch } from "../../components/ui/SettingsControls";
 import { StickerManagerModal } from "./StickerManagerModal";
 import { Card } from "../../components/ui/Card";
+import { LocalRerankerControls } from "./LocalRerankerControls";
+import { VectorMemoryIndexControls } from "./VectorMemoryIndexControls";
 
 type RuntimeSync = "off" | "local" | "llm";
 type StickerSize = "small" | "standard" | "large";
 type Values = { runtimeSync: RuntimeSync; stickerEnabled: boolean; stickerSize: StickerSize; stickerSimilarityThreshold: number; embeddingDimensions?: number };
 type Notice = { type: "success" | "error" | "info"; text: string };
-type ExtendedSettingsApi = SettingsApi & { getRerankerStatus?: () => Promise<{ light: boolean; standard: boolean }> };
 
 const defaults: Values = { runtimeSync: "off", stickerEnabled: true, stickerSize: "standard", stickerSimilarityThreshold: 0.55 };
 
-function settingsApi(): ExtendedSettingsApi | undefined {
-  return window.settings as unknown as ExtendedSettingsApi | undefined;
+function settingsApi(): SettingsApi | undefined {
+  return window.settings as unknown as SettingsApi | undefined;
 }
 
 function readValues(config: Partial<Values>): Values {
@@ -37,9 +38,6 @@ export function CyreneSettingsPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [embeddingInstalled, setEmbeddingInstalled] = useState<boolean | null>(null);
-  const [rerankerInstalled, setRerankerInstalled] = useState<boolean | null>(null);
-  const [rerankerMode, setRerankerMode] = useState(() => localStorage.getItem("cyrene.reranker.mode") === "none" ? "none" : "standard");
   const [addOpen, setAddOpen] = useState(false);
   const [stickerManagerOpen, setStickerManagerOpen] = useState(false);
   const [addBusy, setAddBusy] = useState(false);
@@ -54,9 +52,6 @@ export function CyreneSettingsPanel() {
     const api = settingsApi();
     if (!api) { setNotice({ type: "error", text: t("settingsPage.cyrene.unavailable") }); setLoading(false); return; }
     void api.getConfig().then((config) => { if (active) { setValues(readValues(config)); setMemoryMode(config.memoryMode === "summary" || config.memoryMode === "wiki" || config.memoryMode === "off" ? config.memoryMode : "vector"); setLoading(false); } }).catch(() => { if (active) { setNotice({ type: "error", text: t("settingsPage.cyrene.loadFailed") }); setLoading(false); } });
-    void api.getRerankerStatus?.().then((status) => { if (active) setRerankerInstalled(status.standard); }).catch(() => {});
-    const modelConfig = (window as Window & { modelConfig?: { getModelInstallStatus?: () => Promise<{ embedding?: { bgem3?: boolean } }> } }).modelConfig;
-    void modelConfig?.getModelInstallStatus?.().then((status) => { if (active) setEmbeddingInstalled(Boolean(status.embedding?.bgem3)); }).catch(() => {});
     return () => { active = false; };
   }, [t]);
 
@@ -127,28 +122,6 @@ export function CyreneSettingsPanel() {
     setAddOpen(true);
   }
 
-  async function selectReranker(mode: "standard" | "none") {
-    const api = settingsApi();
-    if (!api?.rerankerSetMode) return;
-    try {
-      const okay = await api.rerankerSetMode(mode);
-      if (!okay) throw new Error("Reranker switch failed");
-      localStorage.setItem("cyrene.reranker.mode", mode);
-      setRerankerMode(mode);
-    } catch { setNotice({ type: "error", text: t("settingsPage.cyrene.rerankerFailed") }); }
-  }
-
-  async function selectEmbedding() {
-    const api = settingsApi();
-    if (!api?.embeddingSetModel) return;
-    try {
-      const result = await api.embeddingSetModel("bgem3");
-      if (!result.ok) throw new Error(result.error);
-      localStorage.setItem("cyrene.rag.model", "bgem3");
-      setNotice({ type: "success", text: t("settingsPage.cyrene.embeddingSelected") });
-    } catch { setNotice({ type: "error", text: t("settingsPage.cyrene.embeddingFailed") }); }
-  }
-
   return <>
     <h1 data-settings-search-loading={loading}>{t("settingsPage.cyrene.title")}</h1>
     <p className="cy-settings-intro">{t("settingsPage.cyrene.description")}</p>
@@ -167,9 +140,9 @@ export function CyreneSettingsPanel() {
       </section>
       {memoryMode === "vector" && <section className="cy-settings-section"><div className="cy-settings-section__heading"><h2 data-settings-search-id="settingsPage.cyrene.retrievalTitle"><BookOpen size={18} />{t("settingsPage.cyrene.retrievalTitle")}</h2><p>{t("settingsPage.cyrene.retrievalDescription")}</p></div>
         <Card>
-            <div className="cy-settings-row"><div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.cyrene.embeddingModel">{t("settingsPage.cyrene.embeddingModel")}</strong><span>{t("settingsPage.cyrene.embeddingHint")}</span></div><Button className="cy-cyrene-model-choice" onClick={() => void selectEmbedding()}>BGE-M3 · {embeddingInstalled === null ? t("settingsPage.cyrene.unknown") : embeddingInstalled ? t("settingsPage.cyrene.installed") : t("settingsPage.cyrene.notInstalled")}</Button></div>
+            <VectorMemoryIndexControls data-settings-search-id="settingsPage.cyrene.embeddingModel" />
             <div className="cy-settings-row"><div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.cyrene.embeddingDimensions">{t("settingsPage.cyrene.embeddingDimensions")}</strong><span>{t("settingsPage.cyrene.embeddingDimensionsHint")}</span></div><SettingsInput className="cy-cyrene-dimensions" type="number" min={1} max={65536} value={values.embeddingDimensions ?? ""} placeholder={t("settingsPage.cyrene.autoDetect")} aria-label={t("settingsPage.cyrene.embeddingDimensions")} onChange={(event) => update("embeddingDimensions", event.target.value ? Number(event.target.value) : undefined)} /></div>
-            <div className="cy-settings-row cy-cyrene-radio-row"><div className="cy-settings-row__copy"><strong data-settings-search-id="settingsPage.cyrene.reranker">{t("settingsPage.cyrene.reranker")}</strong><span>{rerankerInstalled === null ? t("settingsPage.cyrene.unknown") : rerankerInstalled ? t("settingsPage.cyrene.installed") : t("settingsPage.cyrene.notInstalled")}</span></div><Radio.Group value={rerankerMode} optionType="button" buttonStyle="solid" onChange={(event) => void selectReranker(event.target.value as "standard" | "none")}><Radio.Button value="standard">bge-reranker-base</Radio.Button><Radio.Button value="none">{t("settingsPage.cyrene.off")}</Radio.Button></Radio.Group></div>
+            <LocalRerankerControls data-settings-search-id="settingsPage.cyrene.reranker" />
         </Card>
       </section>}
       <div className="cy-settings-form-footer"><Button type="primary" loading={saving} onClick={() => void save()}>{t("settingsPage.cyrene.save")}</Button></div>

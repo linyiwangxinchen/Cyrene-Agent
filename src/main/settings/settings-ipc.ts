@@ -10,7 +10,7 @@ import {
   reactChatWindow,
 } from "../windows/window-state";
 import type { RuntimeStateService } from "../orchestrator/runtime-state-service";
-import { initReranker, getRerankerInstallStatus, resetReranker } from "../rag/reranker";
+import { initReranker, getRerankerInstallStatus, isRerankerReady, resetReranker } from "../rag/reranker";
 import { isUserMemoryVectorIndexVerified, switchEmbeddingModel } from "../rag";
 import { testVendorConnection } from "../orchestrator/vendors/test-connection";
 import { getAdapterForConfig } from "../orchestrator/vendors";
@@ -26,9 +26,10 @@ import { getBrowserPanelController } from "../browser/browser-panel-runtime";
 import { getMemoryModeVersion, isVectorMemoryEnabled, normalizeMemoryMode, type MemoryMode } from "../memory/memory-mode";
 import { watchSystemUiTheme } from "../system-ui-theme";
 import { getModelInstallStatus } from "../rag/model-status";
-import { installLocalEmbeddingModel } from "../rag/install-embedding-model";
+import { installLocalEmbeddingModel, installLocalRerankerModel } from "../rag/install-local-model";
 import type { MemoryRagReconciliationReport } from "../memory/memory-rag-reconciliation";
 import type { MemoryVectorIndexStatus } from "../../shared/memory-vector-status";
+import type { LocalRerankerStatus } from "../../shared/local-reranker-status";
 
 export interface SettingsIpcDependencies {
   get windowManager(): WindowManager | null;
@@ -325,16 +326,82 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     return vectorIndexStatus();
   });
 
-  ipc.handle(IPC.RERANKER_SET_MODE, async (_event, mode: "standard" | "none") => {
-    const current = getModelSettings();
-    saveModelSettings({ ...current, rerankerMode: mode });
-    if (normalizeMemoryMode(current.memoryMode) === "vector") await initReranker(mode);
-    else resetReranker();
-    console.log("[Cyrene] reranker mode switched to", mode);
-    return true;
+  let rerankerSetupPhase: LocalRerankerStatus["phase"] = "idle";
+  let rerankerSetupAttempt = 0;
+  const rerankerIsBusy = () => rerankerSetupPhase === "downloading" || rerankerSetupPhase === "activating";
+
+  function localRerankerStatus(): LocalRerankerStatus {
+    return {
+      modelInstalled: getRerankerInstallStatus().standard,
+      ready: isVectorMemoryEnabled() && isRerankerReady(),
+      enabled: getModelSettings().rerankerMode === "standard",
+      phase: rerankerSetupPhase,
+    };
+  }
+
+  async function configureLocalReranker(download: boolean): Promise<boolean> {
+    const attempt = ++rerankerSetupAttempt;
+    const version = getMemoryModeVersion();
+    rerankerSetupPhase = download ? "downloading" : "activating";
+    function stillCurrent() {
+      if (attempt !== rerankerSetupAttempt) return false;
+      if (version !== getMemoryModeVersion()) {
+        rerankerSetupPhase = "modeChanged";
+        return false;
+      }
+      return true;
+    }
+
+    try {
+      if (download) await installLocalRerankerModel(app.getPath("userData"));
+      if (!stillCurrent()) return false;
+
+      rerankerSetupPhase = "activating";
+      const ready = await initReranker("standard");
+      if (!stillCurrent()) return false;
+      if (!ready) {
+        rerankerSetupPhase = "activationFailed";
+        return false;
+      }
+
+      broadcastModelConfigChanged(saveModelSettings({ rerankerMode: "standard" }));
+      rerankerSetupPhase = "complete";
+      return true;
+    } catch (error) {
+      if (stillCurrent()) {
+        const downloading = rerankerSetupPhase === "downloading";
+        rerankerSetupPhase = downloading ? "downloadFailed" : "activationFailed";
+        console.error(downloading ? "[RAG] Reranker download failed:" : "[RAG] Reranker activation failed:", error);
+      }
+      return false;
+    }
+  }
+
+  ipc.handle(IPC.RERANKER_SET_MODE, async (_event, mode: unknown) => {
+    if (mode !== "standard" && mode !== "none") return false;
+    if (mode === "none" || !isVectorMemoryEnabled()) {
+      rerankerSetupAttempt++;
+      rerankerSetupPhase = "idle";
+      resetReranker();
+      broadcastModelConfigChanged(saveModelSettings({ rerankerMode: mode }));
+      return true;
+    }
+    if (rerankerIsBusy()) return false;
+    return configureLocalReranker(false);
   });
 
   ipc.handle(IPC.RERANKER_GET_STATUS, () => getRerankerInstallStatus());
+  ipc.handle(IPC.RERANKER_GET_LOCAL_STATUS, () => localRerankerStatus());
+  ipc.handle(IPC.RERANKER_START_LOCAL_SETUP, (_event, allowDownload: unknown) => {
+    if (rerankerIsBusy()) return localRerankerStatus();
+    if (!isVectorMemoryEnabled()) {
+      rerankerSetupPhase = "modeChanged";
+      return localRerankerStatus();
+    }
+    const download = allowDownload === true && !getRerankerInstallStatus().standard;
+    void configureLocalReranker(download);
+    return localRerankerStatus();
+  });
 
   ipc.handle(IPC.MODEL_GET_INSTALL_STATUS, () => {
     return getModelInstallStatus();

@@ -219,6 +219,8 @@ const sections: {
       "settingsPage.memory.l0Title",
       "settingsPage.memory.l1Title",
       "settingsPage.memory.l2Title",
+      "settingsPage.memory.vectorIndex.title",
+      "settingsPage.memory.localReranker.title",
       "settingsPage.memory.reflectionsTitle",
       "settingsPage.memory.vault.title",
       "settingsPage.memory.vault.autoSync",

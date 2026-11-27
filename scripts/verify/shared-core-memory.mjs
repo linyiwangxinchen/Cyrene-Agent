@@ -342,6 +342,19 @@ async function verifyVectorMemory() {
     assert.equal(card.content, entry.content);
     assert.equal(card.syncStatus, 'sync_failed');
   });
+  await check('Web reports missing reranker activation without starting an unrequested download', async () => {
+    const before = await invoke('reranker:get-local-status');
+    assert.equal(typeof before.ready, 'boolean');
+    assert.equal(typeof before.modelInstalled, 'boolean');
+    if (before.modelInstalled) return;
+    assert.equal(before.ready, false);
+    const accepted = await invoke('reranker:start-local-setup', false);
+    assert.equal(accepted.phase, 'activating');
+    await waitFor(async () => (await invoke('reranker:get-local-status')).phase === 'activationFailed', 'missing reranker is reported');
+    const after = await invoke('reranker:get-local-status');
+    assert.equal(after.ready, false);
+    assert.equal(after.enabled, before.enabled, 'a failed setup preserves the previous setting');
+  });
   const fact = vectorCandidates[2].content;
   function withVectorDatabase(run) {
     const database = new DatabaseSync(path.join(vectorDataDir, 'cyrene.sqlite'));
@@ -393,6 +406,7 @@ async function verifyVectorMemory() {
     seedPendingSocialJob('before-off-fixture');
     assert.equal((await invoke('settings:save-config', { memoryMode: 'off' })).memoryMode, 'off');
     assert.equal((await invoke('memory-panel:start-vector-repair', true)).phase, 'modeChanged');
+    assert.equal((await invoke('reranker:start-local-setup', true)).phase, 'modeChanged');
     assert.deepEqual(socialJobStatus('before-off-fixture'), { status: 'obsolete', payload_json: null });
     const prompt = await ask(recallQuestions[1]);
     assert.ok(!prompt.includes(fact));

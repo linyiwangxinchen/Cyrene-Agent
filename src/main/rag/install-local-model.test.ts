@@ -3,7 +3,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createLocalEmbeddingModelInstaller } from "./install-embedding-model";
+import { BGE_M3, BGE_RERANKER, createLocalModelInstaller } from "./install-local-model";
 
 const files = [
   { relativePath: "config.json", contents: "fixture config" },
@@ -15,7 +15,11 @@ const manifest = files.map(({ relativePath, contents }) => ({
   sha256: createHash("sha256").update(contents).digest("hex"),
 }));
 
-describe("local embedding model installation", () => {
+function createFixtureInstaller(options: Parameters<typeof createLocalModelInstaller>[1]) {
+  return createLocalModelInstaller({ ...BGE_M3, files: manifest }, options);
+}
+
+describe("local model installation from ModelScope", () => {
   let root: string;
   let destination: string;
   let modelParent: string;
@@ -35,7 +39,7 @@ describe("local embedding model installation", () => {
     const releaseLastFile = Promise.withResolvers<void>();
     const request = vi.fn<typeof fetch>().mockImplementation(async (input) => {
       const url = new URL(String(input));
-      const file = files.find(({ relativePath }) => url.pathname.endsWith(`/${relativePath}`));
+      const file = files.find(({ relativePath }) => url.searchParams.get("FilePath") === relativePath);
       if (!file) return new Response(null, { status: 404 });
       if (file === files[1]) {
         lastFileRequested.resolve();
@@ -43,7 +47,7 @@ describe("local embedding model installation", () => {
       }
       return new Response(file.contents, { headers: { "content-length": String(Buffer.byteLength(file.contents)) } });
     });
-    const install = createLocalEmbeddingModelInstaller(manifest, { request });
+    const install = createFixtureInstaller({ request });
 
     const first = install(root);
     expect(install(path.join(root, "."))).toBe(first);
@@ -57,7 +61,10 @@ describe("local embedding model installation", () => {
 
     expect(request).toHaveBeenCalledTimes(files.length);
     for (const [input] of request.mock.calls) {
-      expect(String(input)).toMatch(/^https:\/\/huggingface\.co\/Xenova\/bge-m3\/resolve\/[a-f0-9]{40}\//);
+      const url = new URL(String(input));
+      expect(url.origin).toBe("https://www.modelscope.cn");
+      expect(url.pathname).toBe("/api/v1/models/Xenova/bge-m3/repo");
+      expect(url.searchParams.get("Revision")).toBe(BGE_M3.revision);
     }
     for (const file of files) {
       await expect(fs.readFile(path.join(destination, file.relativePath), "utf8")).resolves.toBe(file.contents);
@@ -72,7 +79,7 @@ describe("local embedding model installation", () => {
       await fs.writeFile(filePath, "existing content");
     }
     const request = vi.fn<typeof fetch>();
-    const install = createLocalEmbeddingModelInstaller(manifest, { request });
+    const install = createFixtureInstaller({ request });
 
     await install(root);
     expect(request).not.toHaveBeenCalled();
@@ -84,7 +91,7 @@ describe("local embedding model installation", () => {
     await fs.mkdir(destination, { recursive: true });
     await fs.writeFile(existing, "manual content");
     const request = vi.fn<typeof fetch>();
-    const install = createLocalEmbeddingModelInstaller(manifest, { request });
+    const install = createFixtureInstaller({ request });
 
     await expect(install(root)).rejects.toThrow("模型目录不完整");
     expect(request).not.toHaveBeenCalled();
@@ -97,7 +104,7 @@ describe("local embedding model installation", () => {
       .mockResolvedValueOnce(new Response("x".repeat(manifest[1].bytes)))
       .mockResolvedValueOnce(new Response(files[0].contents))
       .mockResolvedValueOnce(new Response(files[1].contents));
-    const install = createLocalEmbeddingModelInstaller(manifest, { request });
+    const install = createFixtureInstaller({ request });
 
     await expect(install(root)).rejects.toThrow("SHA-256");
     await expect(fs.readdir(modelParent)).resolves.toEqual([]);
@@ -107,7 +114,7 @@ describe("local embedding model installation", () => {
 
   it("rejects a response that exceeds the pinned size even with no Content-Length header", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(new Response(`${files[0].contents}extra`));
-    const install = createLocalEmbeddingModelInstaller(manifest, { request });
+    const install = createFixtureInstaller({ request });
 
     await expect(install(root)).rejects.toThrow("超过预期文件长度");
     await expect(fs.readdir(modelParent)).resolves.toEqual([]);
@@ -115,10 +122,25 @@ describe("local embedding model installation", () => {
 
   it("aborts a stalled body and removes its staging directory", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(new Response(new ReadableStream()));
-    const install = createLocalEmbeddingModelInstaller(manifest, { request, idleTimeoutMs: 30 });
+    const install = createFixtureInstaller({ request, idleTimeoutMs: 30 });
 
     await expect(install(root)).rejects.toThrow("等待数据时超时");
     expect(request.mock.calls[0][1]?.signal?.aborted).toBe(true);
     await expect(fs.readdir(modelParent)).resolves.toEqual([]);
+  });
+
+  it("installs the separate reranker in the directory detected by the local runtime", async () => {
+    const request = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      expect(url.pathname).toBe("/api/v1/models/Xenova/bge-reranker-base/repo");
+      expect(url.searchParams.get("Revision")).toBe(BGE_RERANKER.revision);
+      const file = files.find(({ relativePath }) => url.searchParams.get("FilePath") === relativePath);
+      return file ? new Response(file.contents) : new Response(null, { status: 404 });
+    });
+    const install = createLocalModelInstaller({ ...BGE_RERANKER, files: manifest }, { request });
+    await install(root);
+    await expect(fs.readFile(path.join(root, "models", "bge-reranker-base", files[1].relativePath), "utf8"))
+      .resolves.toBe(files[1].contents);
+    await expect(fs.stat(destination)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

@@ -13,6 +13,7 @@ import { lazy, Suspense } from "react";
 const MemoryGraphPanel = lazy(() => import("./MemoryGraphPanel"));
 import { WikiKnowledgePanel } from "./WikiKnowledgePanel";
 import { VectorMemoryIndexControls } from "./VectorMemoryIndexControls";
+import { LocalRerankerControls } from "./LocalRerankerControls";
 
 type L0 = MemoryPanelPayload["l0"];
 type L1 = MemoryPanelPayload["l1"];
@@ -208,7 +209,10 @@ export function MemorySettingsPanel() {
         </Card>
       </section>
       {!modeLoading && memoryMode === "vector" && <section className="cy-settings-section"><div className="cy-settings-section__heading"><h2 data-settings-search-id="settingsPage.memory.l2Title"><FileSearch size={18} />{t("settingsPage.memory.l2Title")}</h2><p>{t("settingsPage.memory.l2Description")}</p></div>
-        <Card className="cy-memory-card"><VectorMemoryIndexControls onChanged={refreshVectorRecords} /><MemoryExportButton /><Input.Search value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("settingsPage.memory.searchPlaceholder")} allowClear />
+        <Card className="cy-memory-card">
+          <VectorMemoryIndexControls data-settings-search-id="settingsPage.memory.vectorIndex.title" onChanged={refreshVectorRecords} />
+          <LocalRerankerControls data-settings-search-id="settingsPage.memory.localReranker.title" />
+          <MemoryExportButton /><Input.Search value={search} onChange={(event) => setSearch(event.target.value)} placeholder={t("settingsPage.memory.searchPlaceholder")} allowClear />
           <div className="cy-memory-list">{filteredEvents.length ? filteredEvents.map((item) => <article className="cy-memory-record" key={item.id}><strong>{item.content}</strong><span>{item.triggerText || t("settingsPage.memory.noTrigger")}</span><small>{t(`settingsPage.memory.status.${item.status}`)} · {t("settingsPage.memory.weight", { weight: item.weight.toFixed(1) })} · {formatDateTime(item.createdAt)}{item.syncStatus && ` · ${t(`settingsPage.memory.vectorIndex.${item.syncStatus}`)}`}</small><MemoryRecordActions id={item.id} onChanged={reloadData} /></article>) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={search ? t("settingsPage.memory.noMatch") : t("settingsPage.memory.noEvents")} />}</div>
         </Card>
       </section>}

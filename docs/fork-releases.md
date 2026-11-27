@@ -64,6 +64,12 @@ Node/pnpm 或在目标机器重新编译，但需保留整个目录，且浏览�
 systemd 使用该启动器作为 ExecStart，数据目录继续由 `CYRENE_DATA_DIR` 指定。
 升级时先停止服务、备份数据目录，再切换完整发行目录，不能覆盖已有用户数据。
 
+### Linux Web 本地向量模型
+
+进入「设置 → 记忆」，切换到向量模式。事件片段下可以从魔搭社区下载 BGE-M3 并补建向量索引，也可以下载并启用 bge-reranker-base。已有完整模型时，可以直接修复索引或启用重排。任务由 Web 服务进程执行，切换设置页面后仍会继续。
+
+模型分别落在数据目录下的 `models/Xenova/bge-m3` 和 `models/bge-reranker-base`。服务进程需要可写的数据目录、磁盘空间和通往魔搭模型文件服务的网络。两个模型合计约 842 MiB。BGE-M3 的量化权重与旧下载源一致，已有兼容索引可以继续使用。
+
 ## Release 与上游同步
 
 Windows 打包完成后可执行 `node scripts/verify/windows-packaged.mjs release/win-unpacked`，

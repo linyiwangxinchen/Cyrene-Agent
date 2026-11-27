@@ -386,6 +386,8 @@ const settingsApi = {
   embeddingSetModel: (model: string) => ipcRenderer.invoke(IPC.EMBEDDING_SET_MODEL, model),
   rerankerSetMode: (mode: string) => ipcRenderer.invoke(IPC.RERANKER_SET_MODE, mode),
   getRerankerStatus: (): Promise<{ light: boolean; standard: boolean }> => ipcRenderer.invoke(IPC.RERANKER_GET_STATUS),
+  getLocalRerankerStatus: () => ipcRenderer.invoke(IPC.RERANKER_GET_LOCAL_STATUS),
+  startLocalRerankerSetup: (allowDownload: boolean) => ipcRenderer.invoke(IPC.RERANKER_START_LOCAL_SETUP, allowDownload),
   setToolEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke(IPC.TOOL_SET_ENABLED, { id, enabled }),
   getToolEnabled: () => ipcRenderer.invoke(IPC.TOOL_GET_ENABLED),
   // 三模适配层：工具-模式覆盖层（UI 设置面板用）

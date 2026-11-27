@@ -27,7 +27,7 @@ export function isSettingsSearchAvailable(id: string, state: SearchAvailability)
   if (/^settingsPage\.usage\.(heatmapTitle|trendsTitle|modelsTitle)$/.test(id)) return state.hasUsage === true;
   if (/^settingsPage\.cyrene\.(retrievalTitle|embeddingModel|embeddingDimensions|reranker)$/.test(id)) return state.memoryMode === "vector";
   if (/^settingsPage\.memory\.(summaryTitle|workspaceSummary|sessionSummary)$/.test(id)) return state.memoryMode === "summary" && (id !== "settingsPage.memory.workspaceSummary" || state.hasWorkspaceSummary === true);
-  if (id === "settingsPage.memory.l2Title") return state.memoryMode === "vector";
+  if (/^settingsPage\.memory\.(l2Title|vectorIndex\.title|localReranker\.title)$/.test(id)) return state.memoryMode === "vector";
   if (/^settingsPage\.memory\.(l0Title|l1Title|reflectionsTitle|vault\.title|vault\.autoSync)$/.test(id)) return state.memoryMode !== undefined && state.memoryMode !== "wiki" && (id !== "settingsPage.memory.vault.autoSync" || state.hasVault === true);
   return true;
 }

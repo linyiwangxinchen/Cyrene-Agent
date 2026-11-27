@@ -16,6 +16,8 @@ assert.match(execFileSync(launcher, ['--version'], { encoding: 'utf8' }), /Cyren
 assert.equal(execFileSync(launcher, ['--node', '-p', 'process.execPath'], { encoding: 'utf8' }).trim(), path.join(root, 'runtime/node'));
 assert.equal(execFileSync(launcher, ['--node', '-p', 'process.env.PATH.split(":")[0]'], { encoding: 'utf8' }).trim(), path.join(root, 'runtime'));
 assert.match(execFileSync(launcher, ['--node', '-e', 'const p=require("node:child_process").spawnSync("npx",["--version"],{encoding:"utf8"});if(p.error)throw p.error;process.stdout.write(p.stdout);process.exit(p.status??1)'], { encoding: 'utf8' }).trim(), /^\d+\.\d+\.\d+$/);
+// The Transformers.js import loads the packaged sharp and Linux ONNX native bindings.
+execFileSync(launcher, ['--node', '--input-type=module', '-e', 'await import("@xenova/transformers")'], { cwd: root, timeout: 30_000 });
 assert.ok(root.includes(' '), 'Acceptance must exercise an installation path containing spaces');
 const require = createRequire(path.join(root, 'package.json'));
 const WebSocket = require('ws');
@@ -70,6 +72,9 @@ try {
   await login();
   const caps = await api('/api/core/capabilities', 'POST', {}, { 'X-Cyrene-Client': clientToken });
   assert.equal(caps.response.status, 200); assert.ok(caps.value.handlers.includes('chats:create'));
+  assert.equal((await invoke('memory-panel:start-vector-repair', true)).phase, 'modeChanged');
+  assert.equal((await invoke('reranker:start-local-setup', true)).phase, 'modeChanged');
+  assert.equal((await invoke('reranker:get-local-status')).ready, false);
   session = await invoke('chats:create', { title: `Portable ${randomUUID()}`, mode: 'chat' });
   assert.ok(session.id); assert.equal((await invoke('chats:get', session.id)).title, session.title);
   await stop();
@@ -78,8 +83,8 @@ try {
   await launch(); await login();
   assert.equal((await invoke('chats:get', session.id)).title, session.title);
   await stop();
-  console.log('PASS native ELF, paths with spaces, bundled Node execPath, authenticated API/WebSocket, actual SQLite worker, persistence/restart and graceful SIGTERM');
-  await writeFile(path.join(root, 'PORTABLE-ACCEPTANCE.json'), JSON.stringify({ checkedAt: new Date().toISOString(), platform: process.platform, arch: process.arch, checks: ['native-elf', 'paths-with-spaces', 'bundled-node-execPath', 'auth-http-websocket', 'sqlite-worker', 'restart-persistence', 'sigterm-clean-exit'], build: JSON.parse(await readFile(path.join(root, 'BUILD-INFO.json'), 'utf8')) }, null, 2) + '\n');
+  console.log('PASS native ELF, bundled Node and model bindings, authenticated API/WebSocket, local model setup IPC, SQLite persistence and graceful SIGTERM');
+  await writeFile(path.join(root, 'PORTABLE-ACCEPTANCE.json'), JSON.stringify({ checkedAt: new Date().toISOString(), platform: process.platform, arch: process.arch, checks: ['native-elf', 'paths-with-spaces', 'bundled-node-execPath', 'native-model-bindings', 'auth-http-websocket', 'local-model-setup-ipc', 'sqlite-worker', 'restart-persistence', 'sigterm-clean-exit'], build: JSON.parse(await readFile(path.join(root, 'BUILD-INFO.json'), 'utf8')) }, null, 2) + '\n');
 } finally {
   socket?.close();
   if (child && child.exitCode == null) { try { await stop(); } catch { child.kill('SIGKILL'); } }

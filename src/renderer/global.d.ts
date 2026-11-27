@@ -58,7 +58,8 @@ interface ChatWindowApi {
 
 /** 设置窗口通过 contextBridge 暴露的 window.settings（对应 preload 的 settingsApi）。
  *  只声明聊天页技能/工具模式面板用到的子集，完整实现见 src/preload/index.ts。 */
-interface SettingsWindowApi {
+interface SettingsWindowApi extends Pick<import("./settings/shared/types").SettingsApi,
+  "getLocalRerankerStatus" | "startLocalRerankerSetup" | "rerankerSetMode"> {
   onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;
   /** 请求主进程打开设置页并定位到指定标签（main 回推 onSwitchSection） */
   openSection?: (section?: string) => Promise<unknown>;

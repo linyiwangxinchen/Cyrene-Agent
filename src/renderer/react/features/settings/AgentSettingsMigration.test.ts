@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { siObsidian } from "simple-icons";
 import packageJson from "../../../../../package.json";
 import { AppearanceSettingsPage } from "./AppearanceSettingsPage";
+import type { LocalRerankerStatus } from "../../../../shared/local-reranker-status";
 
 // The model page is outside these routes and pulls in browser-only icon assets.
 vi.mock("./ModelSettingsPanel", () => ({ ModelSettingsPanel: () => null }));
@@ -130,6 +131,35 @@ describe("agent settings migration", () => {
     await act(async () => { (llmOption as HTMLElement).click(); });
     await act(async () => { buttonByText(host, "保存昔涟设置")!.click(); });
     expect(config.runtimeSync).toBe("llm");
+  });
+
+  it("shows ModelScope setup together in event snippets and reuses reranker state in Cyrene settings", async () => {
+    let reranker: LocalRerankerStatus = { modelInstalled: false, enabled: false, ready: false, phase: "idle" };
+    const setup = vi.fn(async () => { reranker = { ...reranker, phase: "downloading" }; return reranker; });
+    const setupVector = vi.fn(async () => ({ modelInstalled: false, indexReady: false, phase: "downloading" }));
+    Object.assign(window, {
+      settings: { getGeneral: async () => ({}), getConfig: async () => ({ memoryMode: "vector" }),
+        getLocalRerankerStatus: async () => reranker, startLocalRerankerSetup: setup },
+      memoryPanel: {
+        getData: async () => ({ l0: {}, l1: {}, l2: [], reflections: [] }),
+        getVaultConfig: async () => ({ vaultPath: "", autoSync: false, lastSyncAt: 0 }),
+        getSummaryMemory: async () => null,
+        getVectorIndexStatus: async () => ({ modelInstalled: false, indexReady: false, phase: "idle" }),
+        startVectorIndexRepair: setupVector,
+      },
+    });
+    const host = await renderSettings("memory");
+    expect(host.textContent).toContain("事件片段");
+    expect(host.textContent).toContain("从魔搭社区下载并修复");
+    await act(async () => { buttonByText(host, "从魔搭社区下载并启用")!.click(); });
+    await act(async () => { buttonByText(host, "昔涟设置")!.click(); });
+    expect(host.querySelector('[data-settings-search-id="settingsPage.cyrene.reranker"]')).not.toBeNull();
+    expect(host.querySelector('[data-settings-search-id="settingsPage.cyrene.embeddingModel"]')).not.toBeNull();
+    expect(host.textContent).toContain("正在从魔搭社区下载并校验 bge-reranker-base");
+    expect(buttonByText(host, "从魔搭社区下载并启用")?.disabled).toBe(true);
+    expect(setup).toHaveBeenCalledExactlyOnceWith(true);
+    await act(async () => { buttonByText(host, "从魔搭社区下载并修复（约 560 MiB）")!.click(); });
+    expect(setupVector).toHaveBeenCalledExactlyOnceWith(true);
   });
 
   it("omits imported documents from memory settings and can bind a vault", async () => {

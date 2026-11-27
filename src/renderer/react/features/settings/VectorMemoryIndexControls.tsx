@@ -1,9 +1,24 @@
 import { useEffect, useState } from "react";
 import { Alert, Button } from "antd";
 import type { MemoryVectorIndexStatus } from "../../../../shared/memory-vector-status";
+import type { MemoryPanelApi } from "../../../settings/shared/types";
 import { useTranslation } from "../../i18n";
 
-export function VectorMemoryIndexControls({ onChanged }: { onChanged: () => Promise<void> }) {
+type Repair = NonNullable<MemoryPanelApi["startVectorIndexRepair"]>;
+const pendingRepairs = new WeakMap<Repair, Promise<MemoryVectorIndexStatus>>();
+
+function requestVectorRepair(repair: Repair, allowDownload: boolean) {
+  const pending = pendingRepairs.get(repair);
+  if (pending) return pending;
+  const request = repair(allowDownload).finally(() => pendingRepairs.delete(repair));
+  pendingRepairs.set(repair, request);
+  return request;
+}
+
+export function VectorMemoryIndexControls({ onChanged, "data-settings-search-id": searchId }: {
+  onChanged?: () => Promise<void>;
+  "data-settings-search-id": string;
+}) {
   const { t } = useTranslation();
   const getStatus = window.memoryPanel?.getVectorIndexStatus;
   const startRepair = window.memoryPanel?.startVectorIndexRepair;
@@ -26,7 +41,7 @@ export function VectorMemoryIndexControls({ onChanged }: { onChanged: () => Prom
         if (next.phase === "downloading" || next.phase === "repairing") {
           timer = setTimeout(() => void refresh(), 1500);
         } else if (running) {
-          await onChanged();
+          await onChanged?.();
         }
       } catch {
         if (!active) return;
@@ -49,7 +64,7 @@ export function VectorMemoryIndexControls({ onChanged }: { onChanged: () => Prom
     setStarting(true);
     setRequestFailed(false);
     try {
-      setStatus(await startRepair(!status.modelInstalled));
+      setStatus(await requestVectorRepair(startRepair, !status.modelInstalled));
     } catch {
       setRequestFailed(true);
     } finally {
@@ -60,10 +75,10 @@ export function VectorMemoryIndexControls({ onChanged }: { onChanged: () => Prom
   return <>
     <div className="cy-settings-row">
       <div className="cy-settings-row__copy">
-        <strong>{t("settingsPage.memory.vectorIndex.title")}</strong>
+        <strong data-settings-search-id={searchId}>{t("settingsPage.memory.vectorIndex.title")}</strong>
         <span>{t(`settingsPage.memory.vectorIndex.${status ? availability : "checking"}`)}</span>
       </div>
-      <Button loading={starting || running} disabled={!status} onClick={() => void repair()}>
+      <Button loading={starting || running} disabled={!status || starting || running} onClick={() => void repair()}>
         {t(`settingsPage.memory.vectorIndex.${status?.modelInstalled ? "repair" : "install"}`)}
       </Button>
     </div>

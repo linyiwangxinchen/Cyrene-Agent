@@ -5,6 +5,7 @@
 
 import type { ApiTransport } from "../../../shared/api-endpoint";
 import type { ChannelRecoveryApi } from "../../../shared/channel-recovery";
+import type { LocalRerankerStatus } from "../../../shared/local-reranker-status";
 import type { ReasoningPreference } from "../../../shared/reasoning";
 import type { UiThemeChoice } from "../../../shared/ui-theme";
 import type { UiIcon } from "../../../shared/ui-icon";
@@ -306,6 +307,8 @@ export interface SettingsApi {
   stickerAdd?: (payload: { sourcePath: string; id: string; description: string; phrases: string[] }) => Promise<unknown>;
   embeddingSetModel?: (model: string) => Promise<{ ok: boolean; clearedEntries?: number; error?: string }>;
   rerankerSetMode?: (mode: string) => Promise<boolean>;
+  getLocalRerankerStatus?: () => Promise<LocalRerankerStatus>;
+  startLocalRerankerSetup?: (allowDownload: boolean) => Promise<LocalRerankerStatus>;
   setToolEnabled?: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
   getToolEnabled?: () => Promise<Record<string, boolean>>;
   // 三模适配层：工具-模式覆盖层（UI 设置面板用）
