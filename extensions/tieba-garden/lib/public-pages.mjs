@@ -3,6 +3,8 @@ import { authenticatedPage, initialJar } from "./authenticated-page.mjs";
 import { normalizeCookie } from "./session.mjs";
 
 export const TIEBA = "https://tieba.baidu.com";
+export const DIRECTORY_INDEX_PATH = "/f/index/forumclass";
+const DIRECTORY_CATEGORY_PATH = /^\/f\/fdir\?fd=[^&#]+&sd=[^&#]+&ie=utf-8$/u;
 const POST_ID = /^\d{1,20}$/;
 const MOBILE_REPLY_PATH = /^\/mo\/q\/flr\?kz=\d{1,20}&pid=\d{1,20}&fpn=[1-9]\d{0,3}&is_ajax=1&has_url_param=0$/;
 
@@ -200,6 +202,64 @@ export function threadsFromHtml(html, bar) {
   return [...(marked.size ? marked : links).values()].slice(0, 25);
 }
 
+function firstPartyLink(href) {
+  try {
+    const url = new URL(decodeEntities(href), TIEBA);
+    if ((url.protocol === "https:" || url.protocol === "http:") && url.hostname === "tieba.baidu.com"
+      && !url.port && !url.username && !url.password && !url.hash) return url;
+  } catch { /* Ignore malformed links in the public directory. */ }
+}
+
+function directoryName(value) {
+  const name = value?.trim();
+  return name && name.length <= 50 && /[\p{L}\p{N}]/u.test(name) && !/[\p{Cc}\p{Cf}\uFFFD<>]/u.test(name) ? name : "";
+}
+
+function directoryLinks(html) {
+  return html.replace(/<!--[\s\S]*?-->|<(script|style|template)\b[^>]*>[\s\S]*?<\/\1>/giu, "").matchAll(/<a\b[^>]*>/giu);
+}
+
+export function directoryPathsFromHtml(html) {
+  const pages = new Set();
+  for (const [tag] of directoryLinks(html)) {
+    const href = attribute(tag, "href");
+    const url = href && firstPartyLink(href);
+    if (url?.pathname !== "/f/index/forumpark") continue;
+    const group = directoryName(url.searchParams.get("pcn"));
+    const subgroup = directoryName(url.searchParams.get("cn"));
+    if (group && subgroup) pages.add("/f/fdir?" + new URLSearchParams({ fd: group, sd: subgroup, ie: "utf-8" }));
+  }
+  return [...pages];
+}
+
+function decodeDirectoryKeyword(value) {
+  const encoded = value.replace(/\+/gu, " ");
+  try { return decodeURIComponent(encoded); }
+  catch {
+    // The legacy public directory encodes its board links with GBK even when
+    // the category request itself uses UTF-8. Decode only well-formed bytes.
+    if (!/^[\x20-\x7e]+$/u.test(encoded) || /%(?![0-9a-f]{2})/iu.test(encoded)) return "";
+    const bytes = Buffer.from(encoded.replace(/%([0-9a-f]{2})/giu, (_, byte) => String.fromCharCode(Number.parseInt(byte, 16))), "latin1");
+    try { return new TextDecoder("gb18030", { fatal: true }).decode(bytes); }
+    catch { return ""; }
+  }
+}
+
+export function forumsFromDirectoryHtml(html) {
+  const list = /<!--\s*贴吧列表start\s*-->([\s\S]*?)<!--\s*贴吧列表end\s*-->/iu.exec(html)?.[1];
+  if (list === undefined) throw new TiebaPageError("贴吧分类页没有返回可识别的吧列表");
+  const names = [];
+  for (const [tag] of directoryLinks(list)) {
+    const href = attribute(tag, "href");
+    const url = href && firstPartyLink(href);
+    if (url?.pathname !== "/f") continue;
+    const keyword = /(?:^\?|&)kw=([^&]+)/u.exec(url.search)?.[1];
+    const name = keyword && directoryName(decodeDirectoryKeyword(keyword));
+    if (name) names.push(name);
+  }
+  return names;
+}
+
 export function threadTitle(html) {
   const match = html.match(/<(?:h1|h3)\b[^>]*class=["'][^"']*\bcore_title_txt\b[^"']*["'][^>]*>([\s\S]*?)<\/(?:h1|h3)>/i)
     ?? html.match(/<title\b[^>]*>([\s\S]*?)<\/title>/i);
@@ -306,12 +366,13 @@ export function createAuthenticatedReader(request = authenticatedPage, now = Dat
 export async function publicPage(path, signal, cookie, readAuthenticated) {
   // Callers may only use the existing first-party reading routes.
   const url = new URL(TIEBA + path);
+  const directoryPage = path === DIRECTORY_INDEX_PATH || DIRECTORY_CATEGORY_PATH.test(path);
   const knownPage = /^\/f\?kw=[^&#]+$/.test(path)
     || /^\/p\/\d{1,20}(?:\?pn=\d{1,4})?$/.test(path)
     || /^\/mo\/q\/m\?(?:kw=[^&#]+&pn=0|kz=\d{1,20}&pn=\d{1,4})$/.test(path)
     || MOBILE_REPLY_PATH.test(path)
     || /^\/p\/comment\?tid=\d{1,20}&pid=\d{1,20}&pn=1$/.test(path);
-  if (url.origin !== TIEBA || !knownPage) throw new TiebaPageError("贴吧读取入口无效");
+  if (url.origin !== TIEBA || !(knownPage || directoryPage) || (directoryPage && cookie)) throw new TiebaPageError("贴吧读取入口无效");
   try {
     const page = cookie
       ? await (readAuthenticated ?? createAuthenticatedReader().read)(url, signal, normalizeCookie(cookie))

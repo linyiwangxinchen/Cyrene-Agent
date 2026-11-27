@@ -296,7 +296,11 @@ try {
   assert.equal(await queueInput.inputValue(), "BV1bN", "polling cleared the unfinished video link");
   assert.deepEqual(await queueInput.evaluate(element => [document.activeElement === element, element.selectionStart, element.selectionEnd]), [true, 2, 4]);
   // A real queue mutation from another client must update cards without replacing the form.
-  await invoke("plugin:bili-garden:garden", "queue", { bvid: "BV1bNns6BEEA" });
+  const queued = await invoke("plugins:panel:invoke", "bili-garden", "garden", [
+    "queue",
+    { bvid: "BV1bNns6BEEA" },
+  ]);
+  assert.equal(queued.ok, true, JSON.stringify(queued));
   await frame.getByRole("heading", { name: "BV1bNns6BEEA", exact: true }).waitFor({ timeout: 10000 });
   assert.equal(await originalQueueInput.evaluate(element => element.isConnected), true);
   assert.equal(await queueInput.inputValue(), "BV1bN");

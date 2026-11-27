@@ -256,6 +256,7 @@ test("结构化报告按轮累积，伪造证据拒绝；限时片单有真实�
         bvid: BV,
         summary: "种花需要阳光。",
         reason: "很适合你的小阳台。",
+        say: "我还以为挑花盆最要紧，他倒是先去看了阳台几点见光。",
         citations: [0],
       },
     ],
@@ -274,7 +275,11 @@ test("结构化报告按轮累积，伪造证据拒绝；限时片单有真实�
   saveReport(store, { id: "two", day: "2026-11-01" }, input, 1);
   assert.equal(store.list("report").length, 2);
   assert.equal(store.picked("2026-11-01"), 2);
-  assert.match(markdownReport(store.list("report")), /\?t=12/);
+  const exported = markdownReport(store.list("report"));
+  assert.match(exported, /\?t=12/);
+  assert.ok(exported.includes(input.diary));
+  assert.ok(exported.includes(`**昔涟的话** ${input.items[0].say}`));
+  assert.match(exported, /内容依据.*视频字幕/);
   assert.equal(timePlaylist(store.list("video"), 10).seconds, 300);
 });
 test("真实工具循环契约注入昔涟人格、已存记忆与证据后提交", async (t) => {
@@ -347,6 +352,87 @@ test("首次只返回文字时，发现补跑只能搜索、阅读和交报告�
   assert.equal(result.report.summary, "搜索花园没有匹配视频");
   assert.equal(result.usage.input, 20);
   assert.equal(calls, 2);
+});
+
+test("发现报告的补交保留片段时间和识别状态，逐条发布视频自己的分享话", async t => {
+  const { root, store } = setup(t);
+  store.saveConfig({ modelProfileId: "garden-fixture", perRound: 2 });
+  evidence(store, BV);
+  evidence(store, BV2);
+  store.put("evidence", BV2, { ...store.get("evidence", BV2), source: "asr" });
+  const picked = [
+    { bvid: BV, summary: "字幕里讲到阳光。", reason: "先谈光照环境，再决定种花。",
+      say: "他说先看阳台几点见光，我一下想起上回那盆晒蔫的薄荷。", citations: [0] },
+    { bvid: BV2, summary: "转写提到春天种花。", reason: "这段谈到种植时间。",
+      say: "听起来他把时间卡在春天，我有点想再回去听听那句。", citations: [0] },
+  ];
+  const events = [];
+  let calls = 0;
+  const llm = {
+    listProfiles: async () => [{ id: "garden-fixture" }],
+    runGoal: async (options) => {
+      assert.equal(options.modelProfileId, "garden-fixture");
+      assert.match(options.goal, /diary 用第一人称.*say 是直接说给对方听的一两句话/);
+      const runTool = (name, args) => options.tools.find(t => t.name === name).execute(args);
+      if (++calls === 1) {
+        const cached = JSON.parse(await runTool("read_video", { bvid: BV }));
+        assert.equal(cached.title, "一条真实视频");
+        await runTool("read_video", { bvid: BV2 });
+        await runTool("find_evidence", { bvid: BV2, query: "阳光" });
+      } else {
+        assert.equal(options.firstRoundToolId, "bili-garden_finish_report");
+        assert.match(options.context, /"title":"一条真实视频","source":"asr","excerpts":\[\{"index":0,"from":12/);
+        await runTool("finish_report", { items: picked, summary: "收下两条视频。",
+          diary: "读到光照这句时，我也想给窗台上的薄荷换个位置。", say: "今天兜了一圈。" });
+      }
+      return { terminal: { status: "success" }, rounds: 1 };
+    },
+  };
+  const service = new GardenService({ id: "bili-garden", signal: new AbortController().signal,
+    deps: { llm }, storage: { rootDir: () => root } }, packageRoot, {
+    store, client: { account }, runtime: { status: () => ({ installed: true }), stopWorker() {}, async close() {} }, schedule: false,
+    onInterestingItem: payload => { events.push(payload); },
+  });
+  const run = await service.dispatch("run");
+  await service.active?.promise;
+  const finished = store.run(run.runId);
+  assert.equal(finished.status, "success", finished.error);
+  assert.equal(calls, 2);
+  const report = store.get("report", run.runId);
+  assert.equal(report.say, "今天兜了一圈。");
+  for (const [index, item] of picked.entries()) {
+    assert.equal(events[index].say, item.say);
+    assert.equal(store.get("video", item.bvid).say, item.say);
+    assert.equal(events[index].summary, item.summary);
+    assert.equal(events[index].clip.from, 12);
+    assert.equal(events[index].url, `https://www.bilibili.com/video/${item.bvid}`);
+  }
+  assert.deepEqual(events.map(item => item.evidenceSource), ["subtitle", "asr"]);
+  assert.match(markdownReport([report]), /本地语音转写，可能有识别误差/);
+  await service.close();
+});
+
+test("视频追问保存直接回答、原片时间和识别来源", async t => {
+  const { store } = setup(t);
+  evidence(store);
+  store.put("evidence", BV, { ...store.get("evidence", BV), source: "asr" });
+  const answer = "转写里他先提了阳光。具体要晒多久，这一段里没听清。";
+  const runner = new GardenRunner({ store, client: {}, policy: policy(store),
+    config: () => store.config(), charter: async () => "沿用昔涟人格",
+    llm: { runGoal: async options => {
+      assert.match(options.goal, /开头先接住用户问的那一点/);
+      const read = options.tools.find(tool => tool.name === "read_video");
+      assert.equal(JSON.parse(await read.execute({ bvid: BV })).source, "asr");
+      await options.tools.find(tool => tool.name === "answer_question").execute({ answer, citations: [0] });
+      return { terminal: { status: "success" }, rounds: 2 };
+    } },
+  });
+  const result = await runner.run({ id: "question", day: "2026-11-24", kind: "question" },
+    { bvid: BV, question: "种花需要晒多久？" }, new AbortController().signal);
+  assert.equal(result.answer.answer, answer);
+  assert.equal(result.answer.evidenceSource, "asr");
+  assert.equal(result.answer.citations[0].url, `https://www.bilibili.com/video/${BV}?t=12`);
+  assert.equal(result.report, null);
 });
 
 test("显式禁止提交发现报告时显示权限原因，保留已读字幕并停止补交", async t => {

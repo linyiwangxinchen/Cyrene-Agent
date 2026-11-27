@@ -97,3 +97,15 @@ test("设置草稿不被轮询或重复点击当前页清空，放弃修改仍�
   f.button("放弃修改").click();
   assert.equal(f.d.querySelector('[name="interests"]').value, "原来的兴趣");
 });
+
+test("发现卡片展示视频自己的分享话，并标明自动识别的来源", async t => {
+  const f = await fixture(t);
+  Object.assign(f.state.data.videos[0], { picked: true, summary: "转写提到了浇花的时间。",
+    say: "他那句‘不如晚一点浇’一下留在我脑子里。", evidenceSource: "asr" });
+  f.poll();
+  await until(() => f.d.querySelector("article.card .quote"));
+  const card = f.d.querySelector("article.card");
+  assert.equal(card.querySelector(".quote").textContent, f.state.data.videos[0].say);
+  assert.match(card.textContent, /本地语音转写，可能有识别误差/);
+  assert.match(card.textContent, /转写提到了浇花的时间/);
+});

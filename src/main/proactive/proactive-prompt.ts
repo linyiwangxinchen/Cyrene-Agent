@@ -156,9 +156,10 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
       : kind === "remembered"
         ? `[本轮记得的事]\n对方在 ${timing} 说起：${JSON.stringify(topic)}。可以问一句后来怎么样了，或说一句惦记的话。聊天记录里对方已经说过结果、或事情显然还没到时候，就返回 drop。`
         : `[本轮约定跟进]\n对方约好要跟进的事：${JSON.stringify(topic)}。最早可问候时间：${timing}（用户当地时间）。按约问候一次，不把这个时间当作事件结果。`);
-  } else if (input.bilibiliVideo || input.momentContext?.trim()) {
-    systemParts.push(MOMENT_SYSTEM, input.bilibiliVideo
-      ? bilibiliEvidencePrompt(input.bilibiliVideo) : "[陪伴心事]\n" + input.momentContext?.trim());
+  } else if (input.bilibiliVideo) {
+    systemParts.push(bilibiliEvidencePrompt(input.bilibiliVideo, "plan"));
+  } else if (input.momentContext?.trim()) {
+    systemParts.push(MOMENT_SYSTEM, "[陪伴心事]\n" + input.momentContext.trim());
   }
   if (input.replyBurden === "none" && !standaloneCare) systemParts.push("一句无需回复也成立的关心或分享就够了。省去问句和索要回应的话。");
 
@@ -244,8 +245,10 @@ export function buildProactiveComposeMessages(input: BuildProactiveComposeInput)
   const instruction = [
     "（这条不是对方发来的，是只给你看的提示。）",
     situation,
-    `你想主动给对方发一条消息，想说的是：${input.plan}`,
-    input.bilibiliVideo ? bilibiliEvidencePrompt(input.bilibiliVideo) : "",
+    input.bilibiliVideo
+      ? `刚才考虑过的分享角度：${JSON.stringify(input.plan)}。按本条素材写。`
+      : `你想主动给对方发一条消息，想说的是：${input.plan}`,
+    input.bilibiliVideo ? bilibiliEvidencePrompt(input.bilibiliVideo, "compose") : "",
     "直接写出要发的那条消息本身，像你平时在这段私聊里说话一样，一两句就够。不加引号、不加时间标记、不解释。",
     "不要把上面聊过的话再说一遍，也不要替对方总结今天。",
     input.replyBurden === "none" ? "说一句对方不用回也成立的话，别用问句收尾。" : "",

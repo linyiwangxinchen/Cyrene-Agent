@@ -408,7 +408,13 @@ try {
         if (command !== "visit") return route.continue();
         visits.push(input);
         const visitState = await panel("state", { compact: true });
-        if (!visitState.config.bars.length) {
+        if (visitState.config.visitMode === "random") {
+          visitState.visits = [{
+            id: "random-visit-fixture", at: Date.now(), trigger: "manual", mode: "random",
+            bars: ["茶具"], chosenBar: "茶具", status: "empty", read: [],
+            publicDirectory: { categoriesAvailable: 9, pagesRead: 3, candidateCount: 12 },
+          }];
+        } else if (!visitState.config.bars.length) {
           visitState.visits = [
             {
               id: "autonomous-visit-fixture",
@@ -496,6 +502,21 @@ try {
       await waitFor(() => visits.length > 1, "Tieba visit request with a saved forum");
       assert.deepEqual(visits, [visitArgs, visitArgs]);
       assert.equal(await browseTab.getAttribute("aria-current"), "page");
+
+      await settingsTab.click();
+      const visitMode = frame.locator("#visit-mode");
+      await visitMode.selectOption("random");
+      await frame.getByRole("button", { name: "保存设置", exact: true }).click();
+      await frame.getByText("巡游设置已保存", { exact: true }).waitFor();
+      const randomConfig = (await panel("state", { compact: true })).config;
+      assert.equal(randomConfig.visitMode, "random");
+      assert.deepEqual(randomConfig.bars, ["摄影"]);
+      await visitButton.click();
+      await frame.locator("#visits").getByText("随机抽到 茶具吧", { exact: true }).waitFor();
+      await frame.locator("#visits").getByText("公开分类目录读到 3 页 · 12 个候选吧", { exact: true }).waitFor();
+      assert.deepEqual(visits, [visitArgs, visitArgs, visitArgs]);
+      console.log("PASS Chromium saves Tieba's random mode and displays the public directory draw");
+
       await journalTab.click();
       await openFloors(liveThreadTitle);
       await replyField.fill("🙂🙂🙂");
@@ -584,6 +605,13 @@ try {
   console.log(
     "PASS Bilibili SQLite expression reaches the model only while enabled",
   );
+  const sharedVideo = (await ask("chat", "你看这条 B 站视频，第一轮造铁塔就把塔身漏啦。")).modelInput;
+  assert.match(sharedVideo, /接住一个具体片段，说一句你看到这个细节时的反应/);
+  assert.match(sharedVideo, /只有链接、标题或简介时，就按手头的内容接话/);
+  assert.match(sharedVideo, /明确要总结、核对功能或聊多个看点时，按他的要求答清楚/);
+  const videoTask = (await ask("work", "请总结这条 B 站视频里提到的两个功能。")).modelInput;
+  assert.doesNotMatch(videoTask, /接住一个具体片段，说一句你看到这个细节时的反应/);
+  console.log("PASS Bilibili casual sharing guidance reaches the Chat model without changing Work summaries");
   for (const mode of ["learn", "work", "code"]) {
     const isolated = await ask(mode, "你最近在贴吧看了什么？");
     assert.doesNotMatch(isolated.modelInput, /plugin:tieba-garden:(?:expressions|readings)/);

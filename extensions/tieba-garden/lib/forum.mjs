@@ -4,11 +4,12 @@ import { legacyTiebaExpressionId, tiebaExpressionFingerprint, writeReadingNote }
 import { submitThreadReply } from "./post-reply.mjs";
 import { createReadSession } from "./session.mjs";
 import { chooseVisitBars } from "./visit-interests.mjs";
+import { chooseRandomVisitBar } from "./random-visit.mjs";
 
 const HOUR = 3_600_000;
 const READING_LIMIT = 36;
 const VISIT_LIMIT = 50;
-const DEFAULT_CONFIG = { bars: [], bar: "", learn: false, auto: false, replies: false, allowPosting: false, intervalHours: 4, postsPerVisit: 1 };
+const DEFAULT_CONFIG = { bars: [], bar: "", visitMode: "interest", learn: false, auto: false, replies: false, allowPosting: false, intervalHours: 4, postsPerVisit: 1 };
 
 function clamp(value, min, max, fallback) {
   return typeof value === "number" && Number.isFinite(value)
@@ -24,6 +25,7 @@ function configFrom(raw) {
   const bars = [...new Set((Array.isArray(raw?.bars) ? raw.bars.slice(0, 32) : [raw?.bar]).map(barName).filter(Boolean))].slice(0, 8);
   return {
     ...DEFAULT_CONFIG, bars, bar: bars[0] ?? "",
+    visitMode: raw?.visitMode === "random" ? "random" : DEFAULT_CONFIG.visitMode,
     learn: raw?.learn === true, auto: raw?.auto === true, replies: raw?.replies === true,
     allowPosting: raw?.allowPosting === true,
     intervalHours: clamp(raw?.intervalHours, 1, 24, DEFAULT_CONFIG.intervalHours),
@@ -63,7 +65,7 @@ function recoveryVisits(visits, now) {
     : visit);
 }
 
-export function createForum(ctx, { page, postReply = submitThreadReply, now = Date.now } = {}) {
+export function createForum(ctx, { page, postReply = submitThreadReply, now = Date.now, randomIndex } = {}) {
   const config = () => configFrom(ctx.storage.get("config"));
   const session = createReadSession(ctx.deps.secrets);
   const authenticated = createAuthenticatedReader();
@@ -282,13 +284,15 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
 
   async function visit(trigger, target) {
     const cfg = config();
-    const savedBars = target ? [target] : cfg.bars;
+    const mode = target ? "target" : cfg.visitMode;
+    const random = mode === "random";
+    const savedBars = target ? [target] : random ? [] : cfg.bars;
     const priorVisits = data.visits;
     const previousCount = data.visitsStarted;
     const index = !target && savedBars.length ? previousCount % savedBars.length : 0;
-    const visitsStarted = target ? previousCount : previousCount + 1;
+    const visitsStarted = mode === "interest" ? previousCount + 1 : previousCount;
     const rotations = [...savedBars.slice(index), ...savedBars.slice(0, index)];
-    const record = { id: randomUUID(), at: now(), trigger, bars: [], status: "running", read: [], errors: [], discovered: 0, skipped: 0 };
+    const record = { id: randomUUID(), at: now(), trigger, mode, bars: [], status: "running", read: [], errors: [], discovered: 0, skipped: 0 };
     const update = patch => {
       const row = { ...record, ...patch };
       save({ visits: [row, ...data.visits.filter(old => old.id !== row.id)].slice(0, VISIT_LIMIT), visitsStarted, lastVisit: record.at, status });
@@ -296,30 +300,40 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
     const seen = new Set(data.seen);
     const knownCandidates = new Set();
     let stop = false;
-    status = target ? "正在逛吧" : "正在挑想逛的吧";
+    status = target ? "正在逛吧" : random ? "正在匿名读取贴吧公开目录" : "正在挑想逛的吧";
     update();
     try {
-      const choices = target ? [] : await chooseVisitBars(ctx.deps.llm, {
-        favorites: savedBars, readings: data.readings, visits: priorVisits, signal: ctx.signal,
-      });
-      if (trigger === "auto" && !config().auto) return;
-      const picked = choices[0];
       let bars = rotations;
       let minimumListings = 1;
-      if (picked) {
-        record.chosenBar = picked.bar;
-        record.choiceReason = picked.reason;
-        if (rotations.length) {
-          const [favorite, ...remaining] = rotations;
-          // Each favorite leads one cycle and follows the personal pick on the other.
-          const preferChoice = index % 2 !== Math.floor(previousCount / rotations.length) % 2;
-          const firstBars = preferChoice ? [picked.bar, favorite] : [favorite, picked.bar];
-          bars = [...firstBars, ...remaining];
-          minimumListings = firstBars.length;
-        } else {
-          bars = choices.map(choice => choice.bar);
+      if (random) {
+        const { bar, errors, ...directory } = await chooseRandomVisitBar(readPage, {
+          signal: ctx.signal, canContinue: () => trigger !== "auto" || config().auto, randomIndex,
+        });
+        record.publicDirectory = directory;
+        record.errors.push(...errors);
+        if (bar) record.chosenBar = bar;
+        bars = bar ? [bar] : [];
+      } else if (!target) {
+        const choices = await chooseVisitBars(ctx.deps.llm, {
+          favorites: savedBars, readings: data.readings, visits: priorVisits, signal: ctx.signal,
+        });
+        const picked = choices[0];
+        if (picked) {
+          record.chosenBar = picked.bar;
+          record.choiceReason = picked.reason;
+          if (rotations.length) {
+            const [favorite, ...remaining] = rotations;
+            // Each favorite leads one cycle and follows the personal pick on the other.
+            const preferChoice = index % 2 !== Math.floor(previousCount / rotations.length) % 2;
+            const firstBars = preferChoice ? [picked.bar, favorite] : [favorite, picked.bar];
+            bars = [...firstBars, ...remaining];
+            minimumListings = firstBars.length;
+          } else {
+            bars = choices.map(choice => choice.bar);
+          }
         }
       }
+      if (trigger === "auto" && !config().auto) return;
       const candidates = [];
       for (const bar of bars) {
         if (trigger === "auto" && !config().auto) { stop = true; break; }
@@ -368,7 +382,7 @@ export function createForum(ctx, { page, postReply = submitThreadReply, now = Da
         : record.read.length ? record.errors.length ? "partial" : "complete"
         : record.errors.length ? "failed" : "empty";
       status = (record.read.length ? "读了 " + record.read.length + " 篇帖子"
-        : complete === "empty" ? "这一轮没有新的可读帖子" : "这一轮未完成")
+        : complete === "empty" ? random && !record.chosenBar ? "公开目录没有可抽取的吧" : "这一轮没有新的可读帖子" : "这一轮未完成")
         + (record.errors.length ? " · " + record.errors[0] : "");
       if (!ctx.signal.aborted) update({ finishedAt: now(), status: complete });
     }

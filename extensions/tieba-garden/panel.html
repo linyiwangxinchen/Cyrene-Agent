@@ -130,9 +130,17 @@
       </section>
       <form id="settings-form">
         <div class="setting">
+          <label for="visit-mode">巡游方式</label>
+          <select id="visit-mode" aria-describedby="visit-mode-help">
+            <option value="interest">常逛的吧与昔涟的兴趣</option>
+            <option value="random">纯随机（公开目录）</option>
+          </select>
+          <p id="visit-mode-help" class="muted">纯随机从公开目录匿名抽样，在本轮取得的候选里等概率挑一个吧。抽中后按已保存的贴吧登录设置浏览。目录没有候选时，本轮结束。</p>
+        </div>
+        <div class="setting">
           <label for="bars">常逛的吧</label>
           <textarea id="bars" rows="3" maxlength="420" aria-describedby="bars-help" placeholder="例如，原神&#10;音乐"></textarea>
-          <p id="bars-help" class="muted">每行一个吧名，最多 8 个。巡游时昔涟也会按自己的兴趣选一个吧。</p>
+          <p id="bars-help" class="muted">每行一个吧名，最多 8 个。兴趣巡游和手动找帖会用到这份清单。</p>
         </div>
 
         <label class="switch-row" for="auto">

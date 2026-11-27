@@ -4,7 +4,9 @@
     state = { tab: "discover", data: null, dirty: false, busy: false, queueDraft: "" };
   let pageSignature = "", statusSignature = "", queueView = null;
   const videoView = (v) => [v.bvid, v.cover, v.title, v.owner, v.duration, v.summary,
-    v.reason, v.queueStatus, v.available, v.picked, v.feedback];
+    v.reason, v.say, v.evidenceSource, v.queueStatus, v.available, v.picked, v.feedback];
+  const evidenceSourceLabel = source => source === "asr" ? "本地语音转写，可能有识别误差"
+    : source === "subtitle" ? "视频字幕" : "";
   const tabs = [
     ["discover", "发现"],
     ["queue", "一起看"],
@@ -173,8 +175,10 @@
         v.owner || "待读取",
         v.duration ? " · " + Math.ceil(v.duration / 60) + " 分钟" : "",
       ),
+      v.say ? h("p", { class: "quote" }, v.say) : null,
       v.summary ? h("p", {}, v.summary) : null,
       v.reason ? h("p", { class: "reason" }, v.reason) : null,
+      v.evidenceSource === "asr" ? h("small", { class: "muted" }, evidenceSourceLabel(v.evidenceSource)) : null,
     );
     const buttons = h(
       "div",
@@ -247,7 +251,7 @@
       h(
         "p",
         { class: "muted" },
-        `来源：${e.source === "asr" ? "本地转写" : "字幕"} · ${e.segments.length} 个片段`,
+        `${evidenceSourceLabel(e.source) || "来源未记录"} · ${e.segments.length} 个片段`,
       ),
       q,
       button(
@@ -256,7 +260,7 @@
           await action(
             "question",
             { bvid: v.bvid, question: q.value },
-            "昔涟正在结合字幕回答",
+            "昔涟正在查阅这段内容",
           );
           $("detail").close();
         }),
@@ -405,6 +409,7 @@
             { class: "entry" },
             h("h3", {}, q.question),
             h("p", {}, q.answer),
+            q.evidenceSource === "asr" ? h("small", { class: "muted" }, evidenceSourceLabel(q.evidenceSource)) : null,
             q.citations.map((c) => cite({ ...c, bvid: q.bvid })),
           ),
         ),
@@ -504,8 +509,8 @@
             h("span", { class: "chip" }, r.day),
             h("span", { class: "muted" }, `${r.items.length} 条视频`),
           ),
-          h("p", {}, r.summary),
           r.diary ? h("p", {}, r.diary) : null,
+          h("p", { class: r.diary ? "muted" : "" }, r.summary),
           r.say ? h("div", { class: "quote" }, r.say) : null,
           button("导出当天", reportExport({ day: r.day })),
         ),

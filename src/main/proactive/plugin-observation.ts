@@ -14,18 +14,19 @@ export function normalizePluginObservation(
     ? value.eventId.trim().slice(0, 160)
     : typeof value.bvid === "string" && value.bvid.trim() ? value.bvid.trim().slice(0, 80) : undefined;
   const title = typeof value.title === "string" ? value.title.trim().slice(0, 200) : "";
-  const say = typeof value.say === "string" ? value.say.trim().slice(0, 500) : "";
   const summary = typeof value.summary === "string" ? value.summary.trim().slice(0, 700) : "";
-  if (!itemId || (!title && !summary && !say)) return null;
+  if (!itemId) return null;
   const bilibiliVideo = normalizeBilibiliVideoEvidence({
-    bvid: value.bvid, title, summary: summary || say, reason: value.reason, clip: value.clip,
+    bvid: value.bvid, title, summary, reason: value.reason, clip: value.clip, evidenceSource: value.evidenceSource, say: value.say,
   });
+  const sourceSummary = summary || bilibiliVideo?.clip?.text || "";
+  if (!title && !sourceSummary) return null;
   const url = bilibiliVideo ? bilibiliVideoSource(bilibiliVideo) : "";
   return {
     id: `plugin:${pluginId}:${itemId}`,
     kind: "share",
     source: "plugin",
-    summary: [title, summary || say, url].filter(Boolean).join("\n").slice(0, 1000),
+    summary: [title, sourceSummary, url].filter(Boolean).join("\n").slice(0, 1000),
     ...(bilibiliVideo ? { bilibiliVideo } : {}),
     occurredAt: typeof value.occurredAt === "number" && Number.isFinite(value.occurredAt) ? value.occurredAt : Date.now(),
     ...(typeof value.conversationId === "string" ? { conversationId: value.conversationId.slice(0, 200) } : {}),

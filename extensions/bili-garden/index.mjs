@@ -28,7 +28,7 @@ export async function register(ctx) {
     id: "bili-garden_reading",
     name: "小花园视频任务",
     description:
-      "让昔涟在 B 站小花园发现视频、查看任务状态或把 BV 号加入稍后一起看。运行会异步返回任务ID；账号、兴趣及互动开关在插件面板配置。",
+      "让昔涟发现视频、查看最近报告或把 BV 号加入稍后一起看。运行会异步返回任务 ID。分享最近报告时，用 items 里的 say 和真实字幕细节接话，顺手给视频链接；用户问到手记、状态或保存方式时再介绍。账号、兴趣及互动开关在插件面板配置。",
     enabled: true,
     risk: "network",
     effectKind: "mutation",

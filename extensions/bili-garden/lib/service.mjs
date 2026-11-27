@@ -202,7 +202,8 @@ export class GardenService {
                 summary: item.summary,
                 reason: item.reason,
                 clip: item.citations?.[0] ? { text: item.citations[0].text, from: item.citations[0].from } : undefined,
-                say: report.say,
+                say: item.say || (report.items.length === 1 ? report.say : undefined),
+                evidenceSource: item.evidenceSource,
                 url: `https://www.bilibili.com/video/${item.bvid}`,
               });
             } catch (error) {

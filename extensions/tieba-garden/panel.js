@@ -119,6 +119,7 @@
   function showSettings(config) {
     if (!settingsDirty) {
       el("bars").value = config.bars.join("\n");
+      el("visit-mode").value = config.visitMode === "random" ? "random" : "interest";
       el("learn").checked = Boolean(config.learn);
       el("replies").checked = Boolean(config.replies);
       el("allow-posting").checked = config.allowPosting === true;
@@ -310,8 +311,11 @@
   function visitEntry(visit) {
     const row = h("article", "entry");
     const header = h("div", "entry-head");
-    const title = [localTime(visit.at), visit.trigger === "auto" ? "自动巡游" : "手动巡游"].filter(Boolean).join(" · ");
-    header.append(h("h3", "", title), h("span", "chip" + (["failed", "partial"].includes(visit.status) ? " alert" : ""), visitStatus[visit.status] ?? visit.status));
+    const mode = visit.mode === "random" ? "纯随机" : visit.mode === "target" ? "指定吧" : "";
+    const title = [localTime(visit.at), visit.trigger === "auto" ? "自动巡游" : "手动巡游", mode].filter(Boolean).join(" · ");
+    const statusLabel = visit.status === "empty" && visit.mode === "random" && !visit.chosenBar
+      ? "没有候选吧" : visitStatus[visit.status] ?? visit.status;
+    header.append(h("h3", "", title), h("span", "chip" + (["failed", "partial"].includes(visit.status) ? " alert" : ""), statusLabel));
     const bars = (visit.bars ?? []).map(barLabel).join("、");
     row.append(header, h("p", "meta", [
       bars, "看到 " + (visit.discovered ?? 0) + " 帖",
@@ -319,8 +323,12 @@
       visit.skipped ? "跳过 " + visit.skipped + " 篇" : "",
     ].filter(Boolean).join(" · ")));
     if (visit.chosenBar) {
-      const choice = ["昔涟想逛 " + barLabel(visit.chosenBar), visit.choiceReason].filter(Boolean).join(" · ");
+      const choice = [(visit.mode === "random" ? "随机抽到 " : "昔涟想逛 ") + barLabel(visit.chosenBar), visit.choiceReason].filter(Boolean).join(" · ");
       row.append(h("p", "muted", choice));
+    }
+    if (visit.publicDirectory) {
+      const { pagesRead, candidateCount } = visit.publicDirectory;
+      row.append(h("p", "muted", `公开分类目录读到 ${pagesRead} 页 · ${candidateCount} 个候选吧`));
     }
     for (const error of visit.errors ?? []) row.append(h("p", "reason", error));
     const stored = state.history ?? (state.reading ? [state.reading] : []);
@@ -535,6 +543,7 @@
     act("save", {
       bar: bars[0] ?? "",
       bars,
+      visitMode: el("visit-mode").value,
       replies: el("replies").checked,
       allowPosting: el("allow-posting").checked,
       auto: el("auto").checked,

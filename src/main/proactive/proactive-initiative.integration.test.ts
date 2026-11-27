@@ -121,8 +121,9 @@ describe("Bilibili video shares in the shared lifecycle", () => {
   const run = "4f823177-8290-459e-a6e7-b6307f872adb";
   const source = "https://www.bilibili.com/video/" + bvid;
   const title = "一段字幕剪辑";
-  const summary = "剪辑把字幕从一行拆成两行。";
+  const summary = "剪辑把字幕从一行拆成两行。片尾又把字幕缩成一行，接着说了配色。";
   const clip = { text: "这句停一下再出下一行。", from: 30 };
+  const say = "它还特意停了一拍，像在憋包袱。";
 
   it.each(["current", "legacy"] as const)("composes and persists the canonical link for a %s queued video", async mode => {
     random.mockReturnValue(0.99);
@@ -131,7 +132,7 @@ describe("Bilibili video shares in the shared lifecycle", () => {
       lifecycle.enqueueCompanionMoment({ id: "plugin:bili-garden:" + run + ":" + bvid, kind: "share", source: "plugin",
         pluginId: "bili-garden", occurredAt: NOW, summary: [title, summary, source].join("\n") });
     } else {
-      const moment = normalizePluginObservation("bili-garden", "interesting-item", { eventId: run + ":" + bvid, occurredAt: NOW, bvid, title, summary, clip });
+      const moment = normalizePluginObservation("bili-garden", "interesting-item", { eventId: run + ":" + bvid, occurredAt: NOW, bvid, title, summary, clip, say });
       expect(moment).not.toBeNull();
       lifecycle.enqueueCompanionMoment(moment!);
     }
@@ -145,12 +146,27 @@ describe("Bilibili video shares in the shared lifecycle", () => {
     }
     expect(mocks.runModel).toHaveBeenCalledTimes(2);
     for (const [call] of mocks.runModel.mock.calls) {
-      const messages = JSON.stringify(call.messages);
+      const messages = call.messages.map((message: { content: string }) => message.content).join("\n");
       expect(messages).toContain(source);
       expect(messages).toContain(summary);
+      expect(messages).toContain("省去逐条复述、剧情梗概和评语");
       expect(messages).not.toContain("链接还没核实");
-      if (mode === "current") expect(messages).toContain(clip.text);
+      if (mode === "current") {
+        expect(messages).toContain(clip.text);
+        const evidence = messages.split("\n").find((line: string) => line.startsWith('{"title":'));
+        expect(evidence).not.toContain(say);
+        expect(messages).toContain("只提供分享角度");
+        expect(messages).toContain(say);
+      } else {
+        expect(messages).not.toContain(say);
+      }
     }
+    const [decisionCall, composeCall] = mocks.runModel.mock.calls.map(([call]) => call);
+    expect(decisionCall.parse).toBeUndefined();
+    expect(decisionCall.messages[0].content).toContain("计划只记这个分享点和你想说的感受");
+    expect(composeCall.parse).toBe("message");
+    expect(composeCall.messages.at(-1).content).toContain("开口就聊那一处细节");
+    expect(composeCall.messages.at(-1).content).toContain("说一句对方不用回也成立的话");
     const sent = prose + "\n\n" + source;
     expect(appendAssistant).toHaveBeenCalledOnce();
     expect(appendAssistant).toHaveBeenCalledWith({ message: { role: "assistant", content: sent }, roundId: "proactive" });

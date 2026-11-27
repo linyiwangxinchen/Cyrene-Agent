@@ -27,17 +27,16 @@ export function evidenceView(evidence, query = "") {
       .sort((a, b) => b.score - a.score);
   }
   let chars = 0;
+  const segments = rows.filter((s) => {
+    chars += s.text.length;
+    return chars < 24000;
+  }).slice(0, query ? 30 : 160);
   return {
     bvid: evidence.bvid,
     source: evidence.source,
     totalSegments: evidence.segments.length,
-    truncated: evidence.text.length > 24000,
-    segments: rows
-      .filter((s) => {
-        chars += s.text.length;
-        return chars < 24000;
-      })
-      .slice(0, query ? 30 : 160),
+    truncated: segments.length < rows.length,
+    segments,
   };
 }
 export function validateCitations(evidence, indices) {
@@ -69,12 +68,15 @@ export function saveReport(store, run, input, quota) {
     if (!evidence?.text || !video) throw new Error(`尚未读取 ${bvid} 的内容`);
     const summary = text(item.summary, 1600),
       reason = text(item.reason, 600);
+    const spoken = text(typeof item.say === "string" ? item.say : "", 150);
     if (!summary || !reason) throw new Error("每条视频需有摘要与推荐理由");
     return {
       ...video,
       bvid,
       summary,
       reason,
+      say: spoken && spoken !== summary ? spoken : undefined,
+      evidenceSource: evidence.source,
       citations: validateCitations(evidence, item.citations),
     };
   });
@@ -95,6 +97,8 @@ export function saveReport(store, run, input, quota) {
         picked: true,
         summary: item.summary,
         reason: item.reason,
+        say: item.say,
+        evidenceSource: item.evidenceSource,
         citations: item.citations,
       });
     for (const memory of (Array.isArray(input.memories)
@@ -129,6 +133,8 @@ export function markdownReport(
           .map(
             (item) =>
               `### ${escape(item.title)}\n\n[${item.bvid}](https://www.bilibili.com/video/${item.bvid}) · ${escape(item.owner)}\n\n${escape(item.summary)}\n\n**想和你分享的理由**：${escape(item.reason)}\n\n` +
+              (item.say ? `**昔涟的话** ${escape(item.say)}\n\n` : "") +
+              (item.evidenceSource === "asr" ? "**内容依据** 本地语音转写，可能有识别误差\n\n" : item.evidenceSource === "subtitle" ? "**内容依据** 视频字幕\n\n" : "") +
               (item.citations ?? [])
                 .map(
                   (c) =>
@@ -137,7 +143,8 @@ export function markdownReport(
                 .join("\n"),
           )
           .join("\n\n");
-        return `## ${r.day} · ${new Date(r.created).toISOString()}\n\n${escape(r.summary)}\n\n${body}\n\n${r.diary ? "### 手记\n\n" + escape(r.diary) : ""}\n\n${r.say ? "*" + escape(r.say) + "*" : ""}`;
+        const say = r.say && !(r.items ?? []).some(item => item.say === r.say) ? r.say : "";
+        return `## ${r.day} · ${new Date(r.created).toISOString()}\n\n${escape(r.summary)}\n\n${body}\n\n${r.diary ? "### 手记\n\n" + escape(r.diary) : ""}\n\n${say ? "*" + escape(say) + "*" : ""}`;
       })
       .join("\n\n---\n\n")
   );

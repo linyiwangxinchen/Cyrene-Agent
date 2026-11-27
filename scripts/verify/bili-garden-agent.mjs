@@ -14,6 +14,8 @@ const responses = process.argv.includes("--responses");
 const confirmReply = process.argv.includes("--confirm-reply");
 const messagesOf = body => body.messages ?? body.input;
 const toolName = tool => tool.function?.name ?? tool.name;
+const videoSay = "我以前是见着阳光就想把花往外挪，听到这句才想起还得看看是哪种花。";
+const gardenDiary = "读到给花留一点合适的阳光，我顺手想到了阳台边那盆花。";
 const model = createServer(async (req, res) => {
   let text = "";
   for await (const c of req) text += c;
@@ -42,11 +44,12 @@ const model = createServer(async (req, res) => {
           bvid: "BV1JcnW6pEFT",
           summary: "花需要合适的阳光",
           reason: "很适合我们一起照顾阳台的小花",
+          say: videoSay,
           citations: [0],
         },
       ],
       summary: "发现了养花方法",
-      diary: "想和你一起等花开。",
+      diary: gardenDiary,
       say: "把这点春天留给你。",
       memories: ["喜欢阳台园艺"],
     };
@@ -134,7 +137,7 @@ await writeFile(
 export function register(ctx){const client={account:async()=>({loggedIn:true,uid:'123',name:'Fixture'}),search:async()=>[{bvid:'BV1JcnW6pEFT',title:'养花'}],info:async(bvid)=>({bvid,title:'养花',owner:'UP',duration:300}),subtitle:async(bvid)=>bvid==='BV17x411w7KC'?{bvid,text:'',segments:[]}:{bvid,text:'花需要合适的阳光',segments:[{from:12,text:'花需要合适的阳光'}]},
 call:async(name)=>{if(name==='bili_user_videos')return {videos:[]};if(name==='bili_guard_scan')return {at:[{bvid:'BV17x411w7KC',rpid:'100',uid:'456',root_id:0,text:'@昔涟 你在吗？'}],comments:[],at_cursor:{id:1,time:1},at_resume:null};if(name==='bili_reply')return {success:true,rpid:'200'};throw new Error('Unexpected fixture call: '+name)}};
 const runtime={status:()=>({installed:true}),stopWorker(){},async close(){}};
-const s=new GardenService(ctx,${JSON.stringify(path.resolve("extensions/bili-garden"))},{client,runtime,schedule:false});ctx.registerIpc('garden',(c,a)=>s.dispatch(c,a));ctx.onDispose(()=>s.close());}`,
+const s=new GardenService(ctx,${JSON.stringify(path.resolve("extensions/bili-garden"))},{client,runtime,schedule:false,onInterestingItem:event=>ctx.events.emit('interesting-item',event)});ctx.registerIpc('garden',(c,a)=>s.dispatch(c,a));ctx.onDispose(()=>s.close());}`,
 );
 await writeFile(
   path.join(data, "web-data.json"),
@@ -143,7 +146,7 @@ await writeFile(
     sessions: [],
     recentProjects: [],
     settings: {
-      general: { proactiveChatMode: "off", momentsEnabled: false },
+      general: { proactiveChatMode: "off", momentsEnabled: false, companionPluginSharingEnabled: true },
       config: { memoryMode: "summary", runtimeSync: "off" },
       modelProfiles: [
         {
@@ -258,7 +261,20 @@ try {
   assert.ok(run.usage.cachedInput > 0);
   assert.equal(snapshot.profiles[0].id, "fixture");
   assert.ok(!JSON.stringify(snapshot.profiles).includes("fixture-local-only"));
-  assert.equal(snapshot.reports[0].items[0].citations[0].text, "花需要合适的阳光");
+  const report = snapshot.reports[0];
+  assert.equal(report.items[0].citations[0].text, "花需要合适的阳光");
+  assert.equal(report.items[0].citations[0].from, 12);
+  assert.equal(report.diary, gardenDiary);
+  assert.equal(report.items[0].say, videoSay);
+  const reportTools = requests.flatMap(request => request.tools ?? []).filter(tool => toolName(tool).endsWith("_finish_report"));
+  assert.ok(reportTools.some(tool => JSON.stringify(tool).includes("直接对用户说的一两句自然的话")));
+  const life = JSON.parse(await readFile(path.join(data, "companion-life.json"), "utf8"));
+  const queuedVideo = life.moments.find(moment => moment.bilibiliVideo?.bvid === "BV1JcnW6pEFT");
+  assert.equal(queuedVideo.bilibiliVideo.summary, "花需要合适的阳光");
+  assert.deepEqual(queuedVideo.bilibiliVideo.clip, { text: "花需要合适的阳光", from: 12 });
+  assert.equal(queuedVideo.bilibiliVideo.evidenceSource, "subtitle");
+  assert.equal(queuedVideo.bilibiliVideo.say, videoSay);
+  assert.ok(!queuedVideo.summary.includes(videoSay));
   assert.equal(requests.some(r => r.tools?.length === 1 && toolName(r.tools[0]).endsWith("_finish_report")), responses);
   await call("config", { guardOn: true, autoSend: true, guardWhitelist: ["456"], quietStart: "00:00", quietEnd: "00:00" });
   const guardStarted = await call("guard");
@@ -289,7 +305,7 @@ try {
   assert.equal(requests.length, beforeDuplicate);
   await invoke("plugins:set-enabled", id, false);
   console.log(
-    `PASS real headless Agent, persona, mention reply without subtitles, replay suppression, report, memory, usage and shutdown: ${data}`,
+    `PASS real headless Agent, sourced diary, separate spoken share in the durable queue, guarded comments, usage and shutdown: ${data}`,
   );
 } catch (e) {
   console.error(logs.slice(-35).join("\n"));

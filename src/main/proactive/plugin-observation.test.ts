@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { normalizePluginObservation } from "./plugin-observation";
-import { bilibiliMomentEvidence, bilibiliShareProse } from "./bilibili-share";
+import { bilibiliEvidencePrompt, bilibiliMomentEvidence, bilibiliShareProse } from "./bilibili-share";
 
 const bvid = "BV1TqCMBGExu";
 const source = "https://www.bilibili.com/video/" + bvid;
@@ -13,6 +13,7 @@ describe("normalizePluginObservation", () => {
       title: "有趣的视频",
       summary: "和最近讨论的主题有关",
       reason: "用了熟悉的节奏",
+      say: "这地方停得真逗。 https://draft.example/secret",
       clip: { text: "下一句开始加快。", from: 30.5, url: "file:///secret" },
       url: "https://www.bilibili.com/video/BV1other000?tracking=secret",
       cookie: "MUSIC_U=secret",
@@ -21,9 +22,26 @@ describe("normalizePluginObservation", () => {
       id: "plugin:bili-garden:report-1:" + bvid, kind: "share", source: "plugin",
       summary: "有趣的视频\n和最近讨论的主题有关\n" + source,
       bilibiliVideo: { bvid, title: "有趣的视频", summary: "和最近讨论的主题有关",
-        reason: "用了熟悉的节奏", clip: { text: "下一句开始加快。", from: 30.5 } },
+        reason: "用了熟悉的节奏", clip: { text: "下一句开始加快。", from: 30.5 }, say: "这地方停得真逗。" },
     });
     expect(JSON.stringify(result)).not.toContain("secret");
+  });
+
+  it("uses a cited excerpt without treating a proposed line as evidence", () => {
+    const say = "它还给自己鼓掌了。";
+    expect(normalizePluginObservation("bili-garden", "interesting-item", { bvid, say })).toBeNull();
+    const clip = { text: "这句之后先停一下。", from: 0 };
+    expect(normalizePluginObservation("bili-garden", "interesting-item", { bvid, clip, say })).toMatchObject({
+      summary: clip.text + "\n" + source,
+      bilibiliVideo: { bvid, title: "", summary: "", clip, say },
+    });
+  });
+
+  it("carries automatic transcription uncertainty into the share prompt", () => {
+    const clip = { text: "这里有几句听不太清。", from: 8 };
+    const video = normalizePluginObservation("bili-garden", "interesting-item", { bvid, clip, evidenceSource: "asr" })?.bilibiliVideo;
+    expect(video?.evidenceSource).toBe("asr");
+    expect(bilibiliEvidencePrompt(video!, "compose")).toContain("听不准的词留作疑问");
   });
 
   it("rejects other plugin events and unsafe URLs without dropping the observation", () => {
