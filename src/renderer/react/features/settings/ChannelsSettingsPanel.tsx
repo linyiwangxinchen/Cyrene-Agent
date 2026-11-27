@@ -98,6 +98,7 @@ export function ChannelsSettingsPanel() {
   const [qqToken, setQqToken] = useState("");
   const debounce = useRef<number | undefined>(undefined);
   const pendingGlobalPatch = useRef<Record<string, unknown>>({});
+  const statusEventCount = useRef(0);
   const wechatLoginActive = useRef(false);
   const wechatLoginAttempt = useRef(0);
 
@@ -139,21 +140,30 @@ export function ChannelsSettingsPanel() {
 
   const refreshStatus = useCallback(async () => {
     if (!api) return;
-    try { setStatuses(await api.channelsGetStatus() as ChannelStatuses); }
+    const requestAt = statusEventCount.current;
+    try {
+      const next = await api.channelsGetStatus() as ChannelStatuses;
+      if (requestAt === statusEventCount.current) setStatuses(next);
+    }
     catch { /* status is secondary; connection forms remain usable */ }
   }, [api]);
 
   useEffect(() => {
     let active = true;
     if (!api) { setLoading(false); setFeedback(t("settingsPage.channels.unavailable")); return; }
+    const requestAt = statusEventCount.current;
     void Promise.all([api.channelsGetConfig(), api.channelsGetStatus(), api.channelsLogGet(100), api.channelsContextBindingsGet()])
       .then(([config, status, entries, bindings]) => {
         if (!active) return;
-        setValues(readConfig(config)); setStatuses(status as ChannelStatuses);
+        setValues(readConfig(config));
+        if (requestAt === statusEventCount.current) setStatuses(status as ChannelStatuses);
         setLogs(entries as LogEntry[]); setContext(bindings); setLoading(false);
       })
       .catch(() => { if (active) { setFeedback(t("settingsPage.channels.loadFailed")); setLoading(false); } });
-    const offStatus = api.onChannelsStatusChanged((next) => setStatuses(next as ChannelStatuses));
+    const offStatus = api.onChannelsStatusChanged((next) => {
+      statusEventCount.current++;
+      setStatuses(next as ChannelStatuses);
+    });
     const offQr = api.onChannelsWechatQrcode((dataUrl) => { if (wechatLoginActive.current) setQrCode(dataUrl); });
     const offLogin = api.onChannelsWechatLoginDone((result) => {
       if (!wechatLoginActive.current) return;
@@ -249,6 +259,9 @@ export function ChannelsSettingsPanel() {
     const config = values[id];
     const enabled = Boolean(config.enabled);
     const title = channelName(t, id);
+    const status = statuses[id];
+    const feishuConnectionFailed = id === "feishu" && (status?.phase === "error" || status?.phase === "config_missing");
+    const dialogFeedback = feishuConnectionFailed ? statusLabel(status) : feedback;
     const channelToolAccess = <>
       <label className="cy-channels-field"><span>{t("settingsPage.channels.channelToolPermission")}</span><SettingsSelect ariaLabel={t("settingsPage.channels.channelToolPermission")} value={typeof config.toolSandbox === "string" ? config.toolSandbox : "inherit"} onChange={(value) => updateChannel(id, "toolSandbox", value === "inherit" ? undefined : value)} options={[{ value: "inherit", label: t("settingsPage.channels.channelToolInherit") }, { value: "off", label: t("settingsPage.channels.toolsOff") }, { value: "all", label: t("settingsPage.channels.toolsAll") }]} /></label>
       <div className="cy-settings-row"><div className="cy-settings-row__copy"><strong>{t("settingsPage.channels.channelAllowAnyUser")}</strong><span>{t("settingsPage.channels.channelAllowAnyUserHint")}</span></div><SettingsSwitch ariaLabel={t("settingsPage.channels.channelAllowAnyUser")} checked={config.allowAnyUser !== false} onChange={(checked) => updateChannel(id, "allowAnyUser", checked)} /></div>
@@ -272,7 +285,12 @@ export function ChannelsSettingsPanel() {
           <p className="cy-channels-hint">{t("settingsPage.channels.feishu.description")}</p>
           <label className="cy-channels-field"><span>App ID</span><SettingsInput value={stringValue(config, "appId")} onChange={(event) => updateChannel(id, "appId", event.target.value)} /></label>
           <label className="cy-channels-field"><span>App Secret</span><SettingsPasswordInput value={secretDrafts.feishu} placeholder={config.hasAppSecret ? t("settingsPage.channels.secretSaved") : t("settingsPage.channels.secretPlaceholder")} autoComplete="new-password" showLabel={t("settingsPage.channels.showSecret")} hideLabel={t("settingsPage.channels.hideSecret")} onChange={(event) => setSecretDrafts((current) => ({ ...current, feishu: event.target.value }))} /></label>
-          <div className="cy-channels-actions"><Button type="primary" loading={busy === "feishu"} onClick={() => { const patch = { enabled: Boolean(config.enabled), appId: stringValue(config, "appId").trim(), ...(secretDrafts.feishu ? { appSecret: secretDrafts.feishu } : {}) }; void saveChannel(id, patch, true).then((saved) => { if (saved) setSecretDrafts((current) => ({ ...current, feishu: "" })); }); }}>{t("settingsPage.channels.saveAndConnect")}</Button></div>
+          <div className="cy-channels-actions"><Button type="primary" loading={busy === "feishu"} onClick={() => {
+            const appId = stringValue(config, "appId").trim();
+            const appSecret = secretDrafts.feishu.trim();
+            const patch = { enabled: Boolean(config.enabled), appId, ...(appSecret ? { appSecret } : {}) };
+            void saveChannel(id, patch).then((saved) => { if (saved) setSecretDrafts((current) => ({ ...current, feishu: "" })); });
+          }}>{t("settingsPage.channels.saveAndConnect")}</Button></div>
         </>}
         {id === "qq" && <>
           <p className="cy-channels-hint">{t("settingsPage.channels.qq.description")}</p>
@@ -295,7 +313,7 @@ export function ChannelsSettingsPanel() {
           <label className="cy-channels-field"><span>{t("settingsPage.channels.qqbot.groupAllowlist")}</span><Input.TextArea rows={2} value={listValue(config, "allowedGroupOpenids")} onChange={(event) => updateChannel(id, "allowedGroupOpenids", event.target.value)} /></label>
           <div className="cy-channels-actions"><Button loading={busy === "qqbot-test"} onClick={async () => { if (!api) return; setBusy("qqbot-test"); try { const result = await api.channelsQqBotTestConnection(); setFeedback(result.ok ? t("settingsPage.channels.testOk") : result.error ?? t("settingsPage.channels.testFailed")); } catch (error) { setFeedback(error instanceof Error ? error.message : t("settingsPage.channels.testFailed")); } finally { setBusy(""); } }}>{t("settingsPage.channels.testConnection")}</Button><Button type="primary" loading={busy === "qqbot"} onClick={() => { const appId = stringValue(config, "appId").trim(); if (!appId) { setFeedback(t("settingsPage.channels.qqbot.missingAppId")); return; } const patch = { enabled: Boolean(config.enabled), appId, allowAnyPrivate: Boolean(config.allowAnyPrivate), allowedUserOpenids: typeof config.allowedUserOpenids === "string" ? splitList(config.allowedUserOpenids, true) : config.allowedUserOpenids, allowedGroupOpenids: typeof config.allowedGroupOpenids === "string" ? splitList(config.allowedGroupOpenids, true) : config.allowedGroupOpenids, ...(secretDrafts.qqbot ? { appSecret: secretDrafts.qqbot } : {}) }; void saveChannel(id, patch, true).then((saved) => { if (saved) setSecretDrafts((current) => ({ ...current, qqbot: "" })); }); }}>{t("settingsPage.channels.saveAndConnect")}</Button></div>
         </>}
-        {feedback && <Alert className="cy-channels-feedback" type={/失败|错误|无法|请先/.test(feedback) ? "error" : "info"} showIcon message={feedback} />}
+        {dialogFeedback && <Alert className="cy-channels-feedback" type={feishuConnectionFailed || /失败|错误|无法|请先/.test(dialogFeedback) ? "error" : "info"} showIcon message={dialogFeedback} />}
       </div>
     </Modal>;
   };

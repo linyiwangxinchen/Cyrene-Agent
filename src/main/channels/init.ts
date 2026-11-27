@@ -116,7 +116,7 @@ export function initializeChannels(options: InitializeChannelsOptions): void {
 
 /** 注册各渠道 adapter。adapter 构造不产生网络副作用，真正的连接在 startChannels。 */
 function registerAdapters(): void {
-  const feishuAdapter = new FeishuAdapter();
+  const feishuAdapter = new FeishuAdapter(broadcastChannelsStatus);
   channelManager.register(feishuAdapter);
 
   // 注册微信 adapter（iLink 直连微信，不依赖 OpenClaw Gateway）

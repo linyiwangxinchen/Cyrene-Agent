@@ -140,4 +140,50 @@ describe("external channel settings migration", () => {
     expect(saveConfig).toHaveBeenCalledWith({ feishu: { enabled: false, appId: "cli_demo" } });
     expect(document.body.textContent).not.toContain("must-not-be-echoed");
   });
+
+  it("shows the current Feishu outcome after saving trimmed credentials and after recovery", async () => {
+    const saveConfig = vi.fn().mockResolvedValue({});
+    const restart = vi.fn().mockResolvedValue({});
+    const message = "获取飞书租户访问凭证失败（飞书错误码 10014）";
+    let emitStatus: ((snapshot: unknown) => void) | undefined;
+    Object.assign(window, {
+      settings: {
+        getGeneral: async () => ({}),
+        channelsGetConfig: async () => ({ feishu: { enabled: true, appId: "cli_demo" } }),
+        channelsGetStatus: async () => saveConfig.mock.calls.length
+          ? { feishu: { enabled: true, phase: "error", message } }
+          : {},
+        channelsLogGet: async () => [],
+        channelsContextBindingsGet: async () => ({ externalChats: [], bindings: [], conversations: [] }),
+        channelsSaveConfig: saveConfig,
+        channelsRestart: restart,
+        onChannelsStatusChanged: (onStatus: (snapshot: unknown) => void) => {
+          emitStatus = onStatus;
+          return () => { emitStatus = undefined; };
+        },
+        onChannelsWechatQrcode: () => () => {},
+        onChannelsWechatLoginDone: () => () => {},
+      },
+    });
+    const host = await renderSettings();
+    await act(async () => { buttonByText(host, "连接手机")!.click(); });
+    const feishuCard = Array.from(host.querySelectorAll("button")).find((button) => button.textContent?.includes("飞书"));
+    await act(async () => { feishuCard!.click(); });
+    const secretInput = document.querySelector<HTMLInputElement>('input[autocomplete="new-password"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(secretInput, "  fixture-secret  ");
+      secretInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => { buttonByText(document, "保存并连接")!.click(); });
+
+    expect(saveConfig).toHaveBeenCalledWith({ feishu: { enabled: true, appId: "cli_demo", appSecret: "fixture-secret" } });
+    expect(restart).not.toHaveBeenCalled();
+    expect(document.querySelector(".cy-channels-feedback")?.textContent).toContain(message);
+
+    await act(async () => {
+      emitStatus!({ feishu: { enabled: true, phase: "running", message: "长连接已建立" } });
+    });
+    expect(document.body.textContent).toContain("长连接已建立");
+    expect(document.body.textContent).not.toContain(message);
+  });
 });

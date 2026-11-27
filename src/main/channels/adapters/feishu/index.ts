@@ -25,6 +25,7 @@ import * as path from "path";
 import { app } from "electron";
 import {
   createLarkChannel,
+  DefaultCache,
   Domain,
   LoggerLevel,
   type LarkChannel,
@@ -44,6 +45,7 @@ import type {
 } from "../../types";
 import { loadChannelsSettings } from "../../settings-store";
 import { getAudioDurationMs } from "./audio-duration";
+import { formatFeishuConnectionError, silentFeishuSdkLogger } from "./connection-error";
 import { logger, LogTag } from "../../../logger";
 
 export { transcodeAudioFileToFeishuOpus } from "./audio-transcode";
@@ -263,26 +265,30 @@ export class FeishuAdapter implements ChannelAdapter {
   private channel: LarkChannel | null = null;
   private memoryAccountId?: string;
   private status: ChannelStatus = { enabled: false, phase: "config_missing" };
+  private connectionAttempt?: AbortController;
   /** connect() 失败后的定时重建句柄；连接成功、停用或手动 rebuild 时清除 */
   private connectRetryTimer: NodeJS.Timeout | null = null;
 
-  constructor() {
-    // start() 时再初始化
+  constructor(private readonly onStatusChange?: () => void) {}
+
+  private setStatus(status: ChannelStatus): void {
+    this.status = status;
+    this.onStatusChange?.();
   }
 
   /** 重建 LarkChannel 实例（用户在 UI 里改了 AppID/Secret 后调） */
-  private async rebuildChannel(): Promise<LarkChannel | null> {
+  private rebuildChannel(isCurrent: () => boolean): LarkChannel | null {
     const settings = loadChannelsSettings().feishu;
     if (!settings.enabled) {
-      this.status = { enabled: false, phase: "offline", message: "未启用" };
+      this.setStatus({ enabled: false, phase: "offline", message: "未启用" });
       return null;
     }
     if (!settings.appId || !settings.appSecret) {
-      this.status = {
+      this.setStatus({
         enabled: true,
         phase: "config_missing",
         message: "App ID / App Secret 缺失",
-      };
+      });
       return null;
     }
 
@@ -290,7 +296,10 @@ export class FeishuAdapter implements ChannelAdapter {
       appId: settings.appId,
       appSecret: settings.appSecret,
       domain: Domain.Feishu,
-      loggerLevel: LoggerLevel.warn,
+      // 重建时密码可能已经替换。SDK 的默认进程级缓存仅按 App ID 保存 token。
+      cache: new DefaultCache(),
+      logger: silentFeishuSdkLogger,
+      loggerLevel: LoggerLevel.fatal,
       transport: "websocket",
       // 禁止启用 SDK 的 handshakeTimeoutMs 看门狗：其超时回调先 removeAllListeners()
       // 再 terminate()，ws 库对"连接建立中"的 socket 会异步 emit('error')，
@@ -300,6 +309,7 @@ export class FeishuAdapter implements ChannelAdapter {
 
     // 绑定入站消息
     ch.on("message" as EventName, async (msg: NormalizedMessage) => {
+      if (!isCurrent() || this.channel !== ch) return;
       // 私聊 only（方案决策）
       if (msg.chatType !== "p2p") {
         console.log(LOG, `忽略 ${msg.chatType} 消息 (私聊优先)`);
@@ -307,7 +317,7 @@ export class FeishuAdapter implements ChannelAdapter {
       }
       try {
         const inMsg = await normalizeLarkMessage(ch, msg);
-        if (this.channel !== ch || loadChannelsSettings().feishu.appId !== settings.appId) return;
+        if (!isCurrent() || this.channel !== ch || loadChannelsSettings().feishu.appId !== settings.appId) return;
         inMsg.accountId = settings.appId;
         inMsg.chatType = "private";
         if (this.onMessageAccepted) await this.onMessageAccepted(inMsg);
@@ -319,17 +329,20 @@ export class FeishuAdapter implements ChannelAdapter {
 
     // 错误/重连事件
     ch.on("error" as EventName, (err: unknown) => {
-      const msg = err instanceof Error ? err.message : String(err);
+      if (!isCurrent() || this.channel !== ch) return;
+      const msg = formatFeishuConnectionError(err);
       console.error(LOG, "channel error:", msg);
-      this.status = { enabled: true, phase: "error", message: msg };
+      this.setStatus({ enabled: true, phase: "error", message: msg });
     });
     ch.on("reconnecting" as EventName, () => {
+      if (!isCurrent() || this.channel !== ch) return;
       console.log(LOG, "reconnecting…");
-      this.status = { enabled: true, phase: "starting", message: "重新连接中" };
+      this.setStatus({ enabled: true, phase: "starting", message: "重新连接中" });
     });
     ch.on("reconnected" as EventName, () => {
+      if (!isCurrent() || this.channel !== ch) return;
       console.log(LOG, "reconnected");
-      this.status = { enabled: true, phase: "running", message: "已连接" };
+      this.setStatus({ enabled: true, phase: "running", message: "已连接" });
     });
 
     this.channel = ch;
@@ -337,31 +350,61 @@ export class FeishuAdapter implements ChannelAdapter {
     return ch;
   }
 
-  async start(): Promise<void> {
-    const ch = await this.rebuildChannel();
+  async start(signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) return;
+    const previous = this.detachChannel();
+    const attempt = new AbortController();
+    this.connectionAttempt = attempt;
+    const activeSignal = signal ? AbortSignal.any([attempt.signal, signal]) : attempt.signal;
+    const isCurrent = () => this.connectionAttempt === attempt && !activeSignal.aborted;
+    if (previous) await this.disconnectChannel(previous);
+    if (!isCurrent()) return;
+    const ch = this.rebuildChannel(isCurrent);
     if (!ch) return;
 
+    this.setStatus({ enabled: true, phase: "starting", message: "正在建立飞书长连接" });
+    if (!isCurrent()) return;
+
+    let stopWaiting!: () => void;
+    const cancelled = new Promise<void>(resolve => { stopWaiting = resolve; });
+    activeSignal.addEventListener("abort", stopWaiting, { once: true });
+    try {
+      // The SDK does not cancel a pending connect via disconnect(). Detach
+      // from the wait so stop/restart can proceed, then retire a late socket.
+      await Promise.race([this.connectChannel(ch, isCurrent), cancelled]);
+    } finally {
+      activeSignal.removeEventListener("abort", stopWaiting);
+    }
+  }
+
+  private async connectChannel(ch: LarkChannel, isCurrent: () => boolean): Promise<void> {
     try {
       await ch.connect();
-      this.status = { enabled: true, phase: "running", message: "长连接已建立" };
+      if (!isCurrent()) {
+        await this.disconnectChannel(ch);
+        return;
+      }
+      this.setStatus({ enabled: true, phase: "running", message: "长连接已建立" });
       logger.info(LogTag.Feishu, "WS long connection ready");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      await this.disconnectChannel(ch);
+      if (!isCurrent()) return;
+      const msg = formatFeishuConnectionError(err);
       console.error(LOG, "connect() failed:", msg);
-      this.status = { enabled: true, phase: "error", message: msg };
-      this.scheduleConnectRetry();
+      this.setStatus({ enabled: true, phase: "error", message: msg });
+      this.scheduleConnectRetry(isCurrent);
     }
   }
 
   /** 首连失败后定时重建整个 channel。SDK 内部的自动重连只覆盖"连上后断开"，
    *  首连挂死（握手无响应）只能靠新建连接恢复；固定 30 秒重试直到成功或停用。 */
-  private scheduleConnectRetry(): void {
-    if (this.connectRetryTimer) return;
+  private scheduleConnectRetry(isCurrent: () => boolean): void {
+    if (!isCurrent() || this.connectRetryTimer) return;
     console.warn(LOG, "30 秒后自动重建连接");
     this.connectRetryTimer = setTimeout(() => {
       this.connectRetryTimer = null;
       // 到点时用户可能已停用飞书，停用状态下不再重建
-      if (!loadChannelsSettings().feishu.enabled) return;
+      if (!isCurrent() || !loadChannelsSettings().feishu.enabled) return;
       void this.rebuild();
     }, 30_000);
   }
@@ -373,17 +416,32 @@ export class FeishuAdapter implements ChannelAdapter {
     }
   }
 
-  async stop(): Promise<void> {
+  private detachChannel(): LarkChannel | null {
     this.clearConnectRetryTimer();
-    if (this.channel) {
-      try {
-        await this.channel.disconnect();
-      } catch (err) {
-        console.warn(LOG, "disconnect 失败:", err);
-      }
-      this.channel = null;
+    this.connectionAttempt?.abort();
+    this.connectionAttempt = undefined;
+    const channel = this.channel;
+    this.channel = null;
+    this.memoryAccountId = undefined;
+    return channel;
+  }
+
+  private async disconnectChannel(channel: LarkChannel): Promise<void> {
+    try {
+      await channel.disconnect();
+      // LarkChannel returns early while connecting, even if a raw socket
+      // was created. Close that client's own timers and pending handshake.
+      const socket = channel.rawWsClient;
+      if (socket && socket.getConnectionStatus().state !== "idle") socket.close();
+    } catch (err) {
+      console.warn(LOG, "disconnect 失败:", formatFeishuConnectionError(err));
     }
-    this.status = { enabled: false, phase: "offline", message: "已停止" };
+  }
+
+  async stop(): Promise<void> {
+    const channel = this.detachChannel();
+    this.setStatus({ enabled: false, phase: "offline", message: "已停止" });
+    if (channel) await this.disconnectChannel(channel);
   }
 
   getStatus(): ChannelStatus {
@@ -430,15 +488,6 @@ export class FeishuAdapter implements ChannelAdapter {
 
   /** 给外部：触发重建（用户改 AppID/Secret 后调用） */
   public async rebuild(): Promise<void> {
-    this.clearConnectRetryTimer();
-    if (this.channel) {
-      try {
-        await this.channel.disconnect();
-      } catch {
-        /* ignore */
-      }
-      this.channel = null;
-    }
     await this.start();
   }
 }

@@ -117,6 +117,25 @@ describe("channels/settings-store", () => {
     expect(loaded.feishu.appSecret).toBe("new");
   });
 
+  it("removes pasted whitespace before encrypting Feishu credentials", () => {
+    const saved = saveChannelsSettings({ feishu: {
+      enabled: true, appId: " cli_fixture\t", appSecret: "\nfixture-secret \t",
+    } });
+    expect(saved.feishu).toMatchObject({ appId: "cli_fixture", appSecret: "fixture-secret" });
+    expect(encState.has("fixture-secret")).toBe(true);
+    expect(loadChannelsSettings().feishu).toEqual(saved.feishu);
+  });
+
+  it("cleans whitespace in already-encrypted Feishu credentials after decryption", () => {
+    const oldSecret = " fixture-secret \r\n";
+    const encrypted = Buffer.from("ENC(" + oldSecret + ")").toString("base64");
+    encState.set(oldSecret, encrypted);
+    fs.writeFileSync(path.join(os.tmpdir(), "channels-settings.json"), JSON.stringify({ feishu: {
+      enabled: true, appId: "cli_fixture ", appSecret: "enc:" + encrypted,
+    } }));
+    expect(loadChannelsSettings().feishu).toMatchObject({ appId: "cli_fixture", appSecret: "fixture-secret" });
+  });
+
   it("saveChannelsSettings: persists the off tool sandbox", () => {
     saveChannelsSettings({ toolSandbox: "off" });
     expect(loadChannelsSettings().toolSandbox).toBe("off");
